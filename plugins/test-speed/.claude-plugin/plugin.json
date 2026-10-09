@@ -1,7 +1,7 @@
 {
   "name": "test-speed",
-  "version": "0.1.0",
-  "description": "시험 시간 예산, 시험이 쥐는 서버 시계, 목 스택 화면 확인",
+  "version": "0.2.0",
+  "description": "시험 시간 예산, 빠르고 흔들리지 않는 Playwright E2E(이벤트 리스너 도우미), 목 스택 화면 확인",
   "author": { "name": "farrar142" },
   "repository": "https://github.com/farrar142/dev-kit"
 }

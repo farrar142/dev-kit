@@ -5,14 +5,14 @@ description: Django를 ASGI(uvicorn·daphne·hypercorn)로 돌릴 때의 성능�
 
 # Django + ASGI 성능·정합성
 
-ASGI 아래의 Django는 WSGI와 다르게 움직이는 곳이 몇 군데 있다. 아래 점검표를 위에서부터 보고, 걸리는 항목의 참고 문서를 연다. 각 항목은 실제 프로젝트에서 측정·재현한 것이다.
+ASGI 아래의 Django는 WSGI와 다르게 움직이는 곳이 몇 군데 있다. 아래 점검표를 위에서부터 보고, 걸리는 항목의 참고 문서를 연다. 각 항목은 한 프로젝트에서 측정·재현한 것이다.
 
 ## 점검표
 
 | # | 증상 | 원인 | 처방 | 참고 |
 |---|---|---|---|---|
 | 1 | 로그인한 요청마다 10~20ms가 더 붙는다. `pg_stat_activity`의 새 세션이 요청 수만큼 늘어난다 | ASGI에서는 요청의 동기 부분이 매번 다른 스레드에서 돈다. 연결은 스레드에 묶이고 요청 끝에 닫히므로 **`CONN_MAX_AGE`를 올려도 재사용되지 않는다** | Django 5.1+ psycopg 연결 풀(`DATABASES[...]["OPTIONS"]["pool"]`) | [reference/db-pool.md](reference/db-pool.md) |
-| 2 | 연결 풀을 켠 뒤, 동시 접속이 늘면 `PoolTimeout`이 나거나 요청이 멈춘다 | SSE·롱폴링·MCP 기다리기처럼 몇 분씩 열린 요청이 DB를 한 번 만진 뒤 연결을 끝까지 쥔다 | DB를 쓴 직후 그 스레드의 연결을 풀에 돌려준다(`release()`·`released()`) | [reference/db-pool.md](reference/db-pool.md), [examples/db.py](examples/db.py) |
+| 2 | 연결 풀을 켠 뒤, 동시 접속이 늘면 `PoolTimeout`이 나거나 요청이 멈춘다 | SSE·롱폴링·긴 대기 API처럼 몇 분씩 열린 요청이 DB를 한 번 만진 뒤 연결을 끝까지 쥔다 | DB를 쓴 직후 그 스레드의 연결을 풀에 돌려준다(`release()`·`released()`) | [reference/db-pool.md](reference/db-pool.md), [examples/db.py](examples/db.py) |
 | 3 | 요청이 가끔 끝없이 멈춘다. 스택을 보면 `sync_to_async`·`CurrentThreadExecutor`가 서로를 기다린다 | sync 전용 미들웨어가 async 사슬에 끼면 요청마다 `async_to_sync`가 실행기를 새로 세운다. 그 요청에서 띄운 태스크가 요청이 끝난 뒤 그 실행기를 물려받아 교착한다 | 미들웨어를 sync·async 둘 다 받게 쓴다 | [reference/async-middleware.md](reference/async-middleware.md), [examples/middleware.py](examples/middleware.py) |
 | 4 | SSE에서 접속·재접속 직후의 갱신이 가끔 빠지거나 두 번 온다 | 스냅샷과 스트림 사이의 거르기를 시각으로 한다(시각은 겹친다), 또는 스냅샷을 구독보다 먼저 읽는다 | 구독 먼저, 채널 순번으로 거르기, `Last-Event-ID`로 재접속 | [reference/sse-snapshot-stream.md](reference/sse-snapshot-stream.md) |
 | 5 | 가입·로그인이 들어간 시험·E2E가 느리다 | 운영 비밀번호 해셔가 일부러 느리다(한 번에 0.8초) | 시험·E2E 설정에서만 빠른 해셔 | 아래 「시험 설정」 |
@@ -22,7 +22,7 @@ ASGI 아래의 Django는 WSGI와 다르게 움직이는 곳이 몇 군데 있다
 - `PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]`는 시험·E2E 설정에만 둔다. 운영에는 두지 않는다.
 - 시험 Postgres는 `--tmpfs` 위에 두고 `fsync=off`. 컨테이너 안에서만 쓰면 `POSTGRES_HOST_AUTH_METHOD=trust`.
 - 아웃박스나 배경 적용기의 주기(예: 1초)가 E2E 화면 대기에 그대로 더해진다. E2E 설정에서는 주기를 0.05초 정도로 줄인다.
-- 연결 풀은 시험 설정에서도 켜 둔다. 운영과 다른 연결 수명으로 시험하면 #2 같은 문제를 못 잡는다. pytest의 트랜잭션 안에서는 연결을 닫지 않는다(`connection.in_atomic_block` 확인).
+- 연결 풀은 시험 설정에서도 켜 둔다. 운영과 다른 연결 수명으로 시험하면 점검표 2번 같은 문제를 못 잡는다. pytest의 트랜잭션 안에서는 연결을 닫지 않는다(`connection.in_atomic_block` 확인).
 
 ## 측정하는 법
 

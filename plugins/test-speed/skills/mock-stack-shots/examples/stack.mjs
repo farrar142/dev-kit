@@ -1,5 +1,5 @@
 // 목 서버 + vite + Playwright 브라우저를 한 번에 세운다(스크린샷 스크립트와 직접 짜는 확인 스크립트가 함께 쓴다).
-// `./server.mjs`의 `startMock(scene, opts)`는 `{ url, close, scene }`을 돌려주는 목 API 서버다(저장소마다 짠다).
+// `./server.mjs`의 `startMock(scenario, opts)`는 `{ url, close, scenario }`을 돌려주는 목 API 서버다(저장소마다 짠다).
 // vite가 API를 목 서버로 프록시하게 `API_TARGET` 같은 환경 변수를 vite 설정에서 읽는다.
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
@@ -78,10 +78,10 @@ function hookExit() {
   process.once('SIGTERM', onSignal)
 }
 
-/** 장면 하나로 목 서버·vite를 세우고 `{ app, mock, close }`를 돌려준다. `app`이 브라우저로 열 주소다.
+/** 시나리오 하나로 목 서버·vite를 세우고 `{ app, mock, close }`를 돌려준다. `app`이 브라우저로 열 주소다.
  * vite는 제 프로세스 그룹으로 띄워 `close()`가 그룹째 내리고, `close()` 없이 끝나도(예외·Ctrl-C) 프로세스가 끝날 때 내린다. */
-export async function startStack(scene, opts = {}) {
-  const mock = await startMock(scene, opts)
+export async function startStack(scenario, opts = {}) {
+  const mock = await startMock(scenario, opts)
   const port = await freePort()
   const vite = spawn('pnpm', ['exec', 'vite', '--port', String(port), '--strictPort'], {
     cwd: FRONTEND,

@@ -16,7 +16,7 @@
     {
       "name": "test-speed",
       "source": "./plugins/test-speed",
-      "description": "시험 하나 시간 예산과 그 강제, 시험이 시간을 쥐게 해 E2E를 3초 안에, 목 스택으로 화면 확인"
+      "description": "시험 하나 시간 예산과 그 강제, Playwright E2E를 이벤트 리스너로만 기다려 3초 안에 흔들림 없이, 목 스택으로 화면 확인"
     }
   ]
 }
