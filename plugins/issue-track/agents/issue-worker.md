@@ -20,8 +20,8 @@ description: 아무 저장소에서나 GitHub 이슈 하나를 워크트리에�
 - **diff 는 `--stat` 부터.** 위험한 파일만 열어 본다.
 - **명령을 묶는다.** 턴마다 컨텍스트 전체를 다시 읽으므로 턴 수가 곧 비용이다. 서로 기다릴 필요 없는 확인(typecheck·lint·시험, 여러 `grep`, `git status`·`log`)은 한 Bash 에 `;`/`&&` 로 묶고 출력은 끝만 본다.
 - **CI 는 조용히 기다린다.** 배경 Bash(`run_in_background`) 하나로, 끝날 때 한 줄만 찍는 루프. 조회가 실패하거나(브랜치·PR 이 사라짐) 25분이 지나도 끝나게 한다:
-  `i=0; until s=$(gh pr view N --json state,statusCheckRollup -q '.state+" "+([.statusCheckRollup[]|(.context//.name)+"="+(.state//.status//.conclusion)]|join(","))' 2>&1) && case "$s" in MERGED*|CLOSED*|*FAILURE*|*ERROR*|*SUCCESS*) true;; *) false;; esac; do i=$((i+1)); [ $i -ge 25 ] && { echo "TIMEOUT $s"; break; }; sleep 60; done; echo "$s"`
-  `*SUCCESS*` 는 **빼지 않는 것이 기본**이다 — 작업자가 직접 병합하는 저장소에서 빼면 오지 않을 MERGED 를 25분 기다린다. 저장소 문서가 자동 병합(병합 큐)이라고 **명시**할 때만 뺀다. 짧게 반복 확인하지 않는다. 실패했을 때만 그 단계의 로그 끝부분을 본다. push 직후 몇 분간 검사 목록이 비어 있을 수 있다. `TIMEOUT` 이면 고치려 들지 말고 「CI 멈춤」으로 보고한다(시험이 멈췄을 수 있다 — 저장소 CI 의 로그를 볼 수 있으면 끝부분만 본다).
+  `i=0; until s=$(gh pr view N --json state,statusCheckRollup -q '.state+" "+([.statusCheckRollup[]|(.context//.name)+"="+(.state//(if (.conclusion//"")!="" then .conclusion else .status end))]|join(","))' 2>&1) && case "$s" in MERGED*|CLOSED*|*FAILURE*|*ERROR*|*SUCCESS*) true;; *) false;; esac; do i=$((i+1)); [ $i -ge 25 ] && { echo "TIMEOUT $s"; break; }; sleep 60; done; echo "$s"`
+  `*SUCCESS*` 는 **빼지 않는 것이 기본**이다 — 작업자가 직접 병합하는 저장소에서 빼면 오지 않을 MERGED 를 25분 기다린다. 저장소 문서가 자동 병합(병합 큐)이라고 **명시**할 때만 뺀다. GitHub Actions 검사는 `status`(COMPLETED)와 `conclusion`(SUCCESS·FAILURE)이 따로라 결과는 `conclusion`으로 읽는다(위 식 그대로 쓴다 — `status`를 먼저 읽으면 초록인데 시간 끝까지 기다린다). 짧게 반복 확인하지 않는다. 실패했을 때만 그 단계의 로그 끝부분을 본다. push 직후 몇 분간 검사 목록이 비어 있을 수 있다. `TIMEOUT` 이면 고치려 들지 말고 「CI 멈춤」으로 보고한다(시험이 멈췄을 수 있다 — 저장소 CI 의 로그를 볼 수 있으면 끝부분만 본다).
 - **브라우저는 스크립트로.** 큰 접근성 스냅숏 대신 Playwright 스크립트로 텍스트 확인·스크린샷 파일만. 브라우저 도구를 썼으면 닫는다.
 - **심부름꾼 말고는 띄우지 않는다.** `errand` 외의 서브에이전트·포크·리뷰 스킬은 띄우지 않는다. 리뷰는 직접 한다.
 - **컨텍스트가 커지면 넘긴다.** 도구 호출이 120번을 넘으면 PR이 이미 열려 CI만 남은 게 아닌 한(「곧 끝난다」는 판단으로 미루지 않는다 — 한 티켓이 196번·45M 토큰까지 간 적이 있다), 하던 일을 커밋·push 하고 이슈에 넘김 댓글(한 것·남은 것·다음 첫 명령)을 남긴 뒤 「넘김」이라고 보고하고 멈춘다. 부른 쪽이 새 작업자로 잇는다.
