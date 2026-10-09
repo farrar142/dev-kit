@@ -1,0 +1,7 @@
+{
+  "name": "issue-track",
+  "version": "0.1.0",
+  "description": "GitHub 이슈 한 트랙 조율 흐름 — issue-track 스킬, issue-worker·errand 에이전트",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}

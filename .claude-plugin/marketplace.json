@@ -1,0 +1,22 @@
+{
+  "name": "dev-kit",
+  "owner": { "name": "farrar142" },
+  "metadata": { "description": "여러 저장소에서 다시 쓰는 작업 흐름·최적화 지식 묶음" },
+  "plugins": [
+    {
+      "name": "issue-track",
+      "source": "./plugins/issue-track",
+      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트 포함)"
+    },
+    {
+      "name": "django-asgi",
+      "source": "./plugins/django-asgi",
+      "description": "Django를 ASGI(uvicorn)로 돌릴 때의 성능·정합성 함정과 처방: 연결 풀, 오래 열린 요청의 연결 돌려주기, async 미들웨어, SSE 스냅샷 울타리"
+    },
+    {
+      "name": "test-speed",
+      "source": "./plugins/test-speed",
+      "description": "시험 하나 시간 예산과 그 강제, 시험이 쥐는 서버 시계로 E2E를 3초 안에, 목 스택으로 화면 확인"
+    }
+  ]
+}

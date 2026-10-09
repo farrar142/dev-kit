@@ -1,0 +1,7 @@
+{
+  "name": "django-asgi",
+  "version": "0.1.0",
+  "description": "Django + ASGI 성능·정합성 지식",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}
