@@ -25,7 +25,7 @@ plugins/
     skills/issue-track/            조율자: 큐·모델 고르기·지시서·확인·토큰 측정·최적화 반영
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
   django-asgi/
-    skills/django-asgi-perf/       ASGI 점검표 → reference/ (연결 풀, async 미들웨어, SSE 울타리), examples/
+    skills/django-asgi-perf/       ASGI 점검표 → reference/ (연결 풀, async 미들웨어, SSE 스냅샷·스트림 거르기), examples/
   test-speed/
     skills/test-budgets/           시험 하나 예산(0.5/1/3초)과 강제(pytest·Playwright·node --test), testing.md 템플릿, .tsx 로더
     skills/e2e-controlled-clock/   시험이 시간을 쥐게(브라우저 타이머·서버 now·배경 주기·틱 루프) E2E를 시험당 3초 안에

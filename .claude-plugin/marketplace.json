@@ -11,7 +11,7 @@
     {
       "name": "django-asgi",
       "source": "./plugins/django-asgi",
-      "description": "Django를 ASGI(uvicorn)로 돌릴 때의 성능·정합성 함정과 처방: 연결 풀, 오래 열린 요청의 연결 돌려주기, async 미들웨어, SSE 스냅샷 울타리"
+      "description": "Django를 ASGI(uvicorn)로 돌릴 때의 성능·정합성 함정과 처방: 연결 풀, 오래 열린 요청의 연결 돌려주기, async 미들웨어, SSE 스냅샷·스트림 순번 거르기"
     },
     {
       "name": "test-speed",
