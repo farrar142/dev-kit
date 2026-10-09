@@ -28,7 +28,7 @@ plugins/
     skills/django-asgi-perf/       ASGI 점검표 → reference/ (연결 풀, async 미들웨어, SSE 울타리), examples/
   test-speed/
     skills/test-budgets/           시험 하나 예산(0.5/1/3초)과 강제(pytest·Playwright·node --test), testing.md 템플릿, .tsx 로더
-    skills/e2e-controlled-clock/   시험이 쥐는 서버 시계(멈추기·다시 돌리기·감기)로 E2E를 시험당 3초 안에
+    skills/e2e-controlled-clock/   시험이 시간을 쥐게(브라우저 타이머·서버 now·배경 주기·틱 루프) E2E를 시험당 3초 안에
     skills/mock-stack-shots/       실제 응답에서 뽑은 목 장면 + startStack + 데스크톱·모바일·시안 비교 스크린샷
 ```
 
@@ -38,7 +38,7 @@ plugins/
 | | `issue-track:issue-worker`, `issue-track:errand` 에이전트 | 조율자가 `Agent`의 `subagent_type`으로 띄운다 |
 | django-asgi | `django-asgi-perf` | Django ASGI의 느린 요청, 연결 풀, SSE, async 미들웨어 |
 | test-speed | `test-budgets` | 시험이 느리다, 예산을 세운다 |
-| | `e2e-controlled-clock` | 시간이 흐르는 서버의 E2E가 느리거나 흔들린다 |
+| | `e2e-controlled-clock` | 시간이 흘러야 일어나는 일이 있는 앱의 E2E가 느리거나 흔들린다 |
 | | `mock-stack-shots` | 화면 티켓의 확인·스크린샷 |
 
 ## 저장소 쪽에서 할 일
