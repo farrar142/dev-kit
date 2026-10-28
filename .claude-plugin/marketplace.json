@@ -6,7 +6,7 @@
     {
       "name": "issue-track",
       "source": "./plugins/issue-track",
-      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트 포함)"
+      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 CI 대기(wait-ci)·결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트, 병렬 실행 함정 문서 포함)"
     },
     {
       "name": "django-asgi",
@@ -16,7 +16,12 @@
     {
       "name": "test-speed",
       "source": "./plugins/test-speed",
-      "description": "시험 하나 시간 예산과 그 강제, Playwright E2E를 이벤트 리스너로만 기다려 3초 안에 흔들림 없이, 목 스택으로 화면 확인"
+      "description": "시험 하나 시간 한도(CPU 초)와 그 강제·처음 켜는 순서, 느린 시험 원인 고치기, 고정 대기 대신 사건 기다리기, Playwright E2E를 이벤트 리스너로만 기다려 3초 안에 흔들림 없이, 목 스택으로 화면 확인"
+    },
+    {
+      "name": "token-diet",
+      "source": "./plugins/token-diet",
+      "description": "토큰 아끼기: 큰 파일 통째 읽기를 막는 훅, 큰 heredoc을 파일로 옮기는 훅, 작업자 토큰 규율(부분 읽기·심부름꾼·모델 고르기·넘김·배경 대기)"
     }
   ]
 }
