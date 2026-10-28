@@ -1,0 +1,7 @@
+{
+  "name": "token-diet",
+  "version": "0.1.0",
+  "description": "토큰 아끼기 — 큰 파일 통째 읽기를 막는 훅, 큰 heredoc을 파일로 옮기는 훅, 작업자 토큰 규율 스킬",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}
