@@ -22,6 +22,11 @@
       "name": "token-diet",
       "source": "./plugins/token-diet",
       "description": "토큰 아끼기: 큰 파일 통째 읽기를 막는 훅, 큰 heredoc을 파일로 옮기는 훅, 작업자 토큰 규율(부분 읽기·심부름꾼·모델 고르기·넘김·배경 대기)"
+    },
+    {
+      "name": "question-panel",
+      "source": "./plugins/question-panel",
+      "description": "질문 패널 mod: 모델의 객관식 질문(mcp__question-panel__ask)을 오른쪽 「질문」 패널에 쌓아 두고 사용자가 원할 때 답하면 「[질문 패널 답] 질문 = 답」 메시지로 돌려준다. AskUserQuestion처럼 턴을 막지 않는다(/questions·/questions-clear)"
     }
   ]
 }

@@ -10,6 +10,7 @@
 /plugin install django-asgi@dev-kit
 /plugin install test-speed@dev-kit
 /plugin install token-diet@dev-kit
+/plugin install question-panel@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -39,6 +40,10 @@ plugins/
     hooks/read-guard.js            1,000줄·80KB 넘는 파일을 limit 없이 Read하면 막는다
     hooks/block-heredoc.js         6,000자 넘는 heredoc 명령을 스크립트 파일로 옮겨 source로 실행
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
+  question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)
+    hooks/register.tsx             도구 mcp__question-panel__ask 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출
+    hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력)
+    types/index.d.ts               $.state 계약(queue)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -51,6 +56,7 @@ plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
+| question-panel | 도구 `mcp__question-panel__ask`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
 
 ## 바뀐 것
 

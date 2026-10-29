@@ -1,0 +1,6 @@
+{
+  "name": "question-panel",
+  "version": "0.1.0",
+  "description": "모델의 질문을 오른쪽 패널에 쌓아 두고, 사용자가 원할 때 답하게 하는 mod",
+  "types": "./types/index.d.ts"
+}
