@@ -22,8 +22,10 @@ description: 아무 저장소에서나 GitHub 이슈 하나를 워크트리에�
 - **`rm -rf`를 쓰지 않는다.** 사용자의 권한 모드가 지우기 명령마다 확인창을 띄워 사람을 멈춰 세운다. 워크트리는 `git worktree remove --force <경로>`, 브랜치는 `git branch -D`·`git push origin --delete`로 지운다. 임시 파일·증거 폴더는 처음부터 scratchpad에 만들고 지우지 않는다. 꼭 지워야 하는데 못 지웠으면 보고에 「지우지 못한 경로」로 남긴다.
 - **긴 배경 작업(벤치·배치)은 그 명령 자체를 배경 Bash로 띄운다.** 끝나면 그 배경 작업이 너를 깨운다. 「다른 프로세스가 끝나길 기다리는」 감시 루프(`while pgrep -f …; do sleep`)를 따로 띄우지 않는다 — `pgrep -f`가 그 루프 자신의 명령줄을 잡아 영원히 안 끝난다(벤치는 끝났는데 5시간 멈춘 적이 있다). 여러 명령은 한 스크립트로 묶어 그 스크립트를 배경으로 띄운다.
 - **CI 는 스크립트로 기다린다.** PR 을 열면 곧바로 배경 Bash(`run_in_background: true`) 하나로 `python3 <wait-ci.py 경로> <PR 번호>` 를 띄운다(저장소 루트나 워크트리에서). 경로는 지시서가 준다 — `issue-track` 스킬 폴더의 `scripts/wait-ci.py` 다. `scripts/` 를 빼먹은 경로를 받았으면 「없다」고 포기하지 말고 그 스킬 폴더 아래를 찾는다.
-  - PR head 커밋의 상태(commit status, 예: Jenkins)와 check-runs(Actions)를 함께 보고 끝날 때 한 번만 말한다. 종료 코드: 0 SUCCESS / 1 FAILURE(실패 줄을 덧붙인다) / 2 MERGED·CLOSED / 3 TIMEOUT(40분) / 4 GONE.
+  - PR head 커밋의 상태(commit status, 예: Jenkins)와 check-runs(Actions)를 함께 보고 끝날 때 한 번만 말한다. 종료 코드: 0 SUCCESS / 1 FAILURE(실패 줄을 덧붙인다) / 2 MERGED·CLOSED / 3 TIMEOUT(40분) / 4 GONE / 5 NO_CHECKS(검사 없음).
   - **띄운 뒤에는 차례를 끝내도 된다.** 스크립트가 끝나면 네가 다시 깨어난다. 띄우지 않고 「CI 기다린다」로 끝내면 아무도 깨우지 않는다(몇 시간씩 멈춘 적이 있다).
+  - 종료 코드는 5 NO_CHECKS도 있다: 검사가 하나도 없는 채로 3분이 지났다는 뜻이다. 이 PR에는 CI가 없으니(Jenkins가 main 병합 뒤에만 도는 저장소 등) 더 기다리지 말고 저장소 문서가 정한 대로 간다 — 사람이 병합하면 「CI 없음」으로 보고하고 멈추고, 직접 병합하는 저장소면 로컬 게이트가 초록인 걸 확인하고 병합한다.
+  - **병합 뒤 배포가 도는 저장소**(지시서나 저장소 CLAUDE.md가 Jenkins 잡 이름을 준다)는 병합 직후 커밋 status·빌드 목록을 직접 폴링하지 말고 배경 Bash로 `python3 <wait-deploy.py 경로> --job <잡 이름> --pr <PR 번호> [--repo owner/name]`을 띄운다(`wait-ci.py`와 같은 `scripts/` 폴더). 병합 시각 뒤에 시작된 첫 빌드를 찾아 끝날 때까지 기다리고 한 번만 말한다. 종료 코드: 0 SUCCESS / 1 FAILURE(콘솔 실패 줄을 덧붙인다) / 3 TIMEOUT(빌드가 30분 안에 안 끝남) / 4 GONE(PR 미병합·Jenkins 조회 불가) / 5 NO_BUILD(10분 안에 빌드가 안 생김). FAILURE면 줄을 보고하고 멈추며, 3·5는 고치지 말고 「배포 멈춤」으로 보고한다.
   - SUCCESS면 바로 병합 단계로. FAILURE면 덧붙은 줄을 보고 고쳐 다시 push한 뒤 같은 명령을 또 띄운다. TIMEOUT이면 고치지 말고 「CI 멈춤」으로 보고한다.
   - 같은 시간 한도 시험이 두 번 연달아 빨강이면 「일시적」으로 재실행하지 않는다. 보고하고 멈춘다(최적화 티켓 몫이다).
   - 스크립트를 쓸 수 없을 때만 아래 루프를 배경으로 띄운다. 조회가 실패하거나 25분이 지나도 끝난다:

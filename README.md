@@ -25,7 +25,10 @@ plugins/
     agents/issue-worker.md         이슈 하나를 워크트리→시험→PR→병합→정리까지 (sonnet 기본)
     agents/errand.md               작업자의 찾기 심부름꾼 (haiku, 읽기 전용)
     skills/issue-track/            조율자: 큐·모델 고르기·지시서·확인·토큰 측정·최적화 반영
-      scripts/wait-ci.py           PR head 커밋의 상태·check-runs를 배경에서 기다렸다가 한 번만 알린다(종료 코드로 결과)
+      scripts/wait-ci.py           PR head 커밋의 상태·check-runs를 배경에서 기다렸다가 한 번만 알린다(종료 코드로 결과: 0 성공 / 1 실패 / 2 병합·닫힘 / 3 시간 초과 / 4 PR 없음 / 5 검사 없음)
+      scripts/wait-deploy.py       병합 뒤 Jenkins 배포 빌드(병합 시각 뒤 첫 빌드)가 끝날 때까지 기다렸다가 한 번만 알린다(0 성공 / 1 실패 / 3 시간 초과 / 4 조회 불가 / 5 빌드 안 생김)
+      scripts/ci_common.py         두 스크립트가 함께 쓰는 Jenkins 자격·기본 URL 찾기·콘솔 발췌
+      tests/                       스크립트 단위 시험(`python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests`)
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
       reference/parallel-runs.md   체인 여럿을 나란히 돌릴 때의 함정(리뷰 포크, 통합 tip, 의미 충돌, compose -p)
   django-asgi/
@@ -59,6 +62,15 @@ plugins/
 | question-panel | 도구 `mcp__question-panel__ask`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
 
 ## 바뀐 것
+
+### 2026-10-30 — 병합 뒤에만 배포가 도는 저장소 대응
+
+- **issue-track 0.3.0**
+  - `wait-ci.py`: 검사가 하나도 없는 상태가 3분(`--no-checks-wait`) 이어지면 종료 코드 5 `NO_CHECKS`로 곧바로 끝난다. Jenkins가 main 병합 뒤에만 돌고 커밋 상태를 올리지 않는 저장소에서 40분 `TIMEOUT`을 기다리지 않는다.
+  - `wait-deploy.py`(새): 병합 시각(`--pr`의 mergedAt 또는 `--since`) 뒤에 시작된 첫 Jenkins 빌드를 찾아 끝날 때까지 기다리고 한 번만 알린다. 실패면 콘솔 실패 줄을 덧붙인다. 빌드가 10분 안에 안 생기면 5 `NO_BUILD`. Jenkins 자격·기본 URL 찾기는 `ci_common.py`로 뽑아 `wait-ci.py`와 공유한다.
+  - issue-worker: NO_CHECKS 처리와 「병합 뒤 배포는 커밋 status를 폴링하지 말고 `wait-deploy.py`」를 넣었다. 조율 스킬 지시서 절·CI 알림 절에도 반영했다.
+  - 조율 스킬: 로컬 사본에만 있던 「조율자 세션 컨텍스트 — compact가 기본」 절을 가져왔다(프로젝트 이름 뺌).
+  - 단위 시험(`skills/issue-track/tests/`): gh·Jenkins·시계를 가짜로 바꿔 종료 코드별 경우를 덮는다.
 
 ### 2026-10-28 — 로컬에서 쓰던 최신본을 일반화해 반영
 
