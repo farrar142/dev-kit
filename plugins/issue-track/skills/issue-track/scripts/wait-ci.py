@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PR의 CI 결과가 날 때까지 조용히 기다리고, 끝나면 한 번만 말한다.
 
-    wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초]
+    wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초] [--no-checks-wait 분]
 
 - PR head 커밋 하나만 본다. push하면 head가 바뀌므로 그 커밋의 결과를 새로 기다린다.
   옛 커밋의 빨강을 새 결과로 읽지 않는다.
@@ -12,23 +12,25 @@
   - 2 MERGED/CLOSED: PR이 이미 닫혔다.
   - 3 TIMEOUT: 제한 시간이 지났다.
   - 4 GONE: PR을 조회하지 못한다.
+  - 5 NO_CHECKS: 검사가 하나도 없는 상태가 --no-checks-wait 분(기본 3) 이어졌다. PR에 CI가 붙지
+    않는 저장소(예: Jenkins가 main 병합 뒤에만 도는 곳)다. 병합 뒤 배포는 wait-deploy.py로 본다.
 - 빨강일 때 Jenkins면 콘솔에서 FAILED·Error·예산 줄만 뽑는다. 자격은 다음 차례로 찾는다.
   1. 환경변수 JENKINS_USER와 JENKINS_TOKEN
   2. 작업 폴더나 그 위 폴더의 .claude/settings.local.json에 있는 env
+  (찾는 코드는 ci_common.py, wait-deploy.py와 공유)
   Actions면 `gh run view --log-failed`의 끝부분을 쓴다.
 
 배경으로 돌린다. 작업자는 Bash run_in_background, 조율자도 같다. 끝나면 부른 쪽이 깨어난다.
 돌고 있는 동안에는 아무것도 찍지 않는다.
 """
 import argparse
-import base64
 import json
-import os
 import re
 import subprocess
 import sys
 import time
-import urllib.request
+
+from ci_common import console_excerpt
 
 FAIL = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure", "error"}
 OK = {"SUCCESS", "NEUTRAL", "SKIPPED", "success"}
@@ -57,39 +59,8 @@ def pr_state(pr, repo):
     return d["state"], d["headRefOid"], checks
 
 
-def jenkins_auth():
-    u, t = os.environ.get("JENKINS_USER"), os.environ.get("JENKINS_TOKEN")
-    if u and t:
-        return u, t
-    d = os.getcwd()
-    while True:
-        p = os.path.join(d, ".claude", "settings.local.json")
-        if os.path.exists(p):
-            try:
-                env = json.load(open(p)).get("env", {})
-                if env.get("JENKINS_USER") and env.get("JENKINS_TOKEN"):
-                    return env["JENKINS_USER"], env["JENKINS_TOKEN"]
-            except Exception:
-                pass
-        up = os.path.dirname(d)
-        if up == d:
-            return None
-        d = up
-
-
 def jenkins_excerpt(url):
-    auth = jenkins_auth()
-    base = re.sub(r"/display/redirect/?$", "", url).rstrip("/")
-    req = urllib.request.Request(base + "/consoleText")
-    if auth:
-        req.add_header("Authorization", "Basic " + base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode())
-    try:
-        text = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
-    except Exception as e:
-        return f"(Jenkins 콘솔을 못 읽음: {e}) {base}/consoleText"
-    pat = re.compile(r"FAILED|ERROR |Error:|error:|예산|AssertionError|failed,|passed|Traceback|exit code")
-    lines = [l for l in text.splitlines() if pat.search(l)]
-    return "\n".join(lines[-25:]) or "\n".join(text.splitlines()[-25:])
+    return console_excerpt(url)
 
 
 def actions_excerpt(url):
@@ -109,10 +80,12 @@ def main():
     ap.add_argument("--repo")
     ap.add_argument("--timeout", type=float, default=40, help="분")
     ap.add_argument("--interval", type=float, default=45, help="초")
+    ap.add_argument("--no-checks-wait", type=float, default=3, help="검사가 하나도 없는 채로 이만큼(분) 지나면 NO_CHECKS로 끝낸다")
     a = ap.parse_args()
 
     deadline = time.time() + a.timeout * 60
     errors = 0
+    empty_since = None
     last = ""
     while True:
         try:
@@ -145,6 +118,13 @@ def main():
             if all(c[1] in OK for c in checks):
                 print(f"SUCCESS PR #{a.pr} {last}")
                 return 0
+        if checks:
+            empty_since = None
+        else:
+            empty_since = empty_since or time.time()
+            if time.time() - empty_since >= a.no_checks_wait * 60:
+                print(f"NO_CHECKS PR #{a.pr} {last} — 이 PR에는 CI 검사가 없다. 배포가 병합 뒤에 도는 저장소면 wait-deploy.py를 쓴다")
+                return 5
         if time.time() > deadline:
             print(f"TIMEOUT PR #{a.pr} {last} — 고치지 말고 「CI 멈춤」으로 보고한다")
             return 3
