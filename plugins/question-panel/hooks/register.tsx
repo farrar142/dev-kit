@@ -227,6 +227,15 @@ export const register: Register = on => {
       })
     }
 
+    const askDelete = (id: string, confirming: boolean) =>
+      update($, queue, l =>
+        l.map(b => (b.id === id && b.status === 'pending' ? { ...b, confirmingDelete: confirming } : b)),
+      )
+
+    // 답 메시지를 보내지 않고 대기열에서만 뺀다.
+    const remove = (id: string) =>
+      update($, queue, l => l.filter(b => !(b.id === id && b.status === 'pending' && b.confirmingDelete === true)))
+
     if (list.length === 0) {
       return (
         <Box flexDirection="column">
@@ -244,6 +253,28 @@ export const register: Register = on => {
                 <Text dimColor>
                   보냄 · {batch.id} · {clock(batch.createdAt)} · 질문 {batch.questions.length}개
                 </Text>
+              </Box>
+            )
+          }
+
+          if (batch.confirmingDelete === true) {
+            return (
+              <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
+                <Text weight="bold">
+                  묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
+                </Text>
+                <Text>이 질문을 지울까요?</Text>
+                <Button
+                  key={`delok:${batch.id}`}
+                  label="삭제 확인"
+                  variant="primary"
+                  onPress={() => remove(batch.id)}
+                />
+                <Button
+                  key={`delno:${batch.id}`}
+                  label="취소"
+                  onPress={() => askDelete(batch.id, false)}
+                />
               </Box>
             )
           }
@@ -301,6 +332,7 @@ export const register: Register = on => {
                   {batch.questions.length})
                 </Text>
               )}
+              <Button key={`del:${batch.id}`} label="삭제" onPress={() => askDelete(batch.id, true)} />
             </Box>
           )
         })}

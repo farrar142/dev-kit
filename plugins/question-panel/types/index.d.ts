@@ -19,6 +19,8 @@ export type QuestionPanelBatch = {
   /** pending: 답 대기, sent: 모델에 보냄 */
   status: 'pending' | 'sent'
   questions: QuestionPanelQuestion[]
+  /** 삭제 확인을 띄운 상태(없으면 false) */
+  confirmingDelete?: boolean
 }
 
 declare module 'claude-code' {
