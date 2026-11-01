@@ -130,3 +130,25 @@ test('기타 직접 입력으로도 답하고, 모바일에는 입력 칸이 없
   ])
   await ui.unmount()
 })
+
+test('삭제는 확인을 거치고, 취소하면 남고, 확인하면 답 없이 사라진다', async ($, on) => {
+  const submitted = await setup($, on)
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+
+  // 답을 하나도 고르지 않아도 삭제를 누를 수 있다.
+  await ui.press({ key: 'del:q1' })
+  expect(await ui.find({ type: 'Text', text: /이 질문을 지울까요/ })).toBeDefined()
+  expect(await ui.find({ key: 'delok:q1' })).toBeDefined()
+
+  await ui.press({ key: 'delno:q1' })
+  expect(await ui.find({ type: 'Text', text: /이 질문을 지울까요/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeDefined()
+
+  await ui.press({ key: 'del:q1' })
+  await ui.press({ key: 'delok:q1' })
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /쌓인 질문이 없습니다/ })).toBeDefined()
+  expect(submitted).toEqual([])
+  await ui.unmount()
+})
