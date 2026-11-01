@@ -44,9 +44,10 @@ plugins/
     hooks/block-heredoc.js         6,000자 넘는 heredoc 명령을 스크립트 파일로 옮겨 source로 실행
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)
-    hooks/register.tsx             도구 mcp__question-panel__ask 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출
-    hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력)
-    types/index.d.ts               $.state 계약(queue)
+    hooks/register.tsx             도구 mcp__question-panel__ask 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
+                                   패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림
+    hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·보내기·데스크톱 줄)
+    types/index.d.ts               $.state 계약(queue, draft)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -62,6 +63,13 @@ plugins/
 | question-panel | 도구 `mcp__question-panel__ask`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
 
 ## 바뀐 것
+
+### 2026-11-02 — question-panel 0.3.0: 데스크톱에서도 보이게, 패널에서 글 보내기
+
+- 패널 아래 「세션에 보낼 글」 칸과 「보내기」 버튼(Enter도 같다). 답 제출과 같은 `$.prompt.submit({ text, asUser: true })`로 세션에 사용자 메시지를 넣는다. 빈 글은 보내지 않고, 보내면 칸을 비운다. 모바일은 입력 칸이 없어 안내만 그린다.
+- 터미널 밖 표면(데스크톱·VS Code·모바일)에서는 pane과 함께, 질문을 올린 도구 줄(`ToolUse`)에 그 묶음 카드를, `/questions` 출력 줄(`CommandOutput`)에 패널 전체를 그린다. 데스크톱 앱이 pane을 그리지 않아도 질문에 답하고 글을 보낼 수 있다.
+- `$.ui.open`이 `isPlaced: false`를 돌려주면 사유를 `$.ui.log`·명령 출력에 남긴다(전에는 버렸다).
+- 모바일의 「기타」 칸 안내가 이제 실제로 나온다(표가 빠진 요소를 빈 조각으로 채워 `Input in t`가 늘 참이었다).
 
 ### 2026-10-30 — 병합 뒤에만 배포가 도는 저장소 대응
 

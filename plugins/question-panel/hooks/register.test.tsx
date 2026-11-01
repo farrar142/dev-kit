@@ -119,6 +119,7 @@ test('기타 직접 입력으로도 답하고, 모바일에는 입력 칸이 없
   const mobile = await $.ui.mount({ ...PANE, surface: 'mobile' })
   expect(await mobile.find({ key: 'o:q1:0:0' })).toBeDefined()
   expect(await mobile.find({ key: 'x:q1:0' })).toBeUndefined()
+  expect(await mobile.find({ type: 'Text', text: /직접 입력\(기타\)을 지원하지 않습니다/ })).toBeDefined()
   await mobile.unmount()
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -152,3 +153,103 @@ test('삭제는 확인을 거치고, 취소하면 남고, 확인하면 답 없�
   expect(submitted).toEqual([])
   await ui.unmount()
 })
+
+test('패널의 보내기는 글을 세션 메시지로 보내고 칸을 비우며, 빈 글은 보내지 않는다', async ($, on) => {
+  const submitted = await setup($, on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // 질문이 없어도 보내기 칸은 있다.
+    expect(await ui.find({ type: 'Text', text: /쌓인 질문이 없습니다/ })).toBeDefined()
+    expect(await ui.find({ key: 'say:send' })).toBeDefined()
+
+    await ui.press({ key: 'say:send' })
+    await ui.input({ key: 'say:text', text: '   ', kind: 'change' })
+    await ui.press({ key: 'say:send' })
+    expect(submitted).toEqual([])
+
+    await ui.input({ key: 'say:text', text: `${surface}에서 인사`, kind: 'change' })
+    await ui.press({ key: 'say:send' })
+    expect(submitted).toEqual([`${surface}에서 인사`])
+    expect((await ui.find({ key: 'say:text' }))?.props.value).toBe('')
+    submitted.length = 0
+
+    // Enter(제출)로도 보낸다.
+    await ui.input({ key: 'say:text', text: '엔터로 보냄', kind: 'submit' })
+    expect(submitted).toEqual(['엔터로 보냄'])
+    expect((await ui.find({ key: 'say:text' }))?.props.value).toBe('')
+    submitted.length = 0
+    await ui.unmount()
+  }
+
+  const mobile = await $.ui.mount({ ...PANE, surface: 'mobile' })
+  expect(await mobile.find({ key: 'say:text' })).toBeUndefined()
+  expect(await mobile.find({ type: 'Text', text: /글 보내기를 지원하지 않습니다/ })).toBeDefined()
+  await mobile.unmount()
+})
+
+test('데스크톱에서는 질문을 올린 도구 줄에 그 묶음을 그리고, 거기서 답할 수 있다', async ($, on) => {
+  engineDraws(on)
+  const submitted = await setup($, on)
+  await $.tool.call({ ...INPUT, tool_use_id: 'toolu_q1' } as any)
+  const ROW = {
+    plugin: 'question-panel',
+    component: 'ToolUse',
+    requestId: 'toolu_q1',
+    props: {
+      tool_use_id: 'toolu_q1',
+      tool: TOOL,
+      input: { questions: INPUT.questions },
+      isRunning: false,
+      isErrored: false,
+      isInterrupted: false,
+      output: '질문 묶음 q1을 패널에 올렸다.',
+    },
+  } as const
+
+  const term = await $.ui.mount({ ...ROW, surface: 'terminal' } as any)
+  expect(await term.find({ key: 'o:q1:0:0' })).toBeUndefined()
+  await term.unmount()
+
+  const ui = await $.ui.mount({ ...ROW, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeDefined()
+  await ui.press({ key: 'o:q1:0:0' })
+  await ui.press({ key: 'o:q1:1:0' })
+  await ui.press({ key: 'done:q1' })
+  expect(submitted).toEqual([
+    '[질문 패널 답] 어느 DB를 쓸까요? = Postgres\n[질문 패널 답] 넣을 기능은? = 검색',
+  ])
+  expect(await ui.find({ type: 'Text', text: /보냄 · q1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('데스크톱에서는 /questions 출력 줄에 패널 전체(보내기 칸 포함)를 그린다', async ($, on) => {
+  engineDraws(on)
+  const submitted = await setup($, on)
+  await $.tool.call(INPUT as any)
+  const OUT = {
+    plugin: 'question-panel',
+    component: 'CommandOutput',
+    requestId: 'cmd-1',
+    props: { command: 'questions', args: '', text: '질문 패널을 열었습니다.', isErrored: false },
+  } as const
+
+  const term = await $.ui.mount({ ...OUT, surface: 'terminal' } as any)
+  expect(await term.find({ key: 'say:send' })).toBeUndefined()
+  await term.unmount()
+
+  const ui = await $.ui.mount({ ...OUT, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeDefined()
+  await ui.input({ key: 'say:text', text: '출력 줄에서 보냄', kind: 'change' })
+  await ui.press({ key: 'say:send' })
+  expect(submitted).toEqual(['출력 줄에서 보냄'])
+  await ui.unmount()
+})
+
+// 플러그인 아래에서 엔진 대신 기본 줄을 그린다(플러그인이 next(e)로 넘긴 줄).
+function engineDraws(on: any) {
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine</Text>
+  })
+}

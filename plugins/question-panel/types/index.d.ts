@@ -21,10 +21,12 @@ export type QuestionPanelBatch = {
   questions: QuestionPanelQuestion[]
   /** 삭제 확인을 띄운 상태(없으면 false) */
   confirmingDelete?: boolean
+  /** 이 묶음을 올린 도구 호출의 tool_use_id(0.3.0부터; 그 전 묶음은 없음) */
+  toolUseId?: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'question-panel': { queue: Shaped<QuestionPanelBatch[]> }
+    'question-panel': { queue: Shaped<QuestionPanelBatch[]>; draft: string }
   }
 }
