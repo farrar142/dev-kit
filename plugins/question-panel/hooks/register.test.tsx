@@ -245,6 +245,53 @@ test('데스크톱에서는 /questions 출력 줄에 패널 전체(보내기 칸
   await ui.unmount()
 })
 
+test('데스크톱에서는 긴 선택지 글을 버튼 밖 Text로 빼 줄바꿈하고, 터미널은 예전처럼 버튼 안에 둔다', async ($, on) => {
+  await setup($, on)
+  const long = '아주 긴 선택지 라벨입니다. '.repeat(8).trim()
+  const desc = '선택지 설명도 길게 씁니다. '.repeat(8).trim()
+  await $.tool.call({
+    tool: TOOL,
+    questions: [
+      {
+        question: '질문 글도 길게 씁니다. '.repeat(8).trim(),
+        header: '긴 헤더',
+        multiSelect: false,
+        options: [
+          { label: long, description: desc },
+          { label: '짧음', description: '' },
+        ],
+      },
+    ],
+  } as any)
+
+  for (const surface of ['desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const all = await ui.findAll({})
+    // 어떤 요소도 잘라 그리지 않는다.
+    expect(all.filter(el => String(el.props.wrap ?? '').startsWith('truncate'))).toEqual([])
+    const button = await ui.find({ key: 'o:q1:0:0' })
+    expect(button?.text).not.toContain(long)
+    expect(String(button?.props.label).length).toBeLessThan(12)
+    expect((await ui.find({ type: 'Text', text: long }))?.props.wrap).toBe('wrap')
+    expect((await ui.find({ type: 'Text', text: desc }))?.props.wrap).toBe('wrap')
+    expect((await ui.find({ type: 'Text', text: /질문 글도 길게/ }))?.props.wrap).toBe('wrap')
+    if (surface !== 'mobile') {
+      expect((await ui.find({ key: 'x:q1:0' }))?.props.rows).toBe(3)
+      expect((await ui.find({ key: 'say:text' }))?.props.rows).toBe(3)
+    }
+    // 버튼은 그대로 누를 수 있다.
+    await ui.press({ key: 'o:q1:0:0' })
+    expect((await ui.find({ key: 'o:q1:0:0' }))?.props.label).toBe('(o) 고름')
+    await ui.press({ key: 'o:q1:0:0' })
+    await ui.unmount()
+  }
+
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await term.find({ key: 'o:q1:0:0' }))?.text).toContain(long)
+  expect((await term.find({ key: 'say:text' }))?.props.rows).toBeUndefined()
+  await term.unmount()
+})
+
 // 플러그인 아래에서 엔진 대신 기본 줄을 그린다(플러그인이 next(e)로 넘긴 줄).
 function engineDraws(on: any) {
   on('ui.render', ($: any, e: any) => {

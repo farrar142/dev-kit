@@ -88,6 +88,11 @@ function kit($: RenderSelf, e: RenderEvent) {
   // 모바일에는 Input과 Select가 없다: 입력 칸은 그 표면에서 그리지 않는다. 표는 빠진 요소를
   // 빈 조각으로 채워 건네므로 'Input' in t만으로는 가릴 수 없어 표면 이름도 본다.
   const Input = e.surface !== 'mobile' && 'Input' in t ? t.Input : undefined
+  // 데스크톱은 Button을 네이티브 버튼 한 줄로 그려 긴 글을 줄임표로 자른다(ButtonProps에는
+  // wrap이 없다). 원격 표면에서는 버튼에 짧은 표시만 두고 글은 줄바꿈되는 Text로 뺀다.
+  const remote = isRemote(e.surface)
+  // 원격 표면의 입력 칸은 여러 줄로 둬 긴 글이 한눈에 보이게 한다(터미널은 그대로 한 줄).
+  const rows = remote ? 3 : undefined
 
   const edit = (
     id: string,
@@ -171,7 +176,7 @@ function kit($: RenderSelf, e: RenderEvent) {
     if (batch.status === 'sent') {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
-          <Text dimColor>
+          <Text dimColor wrap="wrap">
             보냄 · {batch.id} · {clock(batch.createdAt)} · 질문 {batch.questions.length}개
           </Text>
         </Box>
@@ -181,10 +186,10 @@ function kit($: RenderSelf, e: RenderEvent) {
     if (batch.confirmingDelete === true) {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
-          <Text weight="bold">
+          <Text weight="bold" wrap="wrap">
             묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
           </Text>
-          <Text>이 질문을 지울까요?</Text>
+          <Text wrap="wrap">이 질문을 지울까요?</Text>
           <Button
             key={`delok:${batch.id}`}
             label="삭제 확인"
@@ -202,18 +207,39 @@ function kit($: RenderSelf, e: RenderEvent) {
 
     return (
       <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
-        <Text weight="bold">
+        <Text weight="bold" wrap="wrap">
           묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
         </Text>
         {batch.questions.map((q, qi) => (
           <Box key={`q:${batch.id}:${qi}`} flexDirection="column" marginTop={1}>
-            <Text>
+            <Text wrap="wrap">
               <Text inverse> {q.header || '질문'} </Text> <Text weight="bold">{q.question}</Text>
               {q.multiSelect && <Text dimColor> (여러 개 선택)</Text>}
             </Text>
             {q.options.map((o, oi) => {
               const isOn = q.picked.includes(o.label)
               const mark = q.multiSelect ? (isOn ? '[x]' : '[ ]') : isOn ? '(o)' : '( )'
+
+              if (remote) {
+                return (
+                  <Box key={`or:${batch.id}:${qi}:${oi}`} flexDirection="row" gap={1} alignItems="flex-start">
+                    <Button
+                      key={`o:${batch.id}:${qi}:${oi}`}
+                      label={isOn ? `${mark} 고름` : `${mark} 고르기`}
+                      variant={isOn ? 'primary' : undefined}
+                      onPress={() => pick(batch.id, qi, o.label)}
+                    />
+                    <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                      <Text wrap="wrap">{o.label}</Text>
+                      {o.description !== '' && (
+                        <Text dimColor wrap="wrap">
+                          {o.description}
+                        </Text>
+                      )}
+                    </Box>
+                  </Box>
+                )
+              }
 
               return (
                 <Button
@@ -231,12 +257,15 @@ function kit($: RenderSelf, e: RenderEvent) {
                 key={`x:${batch.id}:${qi}`}
                 label="기타(직접 입력)"
                 placeholder="직접 입력"
+                rows={rows}
                 value={q.other}
                 onInput={text => typeOther(batch.id, qi, text)}
                 onSubmit={text => typeOther(batch.id, qi, text)}
               />
             ) : (
-              <Text dimColor>이 화면에서는 직접 입력(기타)을 지원하지 않습니다.</Text>
+              <Text dimColor wrap="wrap">
+                이 화면에서는 직접 입력(기타)을 지원하지 않습니다.
+              </Text>
             )}
           </Box>
         ))}
@@ -248,7 +277,7 @@ function kit($: RenderSelf, e: RenderEvent) {
             onPress={() => finish(batch.id)}
           />
         ) : (
-          <Text dimColor>
+          <Text dimColor wrap="wrap">
             완료 (모든 질문에 답하면 누를 수 있습니다: {batch.questions.filter(isAnswered).length}/
             {batch.questions.length})
           </Text>
@@ -265,6 +294,7 @@ function kit($: RenderSelf, e: RenderEvent) {
           key="say:text"
           label="세션에 보낼 글"
           placeholder="세션에 보낼 글"
+          rows={rows}
           value={text}
           onInput={typed => update($, draft, () => typed)}
           onSubmit={typed => say(typed)}
@@ -273,13 +303,17 @@ function kit($: RenderSelf, e: RenderEvent) {
       </Box>
     ) : (
       <Box key="say" marginTop={1}>
-        <Text dimColor>이 화면에서는 글 보내기를 지원하지 않습니다.</Text>
+        <Text dimColor wrap="wrap">
+          이 화면에서는 글 보내기를 지원하지 않습니다.
+        </Text>
       </Box>
     )
 
   const panel = (list: QuestionPanelBatch[], text: string) => (
     <Box flexDirection="column">
-      {list.length === 0 ? <Text dimColor>쌓인 질문이 없습니다.</Text> : list.map(card)}
+      {list.length === 0 ? <Text dimColor wrap="wrap">
+          쌓인 질문이 없습니다.
+        </Text> : list.map(card)}
       {composer(text)}
     </Box>
   )
