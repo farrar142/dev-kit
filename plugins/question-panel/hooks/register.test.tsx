@@ -292,6 +292,57 @@ test('데스크톱에서는 긴 선택지 글을 버튼 밖 Text로 빼 줄바�
   await term.unmount()
 })
 
+test('도구 결과에 대화창에 옮겨 적을 마크다운 블록(묶음 ID·번호·선택 방식·글로 답하는 법)이 있다', async ($, on) => {
+  await setup($, on)
+  const ran = JSON.stringify(await $.tool.call(INPUT as any))
+  expect(ran).toContain('그대로 옮겨 적고 턴을 마쳐라')
+  expect(ran).toContain('[질문 묶음 q1]')
+  expect(ran).toContain('1. 〔DB〕 어느 DB를 쓸까요?** (하나만 선택)')
+  expect(ran).toContain('- 2) SQLite — 파일형')
+  expect(ran).toContain('2. 〔기능〕 넣을 기능은?** (여러 개 선택 가능)')
+  expect(ran).toContain('q1 1-2, 2-1')
+  expect(ran).toContain('mcp__question-panel__resolve')
+})
+
+test('대화창 글에 묶음 ID가 있으면 그 묶음을 「대화창에서 답함」으로 닫아 패널에서 또 답할 수 없다', async ($, on) => {
+  const submitted = await setup($, on)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await $.prompt.submit({ text: 'Q1 1-2, 2-1 로 할게요' } as any)
+  expect(submitted).toEqual(['Q1 1-2, 2-1 로 할게요'])
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /대화창에서 답함 · q1/ })).toBeDefined()
+    expect(await ui.find({ key: 'o:q1:0:0' })).toBeUndefined()
+    // 언급하지 않은 묶음은 그대로 남는다.
+    expect(await ui.find({ key: 'o:q2:0:0' })).toBeDefined()
+    await ui.unmount()
+  }
+
+  // 패널의 보내기로 묶음 ID를 담아 보내도 닫힌다.
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'say:text', text: 'q2는 1-1, 2-2', kind: 'change' })
+  await ui.press({ key: 'say:send' })
+  expect(await ui.find({ type: 'Text', text: /대화창에서 답함 · q2/ })).toBeDefined()
+  expect(submitted).toEqual(['Q1 1-2, 2-1 로 할게요', 'q2는 1-1, 2-2'])
+  await ui.unmount()
+})
+
+test('resolve 도구로 ID 없이 글로 답한 묶음을 닫는다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(INPUT as any)
+  await $.prompt.submit({ text: 'Postgres랑 검색으로 해요' } as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'o:q1:0:0' })).toBeDefined()
+
+  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q1' } as any))).toContain('닫았다')
+  expect(await ui.find({ type: 'Text', text: /대화창에서 답함 · q1/ })).toBeDefined()
+  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q1' } as any))).toContain('이미 닫혀')
+  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q9' } as any))).toContain('없다')
+  await ui.unmount()
+})
+
 // 플러그인 아래에서 엔진 대신 기본 줄을 그린다(플러그인이 next(e)로 넘긴 줄).
 function engineDraws(on: any) {
   on('ui.render', ($: any, e: any) => {

@@ -60,9 +60,14 @@ plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__question-panel__ask`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
+| question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
 
 ## 바뀐 것
+
+### 2026-11-02 — question-panel 0.4.0: 질문을 대화창에도
+
+- `ask`의 도구 결과에 질문 묶음의 마크다운 블록(묶음 ID, 질문, 번호 붙은 선택지와 설명, 선택 방식, 「`q4 1-2`처럼 번호로 답해도 된다」)을 넣고, 도구 설명으로 모델이 그 블록을 답변 글에 그대로 옮겨 적게 한다. Remote Control·폰처럼 플러그인 UI가 오지 않는 화면에서도 질문이 보인다. 터미널 패널은 그대로다.
+- 사용자 글(대화창, 패널 「보내기」)에 대기 중인 묶음 ID가 있으면 그 묶음을 「대화창에서 답함」으로 닫아 패널에서 또 답하지 못하게 한다. ID 없이 글로 답하면 모델이 새 도구 `mcp__question-panel__resolve`로 닫는다.
 
 ### 2026-11-02 — question-panel 0.3.1: 데스크톱에서 긴 글이 잘리지 않게
 
