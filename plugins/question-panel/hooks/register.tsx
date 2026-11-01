@@ -6,6 +6,7 @@ import type { QuestionPanelBatch, QuestionPanelQuestion } from '../types'
 const PANE = 'questions'
 const TITLE = '질문'
 const TOOL = 'mcp__question-panel__ask'
+const RESOLVE_TOOL = 'mcp__question-panel__resolve'
 
 // 필드가 바뀌면 태그를 올린다: 이전 버전이 저장한 값은 비어 있는 것으로 읽힌다.
 const queue = atom({ plugin: 'question-panel', key: 'queue' } as const, [], {
@@ -40,6 +41,38 @@ const chosen = (q: QuestionPanelQuestion) => {
 
 const answerText = (b: QuestionPanelBatch) =>
   b.questions.map(q => `[질문 패널 답] ${q.question} = ${chosen(q)}`).join('\n')
+
+// 대화창에 옮겨 적을 마크다운 블록. Remote Control·폰처럼 플러그인 UI가 오지 않는 화면에서도
+// 질문이 보이고, 「q4 1-2」처럼 묶음 ID와 번호로 글로 답할 수 있게 한다.
+const chatBlock = (b: QuestionPanelBatch) => {
+  const lines = [`**[질문 묶음 ${b.id}]** 패널에서 답하거나, 이 대화창에 글로 답해도 됩니다.`]
+  b.questions.forEach((q, qi) => {
+    const head = q.header === '' ? '' : `〔${q.header}〕 `
+    const how = q.multiSelect ? '여러 개 선택 가능' : '하나만 선택'
+    lines.push('', `**${qi + 1}. ${head}${q.question}** (${how})`)
+    q.options.forEach((o, oi) => {
+      lines.push(`- ${oi + 1}) ${o.label}${o.description === '' ? '' : ` — ${o.description}`}`)
+    })
+  })
+  const example =
+    b.questions.length === 1
+      ? `\`${b.id} 2\`(선택지 번호)`
+      : `\`${b.id} 1-2, 2-1\`(질문 번호-선택지 번호)`
+  lines.push('', `번호로 답해도 됩니다: ${example}. 목록에 없는 답은 그대로 글로 적으면 됩니다.`)
+
+  return lines.join('\n')
+}
+
+// 사용자 글에 대기 중인 묶음 ID(q4 등)가 있으면 그 묶음을 「대화창에서 답함」으로 닫는다.
+// 패널에서 같은 질문에 또 답해 답이 두 번 가는 일을 막는다.
+const mentionedIds = (text: string) => new Set([...text.matchAll(/\bq(\d+)\b/gi)].map(m => `q${m[1]}`))
+
+const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
+  list.map(b =>
+    ids.has(b.id) && b.status === 'pending'
+      ? { ...b, status: 'sent' as const, via: 'chat' as const, confirmingDelete: false }
+      : b,
+  )
 
 const clock = (ms: number) => {
   const d = new Date(ms)
@@ -157,6 +190,8 @@ function kit($: RenderSelf, e: RenderEvent) {
       return text === '' ? d : ''
     })
     if (text === '') return
+    const ids = mentionedIds(text)
+    if (ids.size > 0) void update($, queue, l => closeInChat(l, ids))
     $.prompt.submit({ text, asUser: true }).catch(() => {
       void update($, draft, d => (d === '' ? text : d))
       $.ui.toast('글을 보내지 못했습니다. 다시 보내기를 눌러 주세요.')
@@ -177,7 +212,8 @@ function kit($: RenderSelf, e: RenderEvent) {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
           <Text dimColor wrap="wrap">
-            보냄 · {batch.id} · {clock(batch.createdAt)} · 질문 {batch.questions.length}개
+            {batch.via === 'chat' ? '대화창에서 답함' : '보냄'} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
+            {batch.questions.length}개
           </Text>
         </Box>
       )
@@ -326,7 +362,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'ask',
       description:
-        '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 사용자가 답하고 완료를 누르면 「[질문 패널 답] 질문 = 고른 것」 형식의 새 사용자 메시지로 답이 온다. 이 도구를 부른 뒤에는 답을 기다리지 말고 턴을 마쳐라.',
+        '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다.',
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -362,6 +398,19 @@ export const register: Register = on => {
         required: ['questions'],
       },
     })
+    await $.tool.register({
+      name: 'resolve',
+      description:
+        '질문 패널의 대기 중인 묶음을 「대화창에서 답함」으로 닫는다. 사용자가 패널 대신 대화창에 글로 답했는데 그 글에 묶음 ID(q4 등)가 없을 때 그 묶음 ID로 부른다. 패널에서 같은 질문에 또 답하는 일을 막는다.',
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '닫을 묶음 ID(예: q4)' },
+        },
+        required: ['id'],
+      },
+    })
     await $.command.register({
       name: 'questions',
       description: '질문 패널을 연다',
@@ -395,8 +444,35 @@ export const register: Register = on => {
     })
 
     return {
-      result: `질문 묶음 ${id}을 패널에 올렸다. 답은 사용자가 완료를 누르면 새 메시지로 온다.`,
+      result: [
+        `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라.`,
+        `답은 패널의 완료(「[질문 패널 답] …」 메시지)나 대화창의 글(「${id} …」)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
+        '',
+        chatBlock(batch),
+      ].join('\n'),
     }
+  })
+
+  on('tool.call', { tool: RESOLVE_TOOL }, async ($, e) => {
+    const id = typeof e.id === 'string' ? e.id.trim().toLowerCase() : ''
+    let found = undefined as QuestionPanelBatch | undefined
+    await update($, queue, l => {
+      found = l.find(b => b.id === id)
+
+      return closeInChat(l, new Set([id]))
+    })
+    if (found === undefined) return { result: `묶음 ${id}이 없다.` }
+    if (found.status !== 'pending') return { result: `묶음 ${id}은 이미 닫혀 있다.` }
+
+    return { result: `묶음 ${id}을 「대화창에서 답함」으로 닫았다.` }
+  })
+
+  // 사용자가 대화창에 묶음 ID를 넣어 답하면(「q4 2번」) 패널의 그 묶음을 닫는다.
+  on('prompt.submit', async ($, e, next) => {
+    const ids = mentionedIds(e.text)
+    if (ids.size > 0) await update($, queue, l => closeInChat(l, ids))
+
+    return next(e)
   })
 
   on('command.run', { command: 'questions' }, async $ => {
