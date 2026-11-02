@@ -1,0 +1,5 @@
+{
+  "name": "idle-compact",
+  "version": "0.1.0",
+  "description": "Claude의 작업이 끝난 뒤 30분 동안 입력이 없으면 대화를 자동으로 compact 한다"
+}

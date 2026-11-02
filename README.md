@@ -11,6 +11,7 @@
 /plugin install test-speed@dev-kit
 /plugin install token-diet@dev-kit
 /plugin install question-panel@dev-kit
+/plugin install idle-compact@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -48,6 +49,8 @@ plugins/
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
+  idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
+    hooks/register.ts              turn.complete에서 30분 타이머(IDLE_MS)를 걸고, turn.start·prompt.change·prompt.submit에서 취소, 컨텍스트 MIN_PERCENT(15%) 미만이면 건너뜀
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -61,8 +64,14 @@ plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
+| idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 
 ## 바뀐 것
+
+### 2026-11-02 — idle-compact 0.1.0 추가
+
+- Claude의 작업(턴)이 끝난 뒤 30분 동안 입력이 없으면 대화를 자동으로 compact 한다. 입력창에 글을 쓰거나 프롬프트·백그라운드 알림으로 새 턴이 시작되면 타이머를 취소한다. 서브에이전트의 턴은 세지 않는다.
+- 컨텍스트가 15% 미만이면 건너뛴다. 시간·문턱은 `hooks/register.ts` 맨 위의 `IDLE_MS`·`MIN_PERCENT`.
 
 ### 2026-11-02 — question-panel 0.4.0: 질문을 대화창에도
 
