@@ -11,6 +11,7 @@
 /plugin install test-speed@dev-kit
 /plugin install token-diet@dev-kit
 /plugin install question-panel@dev-kit
+/plugin install security-recon@dev-kit
 /plugin install idle-compact@dev-kit
 ```
 
@@ -64,9 +65,14 @@ plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
+| security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 
 ## 바뀐 것
+
+### 2026-11-03 — 외부 보안 점검 플러그인
+
+- **새 플러그인 `security-recon` 0.1.0**: 인가·범위 확인을 1단계 문지기로 두고, 서로 다른 두 네트워크 지점에서 공개 경로로 포트·TLS·보안 헤더·애플리케이션 면(인증 강제·IDOR·CORS 자격증명·운영 자동 API 문서)을 재는 절차, 클라우드 방화벽 + 내부 주소 바인딩의 이중 차단과 외부 재스캔 폐곡선, 방화벽을 좁힐 때 사설 대역 허용을 먼저 남기라는 교훈. `reference/clouds.md`에 OCI·AWS·GCP 기본값과 체크 포인트. 공격 페이로드는 다루지 않는다.
 
 ### 2026-11-02 — idle-compact 0.1.0 추가
 

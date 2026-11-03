@@ -1,0 +1,7 @@
+{
+  "name": "security-recon",
+  "version": "0.1.0",
+  "description": "인가 받은 서버·인스턴스 외부 보안 점검 — 인가·범위 확인, 두 지점 블랙박스 점검, 이중 차단, 재검증, 클라우드 방화벽 레퍼런스",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}
