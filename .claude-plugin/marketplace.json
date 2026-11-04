@@ -29,6 +29,11 @@
       "description": "질문 패널 mod: 모델의 객관식 질문(mcp__question-panel__ask)을 오른쪽 「질문」 패널에 쌓아 두고 사용자가 원할 때 답하면 「[질문 패널 답] 질문 = 답」 메시지로 돌려준다. AskUserQuestion처럼 턴을 막지 않는다(/questions·/questions-clear)"
     },
     {
+      "name": "security-recon",
+      "source": "./plugins/security-recon",
+      "description": "인가 받은 서버·인스턴스를 바깥에서 점검하는 방어 절차: 인가·범위 확인(문지기), 두 지점 블랙박스 점검(포트·TLS·헤더·인증 강제·IDOR·CORS·운영 API 문서), 이중 차단과 외부 재검증, 방화벽 좁힐 때의 사고 교훈, OCI·AWS·GCP 방화벽 레퍼런스"
+    },
+    {
       "name": "idle-compact",
       "source": "./plugins/idle-compact",
       "description": "Claude의 작업(턴)이 끝난 뒤 30분 동안 사용자 입력이 없으면 대화를 자동으로 compact 하는 mod(입력창에 쓰거나 새 턴이 시작되면 타이머 취소, 컨텍스트 15% 미만이면 건너뜀)"
