@@ -70,6 +70,14 @@ plugins/
 
 ## 바뀐 것
 
+### 2026-11-04 — issue-track 0.5.0: Jenkins 자격 없이 CI·배포 기다리기, 최상위 세션 보고 길
+
+- **`wait-ci.py`**: Jenkins 자격이 없거나 Jenkins가 401·403·연결 실패면 PR의 실패 댓글(첫 줄 표지 + head SHA 앞 12자)에서 실패 줄을 읽는다. 옛 자격으로 실패하면 표준 오류에 경고 한 줄.
+- **`wait-deploy.py`**: 같은 조건에서 GitHub 커밋 상태로 배포를 기다린다. 병합 커밋에 상태가 없으면 함께 배포된 뒤 커밋을 찾는다. 실패면 배포 실패 PR 댓글을 덧붙인다.
+- 상태 이름·댓글 표지는 환경변수(`ISSUE_TRACK_DEPLOY_CONTEXT`·`ISSUE_TRACK_DEPLOY_COMMENT_PREFIX`·`ISSUE_TRACK_PR_COMMENT_PREFIX`)나 인자(`--status-context`·`--comment-prefix`)로 바꾼다. 기본 상태 이름은 `deploy`.
+- 공유 로직은 `ci_common.py`로, 시험 40건(`tests/test_wait_scripts.py`). 이 기계의 Jenkins 자격에 따라 결과가 갈리던 시험 하나를 고쳤다.
+- **issue-worker**: 「부른 쪽에 닿게 보내기」 절 — 지시서의 보고 명령이 우선, 서브에이전트면 `SendMessage`, 최상위 세션(「You are the main conversation」)이면 지시서의 명령을 Bash로 실행하고 성공 출력을 확인한다. `tools` 목록을 정의에 둔다.
+
 ### 2026-11-03 — 외부 보안 점검 플러그인
 
 - **새 플러그인 `security-recon` 0.1.0**: 인가·범위 확인을 1단계 문지기로 두고, 서로 다른 두 네트워크 지점에서 공개 경로로 포트·TLS·보안 헤더·애플리케이션 면(인증 강제·IDOR·CORS 자격증명·운영 자동 API 문서)을 재는 절차, 클라우드 방화벽 + 내부 주소 바인딩의 이중 차단과 외부 재스캔 폐곡선, 방화벽을 좁힐 때 사설 대역 허용을 먼저 남기라는 교훈. `reference/clouds.md`에 OCI·AWS·GCP 기본값과 체크 포인트. 공격 페이로드는 다루지 않는다.

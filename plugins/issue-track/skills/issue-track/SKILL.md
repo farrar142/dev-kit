@@ -41,7 +41,8 @@ issue-worker는 저장소 규칙을 스스로 읽는다. 지시서에는 **그 �
 - 읽을 것: 이슈 본문과 댓글 둘 다(사용자 보충은 댓글로 붙인다 — 작업자는 본문만 읽는 버릇이 있다), 앞 티켓의 넘김 댓글(`gh api repos/<repo>/issues/<앞 번호>/comments`) — 거기 적힌 함정 한두 개를 직접 옮겨 적는다.
 - 판단 기준: 사용자 결정, 시안·스펙 중 무엇이 이기는지, 용어 규칙 등 저장소 원칙.
 - 증거: 화면이면 무엇을 어떤 도구로 찍어 어디에 둘지. 버그면 빨강 시험 먼저.
-- CI: 종류, 병합 방식, 로컬에서 먼저 돌릴 정적 검사. 「CI는 `python3 <이 스킬 폴더>/scripts/wait-ci.py <PR>`을 배경 Bash로 띄워 기다린다」를 **절대 경로로** 적는다(`scripts/`를 빼먹으면 작업자가 「없다」며 손 루프로 대신한다). 병합 뒤 Jenkins 배포가 도는 저장소면 잡 이름(저장소 문서에서 찾는다)도 적고 「병합 뒤엔 커밋 status를 폴링하지 말고 `wait-deploy.py --job <잡> --pr <PR>`을 배경으로」를 넣는다.
+- CI: 종류, 병합 방식, 로컬에서 먼저 돌릴 정적 검사. 「CI는 `python3 <이 스킬 폴더>/scripts/wait-ci.py <PR>`을 배경 Bash로 띄워 기다린다」를 **절대 경로로** 적는다(`scripts/`를 빼먹으면 작업자가 「없다」며 손 루프로 대신한다). 병합 뒤 Jenkins 배포가 도는 저장소면 잡 이름(저장소 문서에서 찾는다)도 적고 「병합 뒤엔 커밋 status를 폴링하지 말고 `wait-deploy.py --job <잡> --pr <PR>`을 배경으로」를 넣는다. 작업자 기계에 Jenkins 자격이 없으면 두 스크립트는 GitHub로 대신 본다(wait-ci는 PR 실패 댓글, wait-deploy는 배포 커밋 상태) — 그 저장소 CI가 쓰는 상태 이름·댓글 표지가 기본값과 다르면 환경변수(아래 「GitHub 대체 길 설정」)를 두게 한다.
+- 보고 길: 작업자를 서브에이전트가 아닌 다른 터미널의 최상위 세션으로 띄우면 `SendMessage`와 마지막 메시지가 조율자에게 닿지 않는다. 지시서에 보고 명령(Bash로 실행할 메일함 명령 등)과 「성공 출력을 확인하라」를 적는다.
   - 시험: 「실패한 시험만 좁혀 다시, 시험 묶음 전체(`make check` 등)는 로컬에서 돌리지 않고 PR 검사 잡에 맡긴다」를 지시서에 적는다(저장소 문서가 「로컬 make check 뒤 PR」이라 해도 PR 검사 잡이 있으면 CI). 왜: 작업자가 시험 하나 실패에 전체 묶음을 다시 돌려 시간·토큰을 썼다(2026-11-02 대표 지적).
 - 화면 티켓이면 바뀐 상황(예: 붙어 선 두 사람)을 목 장면에 실제로 만들어 전후를 찍게 한다 — 「같은 함수를 쓰니 됐다」로 넘기면 후속 티켓이 난다. 판의 갈래(결말·인원·배분)마다 화면이 갈리면 그 갈래가 나오는 조건을 먼저 찾게 하고, 잘 안 나오는 갈래는 기다리지 말고 API로 만들게 한다.
 - 프런트 티켓이면 「그 앱의 단위 시험 전체를 돌린다」를 적는다.
@@ -66,7 +67,17 @@ PR 본문 꼬리말: <system-reminder가 준 줄>
 1. 띄운다 → 사용자에게 한 줄(무엇을, 어떤 모델로, 지시서에 넣은 특이사항).
 2. 작업자가 `SendMessage`로 「PR 열림」을 보내면 한 줄로 전한다. **그리고 조율자도 같은 PR을 배경으로 지켜본다**: `python3 <이 스킬 폴더>/scripts/wait-ci.py <PR>`을 Bash `run_in_background: true`로 띄운다. 작업자가 멈춰도 CI 결과가 조율자를 깨운다.
    - FAILURE로 깼는데 작업자 완료 알림이 없거나, 작업자가 「CI 기다린다」로만 끝났으면 바로 작업자에게 `SendMessage`로 실패 줄을 넘겨 잇게 한다. 작업자가 push로 고친 뒤에는 다시 띄운다.
-   - 종료 코드 5(NO_CHECKS)는 PR에 CI 검사가 없다는 뜻이다(Jenkins가 main 병합 뒤에만 도는 저장소). 40분을 기다리지 않는다. 병합 뒤 배포를 봐야 하면 `wait-deploy.py --job <잡 이름> --pr <PR>`을 같은 방식으로 배경에 띄운다(0 SUCCESS / 1 FAILURE / 3 TIMEOUT / 4 GONE / 5 NO_BUILD).
+   - 종료 코드 5(NO_CHECKS)는 PR에 CI 검사가 없다는 뜻이다(Jenkins가 main 병합 뒤에만 도는 저장소). 40분을 기다리지 않는다. 병합 뒤 배포를 봐야 하면 `wait-deploy.py --job <잡 이름> --pr <PR>`을 같은 방식으로 배경에 띄운다(0 SUCCESS / 1 FAILURE / 3 TIMEOUT / 4 GONE / 5 NO_BUILD). Jenkins 자격이 없거나 401·403·연결 실패면 Jenkins 빌드 대신 병합 커밋(또는 함께 배포된 뒤 커밋)의 GitHub 배포 커밋 상태를 기다린다.
+
+   **GitHub 대체 길 설정**(Jenkins 자격 없이 돌 때). 환경변수가 없으면 기본값을 쓴다. 인자가 있으면 인자가 이긴다.
+
+   | 환경변수 | 인자 | 기본값 | 뜻 |
+   |---|---|---|---|
+   | `ISSUE_TRACK_DEPLOY_CONTEXT` | `wait-deploy.py --status-context` | `deploy` | 배포 잡이 커밋에 다는 커밋 상태 이름 |
+   | `ISSUE_TRACK_DEPLOY_COMMENT_PREFIX` | `wait-deploy.py --comment-prefix` | `배포 실패 — ` | 배포 실패 PR 댓글 첫 줄 표지 |
+   | `ISSUE_TRACK_PR_COMMENT_PREFIX` | `wait-ci.py --comment-prefix` | `PR 검사 실패 — ` | PR 검사 실패 댓글 첫 줄 표지 |
+
+   기계 전체에 두려면 `~/.claude/settings.json`의 `env`에 둔다(세션이 띄우는 Bash에 들어간다).
    - 종료 코드 2는 MERGED·CLOSED다. 배경 작업 알림이 「failed with exit code 2」라 해도 마지막 줄이 `MERGED PR #N`이면 정상이다.
    - 병합 큐처럼 검사 하나가 묵은 FAILURE를 들고 있으면(재실행 중인데 옛 결과가 남음) 스크립트가 곧바로 FAILURE로 끝난다. 그때는 그 검사가 PENDING으로 바뀐 뒤 다시 띄운다.
    - 결과를 짐작해 보고하지 않는다. PR 상태를 말하기 직전에 `gh pr view <번호> --json state,mergedAt`를 친다 — 작업자의 중간 알림만 믿고 이미 병합된 PR을 「아직 대기」로 14분간 보고한 적이 있다.
