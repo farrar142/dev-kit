@@ -1,4 +1,9 @@
-export type QuestionPanelOption = { label: string; description: string }
+export type QuestionPanelOption = {
+  label: string
+  description: string
+  /** 고르기 전에 보여 줄 마크다운(코드·ASCII 목업·설정 예시). AskUserQuestion의 preview와 같은 뜻(0.5.0부터) */
+  preview?: string
+}
 
 export type QuestionPanelQuestion = {
   question: string
@@ -10,6 +15,8 @@ export type QuestionPanelQuestion = {
   picked: string[]
   /** 「기타(직접 입력)」 칸의 글 */
   other: string
+  /** 지금 펼친 preview의 선택지 label(없으면 접힘, 0.5.0부터) */
+  peek?: string
 }
 
 export type QuestionPanelBatch = {
