@@ -84,13 +84,18 @@ plugins/
   `env CONTEXT_CAP_SOFT=250000 CONTEXT_CAP_HARD=300000 claude …`
 - **끄기**: `CONTEXT_CAP_SOFT=0`(HARD를 주지 않으면 둘 다 0이 되어 issue-worker 본 세션도 꺼진다).
 - **재기**: `transcript_path`를 끝에서부터 1MB씩 읽어, 사이드체인이 아닌 마지막 assistant 응답의 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. 그보다 compact 경계가 뒤에 있으면 0으로 본다.
-- **SOFT 넘음**: `UserPromptSubmit`이 새 지시를 거절한다(「컨텍스트 N k — 상한 넘음. 새 세션에서 받으라」). 프롬프트에 「넘김」·`handoff`·`handover`가 있으면 통과(`CONTEXT_CAP_HANDOFF_PATTERN`으로 바꾼다). 진행 중인 티켓은 끊지 않고, 다음 `PostToolUse`에서 한 번 「지금 티켓을 마치고 보고에 『새 세션 필요(컨텍스트 N k)』를 넣고 더 일을 받지 마라」를 알린다.
-- **HARD 넘음**: `PreToolUse`가 다음만 남기고 막는다 — 이름에 `handoff`·`hand-off`·`넘김`이 든 파일의 Write/Edit, `SendMessage`·`ToolSearch`·`TaskStop`·`KillShell`, 그리고 조각마다 보고·마무리용인 Bash(`cd`, `echo`, `git status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch`, `gh issue|pr comment|view|list`, `orca orchestration send|reply`, `kill`, `fuser -k`). 저장소 몫 정리 명령은 `CONTEXT_CAP_ALLOW_BASH`(정규식 하나)로 더한다. 따옴표 밖 명령 치환(`$(…)`·백틱)은 막는다.
+- **SOFT 넘음**: `UserPromptSubmit`이 새 지시를 거절한다(「컨텍스트 N k — 상한 넘음. 새 세션에서 받으라」). 프롬프트에 「넘김」·`handoff`·`handover`가 있으면 통과(`CONTEXT_CAP_HANDOFF_PATTERN`으로 바꾼다). 하네스가 넣는 자동 알림(`prompt`가 `<task-notification>`으로 시작 — claude 2.1.318에서 배경 Bash 완료·Monitor 이벤트가 이 꼴이었고, 훅 입력에 출처 필드는 없다)은 사람 지시가 아니라서 통과한다. 그래서 배경으로 건 CI·배포 대기의 완료 알림은 상한을 넘어도 작업자를 깨운다. 진행 중인 티켓은 끊지 않고, 다음 `PostToolUse`에서 한 번 「지금 티켓을 마치고 보고에 『새 세션 필요(컨텍스트 N k)』를 넣고 더 일을 받지 마라」를 알린다.
+- **HARD 넘음**: `PreToolUse`가 다음만 남기고 막는다 — 이름에 `handoff`·`hand-off`·`넘김`이 든 파일의 Write/Edit/Read, 배경 작업 출력 읽기(`TaskOutput`, `…/tasks/<id>.output` Read), `SendMessage`·`ToolSearch`·`TaskStop`·`KillShell`, 그리고 조각마다 보고·마무리용인 Bash(`cd`, `echo`, `tail`·`head`, `git status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch|pull|rebase|worktree|switch|checkout`, `gh issue|pr comment|view|list|checks|status|merge|close`, `gh run view|list`, `wait-ci.py`·`wait-deploy.py` 실행, `orca orchestration send|reply`, `kill`, `fuser -k`). 하던 티켓의 CI·배포 대기, 병합, 정리는 끝낼 수 있게 둔다. 저장소 몫 정리 명령은 `CONTEXT_CAP_ALLOW_BASH`(정규식 하나)로 더한다. 따옴표 밖 명령 치환(`$(…)`·백틱)은 막는다.
 - **알림 명령(선택)**: `CONTEXT_CAP_NOTIFY_CMD`가 있으면 SOFT를 처음 넘을 때 한 번 셸로 띄운다. 환경에 `CONTEXT_CAP_TOKENS`·`CONTEXT_CAP_SESSION_ID`. 기다리지 않고, 실패해도 훅은 성공.
 - **중복 막기**: 세션별 상태 파일 `$TMPDIR/context-cap/<session_id>.json`(`CONTEXT_CAP_STATE_DIR`로 바꾼다).
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-05 — context-cap 0.2.1: 배경 작업 알림은 막지 않기
+
+- SOFT를 넘은 세션에서 `UserPromptSubmit`이 하네스의 배경 작업 완료 알림(`<task-notification>`)까지 막아, 배경으로 CI 대기를 건 작업자가 깨어나지 못하고 멈췄다. 이 알림은 통과시키고 사람 지시만 막는다.
+- HARD 허용에 배경 작업 출력 읽기(`TaskOutput`, `tasks/*.output` Read, `tail`·`head`)와 병합·정리(`gh pr checks|merge`, `gh issue close`, `gh run view`, `wait-ci.py`·`wait-deploy.py`, `git pull|rebase|worktree|switch|checkout`)를 더했다. 시험 22건.
 
 ### 2026-11-05 — question-panel 0.5.0: 질문 기록 지우기, 선택지 preview
 
