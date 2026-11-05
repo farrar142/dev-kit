@@ -44,15 +44,25 @@ const MAX_SCAN_BYTES = 64 << 20; // 이만큼 읽어도 못 찾으면 모른다�
 
 const HANDOFF_PROMPT = new RegExp(process.env.CONTEXT_CAP_HANDOFF_PATTERN || '넘김|handoff|hand[ -]off|handover', 'i');
 const HANDOFF_FILE = /handoff|hand-off|넘김/i;
-const ALWAYS_ALLOWED_TOOLS = new Set(['SendMessage', 'ToolSearch', 'TaskStop', 'KillShell']);
+// 하네스가 UserPromptSubmit 으로 넣는 자동 알림. claude 2.1.318 에서 배경 Bash 완료·Monitor 이벤트 모두
+// prompt 가 이 태그로 시작했다(훅 입력에 출처 필드는 없다). 사람 지시가 아니므로 SOFT 에서도 통과시킨다.
+const HARNESS_PROMPT = /^\s*<task-notification>/;
+// 배경 작업 출력 파일(<임시>/<프로젝트>/<세션>/tasks/<id>.output). HARD 에서도 읽게 둔다.
+const TASK_OUTPUT_FILE = /[\\/]tasks[\\/][^\\/]+\.output$/;
+const ALWAYS_ALLOWED_TOOLS = new Set(['SendMessage', 'ToolSearch', 'TaskStop', 'KillShell', 'TaskOutput']);
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit']);
 // HARD 넘은 뒤에도 허용하는 Bash 조각(명령을 &&·;·| 로 나눈 각 조각이 하나에 맞아야 한다).
+// 「하던 티켓은 끝낸다」: 보고·넘김에 더해 CI·배포 기다리기, 병합, 정리까지 남긴다.
+const GIT_SUB = '(status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch|pull|rebase|worktree|switch|checkout)';
 const BASH_ALLOW = [
   /^cd(\s|$)/,
   /^(echo|printf|pwd|date|true)(\s|$)/,
-  /^git\s+(status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch)(\s|$)/,
-  /^git\s+-C\s+\S+\s+(status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch)(\s|$)/,
-  /^gh\s+(issue|pr)\s+(comment|view|list)(\s|$)/,
+  /^(tail|head)(\s|$)/,
+  new RegExp(`^git\\s+${GIT_SUB}(\\s|$)`),
+  new RegExp(`^git\\s+-C\\s+\\S+\\s+${GIT_SUB}(\\s|$)`),
+  /^gh\s+(issue|pr)\s+(comment|view|list|checks|status|merge|close)(\s|$)/,
+  /^gh\s+run\s+(view|list)(\s|$)/,
+  /^(python3?|py)\s+\S*wait-(ci|deploy)\.py(\s|$)/,
   /^orca\s+orchestration\s+(send|reply)(\s|$)/,
   /^(kill|fuser\s+-k)(\s|$)/,
 ];
@@ -199,7 +209,9 @@ function bashAllowed(cmd) {
 }
 function toolAllowedAtHard(tool, input) {
   if (ALWAYS_ALLOWED_TOOLS.has(tool)) return true;
-  if (FILE_TOOLS.has(tool)) return HANDOFF_FILE.test(String((input && (input.file_path || input.path)) || ''));
+  const file = String((input && (input.file_path || input.path)) || '');
+  if (FILE_TOOLS.has(tool)) return HANDOFF_FILE.test(file);
+  if (tool === 'Read') return TASK_OUTPUT_FILE.test(file) || HANDOFF_FILE.test(path.basename(file));
   if (tool === 'Bash') return bashAllowed(input && input.command);
   return false;
 }
@@ -215,6 +227,7 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
   if (!input || typeof input !== 'object') process.exit(0);
+  if (input.hook_event_name === 'UserPromptSubmit' && HARNESS_PROMPT.test(String(input.prompt || ''))) process.exit(0);
   ({ soft: SOFT, hard: HARD } = limits(input));
   if (!SOFT && !HARD) process.exit(0);
   // SOFT 가 없으면 HARD 가 SOFT 몫(거절·알림)도 한다.
@@ -262,7 +275,8 @@ process.stdin.on('end', () => {
         permissionDecision: 'deny',
         permissionDecisionReason:
           `context-cap: 컨텍스트 ${k(tokens)} — HARD 상한(${k(HARD)}) 넘음. 넘김 문서를 쓰고 보고한 뒤 멈춰라. ` +
-          '허용: 이름에 handoff·넘김이 든 파일의 Write/Edit, 보고·마무리용 Bash(git status·add·commit·push·log·diff, gh issue/pr comment·view, orca orchestration send·reply, echo, kill), SendMessage.',
+          '허용: 이름에 handoff·넘김이 든 파일의 Write/Edit/Read, 배경 작업 출력 읽기(TaskOutput, tasks/*.output Read, tail·head), ' +
+          '마무리용 Bash(git status·add·commit·push·fetch·pull·rebase·worktree·branch, gh pr checks·view·merge·comment, gh issue close·comment, gh run view, wait-ci.py·wait-deploy.py, orca orchestration send·reply, echo, kill), SendMessage.',
       },
     });
     process.exit(0);

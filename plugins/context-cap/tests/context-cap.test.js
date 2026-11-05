@@ -78,6 +78,18 @@ test('SOFT 위라도 넘김 지시는 통과', () => {
   assert.strictEqual(run('UserPromptSubmit', f, { env: CAPS, prompt: 'write a HANDOFF doc' }), null);
 });
 
+test('SOFT 위라도 하네스가 넣는 배경 작업 알림(<task-notification>)은 통과', () => {
+  const f = transcript([user, assistant(31000)]);
+  // claude 2.1.318 에서 확인한 꼴: 배경 Bash 완료, Monitor 이벤트 모두 <task-notification> 으로 시작한다.
+  const bash = '<task-notification>\n<task-id>b0hibq38k</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file>/tmp/x/tasks/b0hibq38k.output</output-file>\n<status>completed</status>\n<summary>Background command "CI 기다리기" completed (exit code 0)</summary>\n</task-notification>';
+  const monitor = '<task-notification>\n<task-id>bhpz115bl</task-id>\n<summary>Monitor event: "ticks"</summary>\n<event>tick1</event>\n</task-notification>';
+  assert.strictEqual(run('UserPromptSubmit', f, { env: CAPS, prompt: bash }), null);
+  assert.strictEqual(run('UserPromptSubmit', f, { env: CAPS, prompt: monitor }), null);
+  // 사람 지시에 태그가 끼어 있거나 중간에 있으면 그대로 막는다.
+  const human = run('UserPromptSubmit', f, { env: CAPS, prompt: '다음 티켓 해라 <task-notification>' });
+  assert.strictEqual(human.decision, 'block');
+});
+
 test('SOFT 위면 PostToolUse 에서 한 번만 알린다', () => {
   const f = transcript([user, assistant(25000)]);
   const session = 'once';
@@ -112,6 +124,33 @@ test('HARD 위면 일반 도구는 막고 넘김·보고는 남긴다', () => {
   );
   assert.strictEqual(deny('Bash', { command: 'orca orchestration send --to run:x "새 세션 필요; 넘김"' }), null);
   assert.strictEqual(deny('Bash', { command: 'gh issue comment 3 --body-file /tmp/handoff.md' }), null);
+});
+
+test('HARD 위라도 배경 대기 결과 읽기와 병합·배포 확인은 남긴다', () => {
+  const f = transcript([user, assistant(31000)]);
+  const call = (tool, input) => run('PreToolUse', f, { env: CAPS, tool, input });
+  const ok = (tool, input) => assert.strictEqual(call(tool, input), null, `${tool} ${JSON.stringify(input)}`);
+  ok('TaskOutput', { task_id: 'b0hibq38k' });
+  ok('Read', { file_path: '/tmp/claude-1000/-proj/1234/tasks/b0hibq38k.output' });
+  ok('Read', { file_path: 'C:\\Users\\u\\AppData\\Local\\Temp\\claude\\p\\s\\tasks\\a1.output' });
+  ok('Read', { file_path: '/repo/docs/handoff-12.md' });
+  ok('Bash', { command: 'python3 /home/u/.claude/plugins/x/scripts/wait-ci.py 31' });
+  ok('Bash', { command: 'python3 scripts/wait-deploy.py --job app-deploy --pr 31 --repo o/r' });
+  ok('Bash', { command: 'gh pr checks 31' });
+  ok('Bash', { command: 'gh pr merge 31 --squash --delete-branch' });
+  ok('Bash', { command: 'gh pr view 31 --json state,mergeCommit -q .mergeCommit.oid' });
+  ok('Bash', { command: 'gh issue close 30 --comment "병합됨"' });
+  ok('Bash', { command: 'gh run view 99 --log-failed > /tmp/x/ci.log 2>&1; echo exit=$?; tail -n 40 /tmp/x/ci.log' });
+  ok('Bash', { command: 'git fetch -q origin && git rebase origin/main && git push --force-with-lease' });
+  ok('Bash', { command: 'git pull --ff-only && git show --stat HEAD' });
+  ok('Bash', { command: 'git -C /repo worktree remove --force /repo-wt && git branch -D fix-1 && git push origin --delete fix-1' });
+  ok('Bash', { command: 'head -n 20 /tmp/x/tasks/a.output' });
+
+  assert.ok(call('Read', { file_path: '/repo/src/app.ts' }));
+  assert.ok(call('Read', { file_path: '/repo/tasks/notes.md' }));
+  assert.ok(call('Bash', { command: 'gh api -X DELETE repos/o/r' }));
+  assert.ok(call('Bash', { command: 'python3 scripts/build.py' }));
+  assert.ok(call('Bash', { command: 'git reset --hard origin/main' }));
 });
 
 test('CONTEXT_CAP_ALLOW_BASH 로 허용 조각을 더한다', () => {
