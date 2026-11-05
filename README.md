@@ -48,8 +48,9 @@ plugins/
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)
     hooks/register.tsx             도구 mcp__question-panel__ask 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
-                                   패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림
-    hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·보내기·데스크톱 줄)
+                                   패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
+                                   답한 기록 지우기(하나·모두), 선택지 preview 펼치기
+    hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
     hooks/register.ts              turn.complete에서 30분 타이머(IDLE_MS)를 걸고, turn.start·prompt.change·prompt.submit에서 취소, 컨텍스트 MIN_PERCENT(15%) 미만이면 건너뜀
@@ -90,6 +91,11 @@ plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-05 — question-panel 0.5.0: 질문 기록 지우기, 선택지 preview
+
+- 답한 묶음(패널에서 보냄·대화창에서 답함)에 「기록 지우기」, 패널 아래에 「답한 기록 모두 지우기 (N)」. 저장된 큐에서도 빠진다. 대기 중인 묶음은 모두 지우기에서 남기고, 하나 지울 때는 예전처럼 확인을 거친다. `/questions-clear`도 같은 규칙.
+- `ask`의 option에 선택 필드 `preview`(마크다운: 코드·ASCII 목업·설정 예시, AskUserQuestion의 preview와 같다). mod API에 초점 이벤트가 없어 선택지를 고르거나 옆의 「미리보기」를 누르면 선택지 목록 아래에 펼친다(다시 누르면 접힘). 코드 블록이 아닌 preview는 정렬이 유지되게 코드 블록으로 감싼다. 도구 결과의 대화창 블록에는 선택지 아래에 코드 블록으로 들어간다(본문의 백틱보다 긴 울타리). 시험 18건.
 
 ### 2026-11-05 — context-cap 0.2.0: issue-worker 본 세션은 기본으로 켜기
 

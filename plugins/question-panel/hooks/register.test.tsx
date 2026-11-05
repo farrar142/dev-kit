@@ -351,3 +351,151 @@ function engineDraws(on: any) {
     return <Text>engine</Text>
   })
 }
+
+const answerFirst = async ($: any) => {
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'o:q1:0:0' })
+  await ui.press({ key: 'o:q1:1:0' })
+  await ui.press({ key: 'done:q1' })
+  await ui.unmount()
+}
+
+test('답한 묶음은 확인 없이 하나씩 지우고, 지운 기록은 다시 마운트해도 없다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await answerFirst($)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /보냄 · q1/ })).toBeDefined()
+  // 대기 중인 q2에는 확인 없는 지우기 버튼이 없다(기존 삭제 확인을 거친다).
+  expect(await ui.find({ key: 'delsent:q2' })).toBeUndefined()
+  await ui.press({ key: 'delsent:q1' })
+  expect(await ui.find({ type: 'Text', text: /보냄 · q1/ })).toBeUndefined()
+  expect(await ui.find({ key: 'del:q2' })).toBeDefined()
+  await ui.unmount()
+
+  // 저장된 큐에서도 빠졌다.
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await again.find({ type: 'Text', text: /q1/ })).toBeUndefined()
+  expect(await again.find({ key: 'del:q2' })).toBeDefined()
+  await again.unmount()
+})
+
+test('「답한 기록 모두 지우기」는 보낸·대화창에서 답한 묶음만 지우고 대기 중인 묶음은 남긴다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await answerFirst($)
+  await $.prompt.submit({ text: 'q2 1-1, 2-1' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'clearsent' }))?.props.label).toBe('답한 기록 모두 지우기 (2)')
+  await ui.press({ key: 'clearsent' })
+  expect(await ui.find({ type: 'Text', text: /보냄 · q1/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /대화창에서 답함 · q2/ })).toBeUndefined()
+  expect(await ui.find({ key: 'del:q3' })).toBeDefined()
+  // 답한 기록이 없으면 버튼도 없다.
+  expect(await ui.find({ key: 'clearsent' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('/questions-clear 도 답한 묶음만 지운다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await answerFirst($)
+  const out = await $.command.run({ command: 'questions-clear', args: '' } as any)
+  expect(JSON.stringify(out)).toContain('1개를 지웠습니다')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /보냄 · q1/ })).toBeUndefined()
+  expect(await ui.find({ key: 'del:q2' })).toBeDefined()
+  await ui.unmount()
+})
+
+const PREVIEW_INPUT = {
+  tool: TOOL,
+  questions: [
+    {
+      question: '레이아웃은?',
+      header: '레이아웃',
+      multiSelect: false,
+      options: [
+        { label: '두 칸', description: '왼쪽 목록', preview: '+------+------+\n| 목록 | 본문 |\n+------+------+' },
+        { label: '한 칸', description: '', preview: '```ts\nconst a = 1\n```' },
+        { label: '없음', description: '미리보기 없음' },
+      ],
+    },
+  ],
+}
+
+test('preview가 있는 선택지는 고르거나 「미리보기」를 누르면 선택지 아래에 펼친다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(PREVIEW_INPUT as any)
+
+  for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ key: 'pv:q1:0:0' })).toBeDefined()
+    expect(await ui.find({ key: 'pv:q1:0:2' })).toBeUndefined()
+    expect(await ui.find({ key: 'pvmd:q1:0' })).toBeUndefined()
+    await ui.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // 고르지 않고 미리보기만: ASCII 목업은 코드 블록으로 감싸 정렬을 지킨다.
+  await ui.press({ key: 'pv:q1:0:0' })
+  const md = await ui.find({ key: 'pvmd:q1:0' })
+  expect(md?.type).toBe('Markdown')
+  expect(String(md?.props.text)).toContain('| 목록 | 본문 |')
+  expect(String(md?.props.text).startsWith('```')).toBe(true)
+  expect((await ui.find({ key: 'pv:q1:0:0' }))?.props.label).toBe('미리보기 접기')
+  expect(await ui.find({ key: 'done:q1' })).toBeUndefined()
+  // 다시 누르면 접힌다.
+  await ui.press({ key: 'pv:q1:0:0' })
+  expect(await ui.find({ key: 'pvmd:q1:0' })).toBeUndefined()
+  // 고르면 그 선택지의 preview가 펼쳐진다(이미 코드 블록이면 그대로).
+  await ui.press({ key: 'o:q1:0:1' })
+  expect((await ui.find({ key: 'pvmd:q1:0' }))?.props.text).toBe('```ts\nconst a = 1\n```')
+  // preview 없는 선택지를 골라도 펼친 것은 그대로 둔다.
+  await ui.press({ key: 'o:q1:0:2' })
+  expect((await ui.find({ key: 'pvmd:q1:0' }))?.props.text).toBe('```ts\nconst a = 1\n```')
+  await ui.unmount()
+
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await term.find({ key: 'pvmd:q1:0' })).toBeDefined()
+  await term.unmount()
+})
+
+test('도구 결과 블록에 preview를 선택지 아래 코드 블록으로 넣는다', async ($, on) => {
+  await setup($, on)
+  const ran = (await $.tool.call(PREVIEW_INPUT as any)) as any
+  const text = String(ran.result ?? JSON.stringify(ran))
+  expect(text).toContain('- 1) 두 칸 — 왼쪽 목록\n  ```\n  +------+------+\n  | 목록 | 본문 |\n  +------+------+\n  ```')
+  // 본문에 ``` 가 있으면 더 긴 울타리로 감싼다.
+  expect(text).toContain('- 2) 한 칸\n  ````\n  ```ts\n  const a = 1\n  ```\n  ````')
+  expect(text).toContain('- 3) 없음 — 미리보기 없음\n')
+})
+
+test('preview가 문자열이 아니거나 비었으면 버린다', async ($, on) => {
+  await setup($, on)
+  const ran = (await $.tool.call({
+    tool: TOOL,
+    questions: [
+      {
+        question: 'q',
+        header: 'h',
+        multiSelect: false,
+        options: [
+          { label: 'a', description: '', preview: 3 },
+          { label: 'b', description: '', preview: '  ' },
+        ],
+      },
+    ],
+  } as any)) as any
+  expect(String(ran.result ?? JSON.stringify(ran))).not.toContain('```')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ key: 'pv:q1:0:0' })).toBeUndefined()
+  expect(await ui.find({ key: 'pv:q1:0:1' })).toBeUndefined()
+  await ui.unmount()
+})

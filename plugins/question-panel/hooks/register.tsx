@@ -42,6 +42,14 @@ const chosen = (q: QuestionPanelQuestion) => {
 const answerText = (b: QuestionPanelBatch) =>
   b.questions.map(q => `[질문 패널 답] ${q.question} = ${chosen(q)}`).join('\n')
 
+// preview를 목록 항목 아래 코드 블록으로 넣는다. 본문에 든 백틱 줄보다 긴 울타리를 써서 닫히지 않게 한다.
+const fenced = (text: string) => {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map(m => m[0].length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+
+  return [fence, ...text.split('\n'), fence].map(l => `  ${l}`)
+}
+
 // 대화창에 옮겨 적을 마크다운 블록. Remote Control·폰처럼 플러그인 UI가 오지 않는 화면에서도
 // 질문이 보이고, 「q4 1-2」처럼 묶음 ID와 번호로 글로 답할 수 있게 한다.
 const chatBlock = (b: QuestionPanelBatch) => {
@@ -52,6 +60,7 @@ const chatBlock = (b: QuestionPanelBatch) => {
     lines.push('', `**${qi + 1}. ${head}${q.question}** (${how})`)
     q.options.forEach((o, oi) => {
       lines.push(`- ${oi + 1}) ${o.label}${o.description === '' ? '' : ` — ${o.description}`}`)
+      if (o.preview !== undefined) lines.push(...fenced(o.preview))
     })
   })
   const example =
@@ -74,6 +83,13 @@ const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
       : b,
   )
 
+// 답한 묶음(패널에서 보냄·대화창에서 답함)만 지운다. 대기 중인 묶음은 남긴다.
+const clearSent = (list: QuestionPanelBatch[]) => list.filter(b => b.status !== 'sent')
+
+// preview가 이미 코드 블록이면 그대로, 아니면 글자 그대로 보이게(ASCII 목업 정렬 유지) 코드 블록으로 감싼다.
+const fencedPreview = (text: string) =>
+  /^\s*(```|~~~)/.test(text) ? text : fenced(text).map(l => l.slice(2)).join('\n')
+
 const clock = (ms: number) => {
   const d = new Date(ms)
   const two = (n: number) => String(n).padStart(2, '0')
@@ -91,13 +107,14 @@ const normalize = (raw: unknown): QuestionPanelQuestion[] | string => {
       return '각 질문에는 options가 하나 이상 필요합니다.'
     }
     const options = []
-    for (const o of item.options as { label?: unknown; description?: unknown }[]) {
+    for (const o of item.options as { label?: unknown; description?: unknown; preview?: unknown }[]) {
       if (typeof o?.label !== 'string' || o.label === '') {
         return '각 선택지에는 label이 필요합니다.'
       }
       options.push({
         label: o.label,
         description: typeof o.description === 'string' ? o.description : '',
+        ...(typeof o.preview === 'string' && o.preview.trim() !== '' ? { preview: o.preview } : {}),
       })
     }
     out.push({
@@ -117,7 +134,7 @@ type RenderSelf = Parameters<Hook<'ui.render'>>[0]
 type RenderEvent = Parameters<Hook<'ui.render'>>[1]
 function kit($: RenderSelf, e: RenderEvent) {
   const t = $.ui.resolve(e)
-  const { Box, Text, Button } = t
+  const { Box, Text, Button, Markdown } = t
   // 모바일에는 Input과 Select가 없다: 입력 칸은 그 표면에서 그리지 않는다. 표는 빠진 요소를
   // 빈 조각으로 채워 건네므로 'Input' in t만으로는 가릴 수 없어 표면 이름도 본다.
   const Input = e.surface !== 'mobile' && 'Input' in t ? t.Input : undefined
@@ -140,19 +157,27 @@ function kit($: RenderSelf, e: RenderEvent) {
       ),
     )
 
+  // 고르면 그 선택지의 preview를 펼친다(있으면). 초점 이벤트가 없어 누름을 「초점」으로 본다.
   const pick = (id: string, qi: number, label: string) =>
     edit(id, qi, q => {
+      const hasPreview = q.options.some(o => o.label === label && o.preview !== undefined)
+      const peek = hasPreview ? label : q.peek
       if (q.multiSelect) {
         const has = q.picked.includes(label)
 
         return {
           ...q,
+          peek,
           picked: has ? q.picked.filter(p => p !== label) : [...q.picked, label],
         }
       }
 
-      return { ...q, picked: q.picked[0] === label && q.other === '' ? [] : [label], other: '' }
+      return { ...q, peek, picked: q.picked[0] === label && q.other === '' ? [] : [label], other: '' }
     })
+
+  // 고르지 않고 preview만 펼치거나 접는다.
+  const togglePeek = (id: string, qi: number, label: string) =>
+    edit(id, qi, q => ({ ...q, peek: q.peek === label ? undefined : label }))
 
   const typeOther = (id: string, qi: number, text: string) =>
     edit(id, qi, q => ({ ...q, other: text, picked: q.multiSelect ? q.picked : text.trim() === '' ? q.picked : [] }))
@@ -203,6 +228,9 @@ function kit($: RenderSelf, e: RenderEvent) {
       l.map(b => (b.id === id && b.status === 'pending' ? { ...b, confirmingDelete: confirming } : b)),
     )
 
+  // 답한(보낸·대화창에서 답한) 묶음은 확인 없이 지운다. 대기 중인 묶음은 아래 remove의 확인을 거친다.
+  const removeSent = (id: string) => update($, queue, l => l.filter(b => !(b.id === id && b.status === 'sent')))
+
   // 답 메시지를 보내지 않고 대기열에서만 뺀다.
   const remove = (id: string) =>
     update($, queue, l => l.filter(b => !(b.id === id && b.status === 'pending' && b.confirmingDelete === true)))
@@ -215,6 +243,7 @@ function kit($: RenderSelf, e: RenderEvent) {
             {batch.via === 'chat' ? '대화창에서 답함' : '보냄'} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
             {batch.questions.length}개
           </Text>
+          <Button key={`delsent:${batch.id}`} label="기록 지우기" onPress={() => removeSent(batch.id)} />
         </Box>
       )
     }
@@ -255,6 +284,14 @@ function kit($: RenderSelf, e: RenderEvent) {
             {q.options.map((o, oi) => {
               const isOn = q.picked.includes(o.label)
               const mark = q.multiSelect ? (isOn ? '[x]' : '[ ]') : isOn ? '(o)' : '( )'
+              const peekButton =
+                o.preview === undefined ? null : (
+                  <Button
+                    key={`pv:${batch.id}:${qi}:${oi}`}
+                    label={q.peek === o.label ? '미리보기 접기' : '미리보기'}
+                    onPress={() => togglePeek(batch.id, qi, o.label)}
+                  />
+                )
 
               if (remote) {
                 return (
@@ -272,12 +309,13 @@ function kit($: RenderSelf, e: RenderEvent) {
                           {o.description}
                         </Text>
                       )}
+                      {peekButton}
                     </Box>
                   </Box>
                 )
               }
 
-              return (
+              const optionButton = (
                 <Button
                   key={`o:${batch.id}:${qi}:${oi}`}
                   variant={isOn ? 'primary' : undefined}
@@ -287,7 +325,29 @@ function kit($: RenderSelf, e: RenderEvent) {
                   {o.description !== '' && <Text dimColor> {o.description}</Text>}
                 </Button>
               )
+              if (peekButton === null) return optionButton
+
+              return (
+                <Box key={`or:${batch.id}:${qi}:${oi}`} flexDirection="row" gap={1}>
+                  {optionButton}
+                  {peekButton}
+                </Box>
+              )
             })}
+            {(() => {
+              // 펼친 preview는 선택지 목록 바로 아래에 둔다(좁은 패널에서도 옆이 아니라 아래로).
+              const shown = q.options.find(o => o.label === q.peek && o.preview !== undefined)
+              if (shown === undefined) return null
+
+              return (
+                <Box key={`pvbox:${batch.id}:${qi}`} flexDirection="column" marginTop={1}>
+                  <Text dimColor wrap="wrap">
+                    미리보기 · {shown.label}
+                  </Text>
+                  <Markdown key={`pvmd:${batch.id}:${qi}`} text={fencedPreview(shown.preview ?? '')} />
+                </Box>
+              )
+            })()}
             {Input ? (
               <Input
                 key={`x:${batch.id}:${qi}`}
@@ -345,14 +405,25 @@ function kit($: RenderSelf, e: RenderEvent) {
       </Box>
     )
 
-  const panel = (list: QuestionPanelBatch[], text: string) => (
-    <Box flexDirection="column">
-      {list.length === 0 ? <Text dimColor wrap="wrap">
-          쌓인 질문이 없습니다.
-        </Text> : list.map(card)}
-      {composer(text)}
-    </Box>
-  )
+  const panel = (list: QuestionPanelBatch[], text: string) => {
+    const answered = list.filter(b => b.status === 'sent').length
+
+    return (
+      <Box flexDirection="column">
+        {list.length === 0 ? <Text dimColor wrap="wrap">
+            쌓인 질문이 없습니다.
+          </Text> : list.map(card)}
+        {answered > 0 && (
+          <Button
+            key="clearsent"
+            label={`답한 기록 모두 지우기 (${answered})`}
+            onPress={() => update($, queue, clearSent)}
+          />
+        )}
+        {composer(text)}
+      </Box>
+    )
+  }
 
   return { card, panel }
 }
@@ -362,7 +433,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'ask',
       description:
-        '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다.',
+        '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
       isDeferred: false,
       inputSchema: {
         type: 'object',
@@ -386,6 +457,11 @@ export const register: Register = on => {
                     properties: {
                       label: { type: 'string' },
                       description: { type: 'string' },
+                      preview: {
+                        type: 'string',
+                        description:
+                          '선택. 이 선택지를 고르면 어떻게 되는지 보여 줄 마크다운(코드·ASCII 목업·설정 예시). 패널에서 고르거나 「미리보기」를 누르면 펼쳐지고, 대화창 블록에는 코드 블록으로 들어간다.',
+                      },
                     },
                     required: ['label', 'description'],
                   },
@@ -417,7 +493,7 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'questions-clear',
-      description: '질문 패널에서 보낸 묶음을 지운다',
+      description: '질문 패널에서 답한 묶음(보냄·대화창에서 답함)을 모두 지운다. 대기 중인 묶음은 남긴다',
     })
 
     return next(e)
@@ -487,9 +563,9 @@ export const register: Register = on => {
   on('command.run', { command: 'questions-clear' }, async $ => {
     let removed = 0
     await update($, queue, l => {
-      removed = l.filter(b => b.status === 'sent').length
+      removed = l.length - clearSent(l).length
 
-      return l.filter(b => b.status !== 'sent')
+      return clearSent(l)
     })
 
     return { text: `보낸 묶음 ${removed}개를 지웠습니다.` }
