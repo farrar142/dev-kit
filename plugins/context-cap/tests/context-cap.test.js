@@ -29,7 +29,7 @@ function transcript(lines, { padBytes = 0 } = {}) {
   return f;
 }
 
-function run(event, file, { env = {}, prompt, tool, input, session } = {}) {
+function run(event, file, { env = {}, prompt, tool, input, session, agent } = {}) {
   const payload = {
     hook_event_name: event,
     session_id: session || `s${++seq}`,
@@ -37,6 +37,7 @@ function run(event, file, { env = {}, prompt, tool, input, session } = {}) {
     prompt,
     tool_name: tool,
     tool_input: input,
+    ...agent,
   };
   const r = spawnSync('node', [HOOK], {
     input: JSON.stringify(payload),
@@ -50,7 +51,7 @@ function run(event, file, { env = {}, prompt, tool, input, session } = {}) {
 
 const CAPS = { CONTEXT_CAP_SOFT: '20000', CONTEXT_CAP_HARD: '30000' };
 
-test('환경변수가 없으면 아무것도 하지 않는다', () => {
+test('환경변수도 에이전트도 없으면 아무것도 하지 않는다', () => {
   const f = transcript([user, assistant(500000)]);
   assert.strictEqual(run('UserPromptSubmit', f, { prompt: '다음 티켓' }), null);
   assert.strictEqual(run('PreToolUse', f, { tool: 'Read', input: { file_path: '/x' } }), null);
@@ -163,4 +164,61 @@ test('transcript 가 없거나 깨졌으면 통과', () => {
   const f = path.join(tmp, 'broken.jsonl');
   fs.writeFileSync(f, '{"type":"assistant", broken\n');
   assert.strictEqual(run('UserPromptSubmit', f, { env: CAPS, prompt: '다음' }), null);
+});
+
+// --agent 본 세션: agent_type 만. 서브에이전트 안 도구 호출: agent_type + agent_id (claude 2.1.318 에서 확인).
+const MAIN_WORKER = { agent_type: 'issue-worker' };
+
+test('--agent issue-worker 본 세션은 환경변수 없이 기본값(250k/300k)으로 켜진다', () => {
+  const below = transcript([user, assistant(240000)]);
+  assert.strictEqual(run('UserPromptSubmit', below, { agent: MAIN_WORKER, prompt: '다음 티켓' }), null);
+  const soft = transcript([user, assistant(260000)]);
+  const out = run('UserPromptSubmit', soft, { agent: MAIN_WORKER, prompt: '다음 티켓' });
+  assert.strictEqual(out.decision, 'block');
+  assert.match(out.reason, /260k/);
+  assert.match(out.reason, /250k/);
+  assert.strictEqual(run('PreToolUse', soft, { agent: MAIN_WORKER, tool: 'Read', input: { file_path: '/x' } }), null);
+  const hard = transcript([user, assistant(310000)]);
+  const deny = run('PreToolUse', hard, { agent: MAIN_WORKER, tool: 'Read', input: { file_path: '/x' } });
+  assert.strictEqual(deny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(deny.hookSpecificOutput.permissionDecisionReason, /300k/);
+});
+
+test('플러그인 이름이 붙은 에이전트 이름도 끝 이름으로 맞춘다', () => {
+  const f = transcript([user, assistant(260000)]);
+  const out = run('UserPromptSubmit', f, { agent: { agent_type: 'issue-track:issue-worker' }, prompt: 'x' });
+  assert.strictEqual(out.decision, 'block');
+});
+
+test('서브에이전트(agent_id 있음)와 다른 에이전트 본 세션은 기본값을 쓰지 않는다', () => {
+  const f = transcript([user, assistant(500000)]);
+  const sub = { agent_type: 'issue-worker', agent_id: 'a9015cd7bf2371b55' };
+  assert.strictEqual(run('PreToolUse', f, { agent: sub, tool: 'Read', input: { file_path: '/x' } }), null);
+  assert.strictEqual(run('PostToolUse', f, { agent: sub, tool: 'Read' }), null);
+  assert.strictEqual(run('UserPromptSubmit', f, { agent: { agent_type: 'errand' }, prompt: 'x' }), null);
+});
+
+test('환경변수가 있으면 기본값보다 우선한다', () => {
+  const f = transcript([user, assistant(25000)]);
+  const out = run('UserPromptSubmit', f, { agent: MAIN_WORKER, env: CAPS, prompt: 'x' });
+  assert.match(out.reason, /20k/);
+  const big = transcript([user, assistant(260000)]);
+  const onlyHard = run('UserPromptSubmit', big, { agent: MAIN_WORKER, env: { CONTEXT_CAP_HARD: '400000' }, prompt: 'x' });
+  assert.strictEqual(onlyHard, null);
+});
+
+test('CONTEXT_CAP_SOFT=0 이면 issue-worker 본 세션도 끈다', () => {
+  const f = transcript([user, assistant(500000)]);
+  const off = { CONTEXT_CAP_SOFT: '0' };
+  assert.strictEqual(run('UserPromptSubmit', f, { agent: MAIN_WORKER, env: off, prompt: 'x' }), null);
+  assert.strictEqual(run('PreToolUse', f, { agent: MAIN_WORKER, env: off, tool: 'Read', input: { file_path: '/x' } }), null);
+});
+
+test('CONTEXT_CAP_AGENTS 로 기본 대상 목록을 바꾼다', () => {
+  const f = transcript([user, assistant(260000)]);
+  const env = { CONTEXT_CAP_AGENTS: 'tickworld-worker, other' };
+  assert.strictEqual(run('UserPromptSubmit', f, { agent: MAIN_WORKER, env, prompt: 'x' }), null);
+  const out = run('UserPromptSubmit', f, { agent: { agent_type: 'tickworld-worker' }, env, prompt: 'x' });
+  assert.strictEqual(out.decision, 'block');
+  assert.strictEqual(run('UserPromptSubmit', f, { agent: MAIN_WORKER, env: { CONTEXT_CAP_AGENTS: '' }, prompt: 'x' }), null);
 });

@@ -1,5 +1,5 @@
 // context-cap: 세션 컨텍스트가 상한을 넘으면 새 지시를 거절하고(SOFT), 넘김·보고 말고는 도구를 막는다(HARD).
-// 환경변수 CONTEXT_CAP_SOFT / CONTEXT_CAP_HARD 가 없으면 아무것도 하지 않는다.
+// 환경변수 CONTEXT_CAP_SOFT / CONTEXT_CAP_HARD 로 켜고, 없으면 --agent issue-worker 본 세션만 기본값(250k/300k)으로 켠다.
 // 한 스크립트가 UserPromptSubmit·PostToolUse·PreToolUse 를 hook_event_name 으로 나눠 처리한다.
 // 가드레일이지 보안 경계가 아니다 — 선의의 작업자가 상한을 넘겨 계속 일하는 것을 막는 용도.
 'use strict';
@@ -12,11 +12,32 @@ const num = (v) => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
 };
-const SOFT = num(process.env.CONTEXT_CAP_SOFT);
-const HARD = num(process.env.CONTEXT_CAP_HARD);
-if (!SOFT && !HARD) process.exit(0);
-// SOFT 가 없으면 HARD 가 SOFT 몫(거절·알림)도 한다.
-const THRESHOLD = SOFT || HARD;
+const DEFAULT_SOFT = 250000;
+const DEFAULT_HARD = 300000;
+const has = (v) => v !== undefined && v !== '';
+
+// 상한을 정한다. 환경변수 CONTEXT_CAP_SOFT·HARD 중 하나라도 있으면 그 값만 쓴다(없는 쪽은 0, SOFT=0 이면 끔).
+// 둘 다 없으면 `claude --agent <이름>` 으로 뜬 본 세션이고 이름이 CONTEXT_CAP_AGENTS(기본 issue-worker)에 있을 때만 기본값.
+// 훅 입력: --agent 본 세션은 agent_type 만, 서브에이전트 안 도구 호출은 agent_type 과 agent_id 가 함께 온다.
+function limits(input, env = process.env) {
+  if (has(env.CONTEXT_CAP_SOFT) || has(env.CONTEXT_CAP_HARD)) {
+    return { soft: num(env.CONTEXT_CAP_SOFT), hard: num(env.CONTEXT_CAP_HARD) };
+  }
+  const agent = input && input.agent_type;
+  if (!agent || input.agent_id) return { soft: 0, hard: 0 };
+  // CONTEXT_CAP_AGENTS='' 이면 기본 대상 없음.
+  const names = (env.CONTEXT_CAP_AGENTS === undefined ? 'issue-worker' : env.CONTEXT_CAP_AGENTS)
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  // 플러그인 에이전트는 'plugin:name' 으로 올 수 있어 끝 이름도 맞춰 본다.
+  const bare = String(agent).split(':').pop();
+  if (!names.includes(agent) && !names.includes(bare)) return { soft: 0, hard: 0 };
+  return { soft: DEFAULT_SOFT, hard: DEFAULT_HARD };
+}
+let SOFT = 0;
+let HARD = 0;
+let THRESHOLD = 0;
 
 const BLOCK_BYTES = 1 << 20; // 끝에서부터 1MB 씩 읽는다
 const MAX_SCAN_BYTES = 64 << 20; // 이만큼 읽어도 못 찾으면 모른다고 본다
@@ -193,6 +214,11 @@ process.stdin.on('end', () => {
   } catch {
     process.exit(0);
   }
+  if (!input || typeof input !== 'object') process.exit(0);
+  ({ soft: SOFT, hard: HARD } = limits(input));
+  if (!SOFT && !HARD) process.exit(0);
+  // SOFT 가 없으면 HARD 가 SOFT 몫(거절·알림)도 한다.
+  THRESHOLD = SOFT || HARD;
   const event = input.hook_event_name;
   const tokens = measure(input.transcript_path);
   if (tokens == null || tokens < THRESHOLD) process.exit(0);
