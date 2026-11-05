@@ -37,6 +37,11 @@
       "name": "idle-compact",
       "source": "./plugins/idle-compact",
       "description": "Claude의 작업(턴)이 끝난 뒤 30분 동안 사용자 입력이 없으면 대화를 자동으로 compact 하는 mod(입력창에 쓰거나 새 턴이 시작되면 타이머 취소, 컨텍스트 15% 미만이면 건너뜀)"
+    },
+    {
+      "name": "context-cap",
+      "source": "./plugins/context-cap",
+      "description": "세션 컨텍스트 상한 훅: 환경변수 CONTEXT_CAP_SOFT·CONTEXT_CAP_HARD가 있는 세션(작업자)에서만, SOFT를 넘으면 새 지시를 거절하고 지금 티켓을 마치라고 한 번 알리며, HARD를 넘으면 넘김 문서 쓰기와 보고 말고는 도구를 막는다"
     }
   ]
 }

@@ -13,6 +13,7 @@
 /plugin install question-panel@dev-kit
 /plugin install security-recon@dev-kit
 /plugin install idle-compact@dev-kit
+/plugin install context-cap@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -52,6 +53,9 @@ plugins/
     types/index.d.ts               $.state 계약(queue, draft)
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
     hooks/register.ts              turn.complete에서 30분 타이머(IDLE_MS)를 걸고, turn.start·prompt.change·prompt.submit에서 취소, 컨텍스트 MIN_PERCENT(15%) 미만이면 건너뜀
+  context-cap/                     세션 컨텍스트 상한 훅(Node, 환경변수가 있을 때만 켜짐)
+    hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
+    tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -67,8 +71,26 @@ plugins/
 | question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
+| context-cap | 훅만 | `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
+
+## context-cap 쓰는 법
+
+작업자 세션 하나에 티켓을 계속 넣으면 컨텍스트가 상한 없이 커진다(한 세션이 400k까지 간 일이 있다). 조율자 지침의 글 규칙 대신 작업자 세션 안의 훅이 직접 재서 막는다.
+
+- **켜기**: 작업자를 띄우는 명령에 환경변수를 준다. 없으면 훅은 아무것도 하지 않는다(조율자·일반 세션은 그대로).
+  `env CONTEXT_CAP_SOFT=250000 CONTEXT_CAP_HARD=300000 claude …`
+- **재기**: `transcript_path`를 끝에서부터 1MB씩 읽어, 사이드체인이 아닌 마지막 assistant 응답의 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. 그보다 compact 경계가 뒤에 있으면 0으로 본다.
+- **SOFT 넘음**: `UserPromptSubmit`이 새 지시를 거절한다(「컨텍스트 N k — 상한 넘음. 새 세션에서 받으라」). 프롬프트에 「넘김」·`handoff`·`handover`가 있으면 통과(`CONTEXT_CAP_HANDOFF_PATTERN`으로 바꾼다). 진행 중인 티켓은 끊지 않고, 다음 `PostToolUse`에서 한 번 「지금 티켓을 마치고 보고에 『새 세션 필요(컨텍스트 N k)』를 넣고 더 일을 받지 마라」를 알린다.
+- **HARD 넘음**: `PreToolUse`가 다음만 남기고 막는다 — 이름에 `handoff`·`hand-off`·`넘김`이 든 파일의 Write/Edit, `SendMessage`·`ToolSearch`·`TaskStop`·`KillShell`, 그리고 조각마다 보고·마무리용인 Bash(`cd`, `echo`, `git status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch`, `gh issue|pr comment|view|list`, `orca orchestration send|reply`, `kill`, `fuser -k`). 저장소 몫 정리 명령은 `CONTEXT_CAP_ALLOW_BASH`(정규식 하나)로 더한다. 따옴표 밖 명령 치환(`$(…)`·백틱)은 막는다.
+- **알림 명령(선택)**: `CONTEXT_CAP_NOTIFY_CMD`가 있으면 SOFT를 처음 넘을 때 한 번 셸로 띄운다. 환경에 `CONTEXT_CAP_TOKENS`·`CONTEXT_CAP_SESSION_ID`. 기다리지 않고, 실패해도 훅은 성공.
+- **중복 막기**: 세션별 상태 파일 `$TMPDIR/context-cap/<session_id>.json`(`CONTEXT_CAP_STATE_DIR`로 바꾼다).
+- 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-05 — context-cap 0.1.0 추가
+
+- 작업자 세션 컨텍스트 상한 훅. 환경변수가 있을 때만 SOFT 넘으면 새 지시 거절과 한 번 알림, HARD 넘으면 넘김·보고 말고는 도구 막기. 시험 14건(`node --test plugins/context-cap/tests`).
 
 ### 2026-11-04 — issue-track 0.5.0: Jenkins 자격 없이 CI·배포 기다리기, 최상위 세션 보고 길
 
