@@ -7,7 +7,13 @@ import {
   batchFromTool,
   clearSent,
   complete,
+  batchFromInbox,
+  mailBody,
+  mailTarget,
   markSent,
+  parseRunCurrent,
+  parseSendResult,
+  routeLabel,
   whereOf,
   workspaceNameFrom,
   type ToolEvent,
@@ -92,4 +98,55 @@ test('workspace 이름을 모르면 workspace id의 마지막 경로 이름을 �
   if (b === null) return assert.fail('묶음이 없다')
   assert.equal(whereOf(b), 'ws_1 · term_1')
   assert.equal(whereOf({ ...b, workspaceName: 'Data', terminalTitle: 'claude' }), 'Data · claude')
+})
+
+test('채팅 질문 파일: 버전·묶음 ID·세션 id·질문이 맞아야 묶음이 되고, 이상한 Run id 는 버린다', () => {
+  const ok = {
+    v: 1,
+    id: 'q7',
+    questions: [{ question: '고를까?', options: [{ label: '예' }, { label: '아니오' }] }],
+    session: { id: 'sess_1', runId: 'run_xxxx' },
+    orcaCli: 'C:\\Orca\\orca.cmd',
+    cwd: 'C:\\work\\app',
+  }
+  const b = batchFromInbox(ok, 9)
+  assert.equal(b?.terminalId, 'orca_session_id:sess_1')
+  assert.equal(b?.createdAt, 9)
+  assert.deepEqual(b?.route, { kind: 'mailbox', sessionId: 'sess_1', runId: 'run_xxxx', cli: 'C:\\Orca\\orca.cmd', userData: null })
+  assert.equal(whereOf(b!), '채팅 · app · 세션 sess_1')
+  assert.equal(routeLabel(b!), '메일함 run:run_xxxx')
+  assert.equal(batchFromInbox({ ...ok, v: 2 }, 0), null)
+  assert.equal(batchFromInbox({ ...ok, id: 'q7; rm' }, 0), null)
+  assert.equal(batchFromInbox({ ...ok, session: { id: '-x' } }, 0), null)
+  assert.equal(batchFromInbox({ ...ok, questions: [] }, 0), null)
+  assert.equal(batchFromInbox({ ...ok, session: { id: 'sess_1', runId: 'run x' } }, 0)?.route?.kind, 'mailbox')
+  assert.equal(routeLabel(batchFromInbox({ ...ok, session: { id: 'sess_1', runId: 'run x' } }, 0)!), '메일함 orca_session_id:sess_1')
+  assert.equal(mailTarget('s', null), 'orca_session_id:s')
+})
+
+test('메일 본문: 질문 하나면 「q7 2」, 줄바꿈 없이 「[질문 패널 답] 질문 = 고른 것」', () => {
+  const b = batchFromInbox(
+    { v: 1, id: 'q7', questions: [{ question: '고를까?\n정말?', options: [{ label: '예' }, { label: '아니오' }] }], session: { id: 's' } },
+    0,
+  )!
+  assert.equal(mailBody(b, [[1]]), 'q7 2 / [질문 패널 답] 고를까? 정말? = 아니오')
+})
+
+test('CLI 답 읽기: run-current 의 Run·없음·못 읽음, send 의 성공·오류·실행 실패', () => {
+  assert.equal(parseRunCurrent(JSON.stringify({ ok: true, result: { run: { id: 'run_ab12' } } })), 'run_ab12')
+  assert.equal(parseRunCurrent(JSON.stringify({ ok: true, result: { run: null } })), null)
+  assert.equal(parseRunCurrent('nope'), undefined)
+  assert.deepEqual(parseSendResult({ code: 0, stdout: JSON.stringify({ ok: true, result: { message: { id: 'msg_1' } } }), stderr: '' }), {
+    ok: true,
+    messageId: 'msg_1',
+  })
+  assert.deepEqual(
+    parseSendResult({ code: 1, stdout: JSON.stringify({ ok: false, error: { code: 'x', message: 'y' } }), stderr: '' }),
+    { ok: false, why: 'x: y' },
+  )
+  assert.deepEqual(parseSendResult({ code: null, stdout: '', stderr: '', error: 'ENOENT' }), { ok: false, why: 'ENOENT' })
+  assert.deepEqual(parseSendResult({ code: 2, stdout: '', stderr: 'a\nUnknown command: orchestration' }), {
+    ok: false,
+    why: 'orca 종료 코드 2 — a Unknown command: orchestration',
+  })
 })

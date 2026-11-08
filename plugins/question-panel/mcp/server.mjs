@@ -2,6 +2,7 @@
 import { createInterface } from 'node:readline'
 
 import { handle } from './ask.mjs'
+import { orcaCtx } from './orca.mjs'
 
 createInterface({ input: process.stdin }).on('line', line => {
   let msg
@@ -10,6 +11,6 @@ createInterface({ input: process.stdin }).on('line', line => {
   } catch {
     return
   }
-  const reply = handle(msg)
+  const reply = handle(msg, orcaCtx())
   if (reply !== undefined) process.stdout.write(`${JSON.stringify(reply)}\n`)
 })

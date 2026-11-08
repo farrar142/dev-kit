@@ -1,5 +1,6 @@
 // 질문 패널(Orca 오른쪽 사이드바). 워커가 저장한 질문 묶음을 카드로 그리고, 고른 답을 워커에 보낸다.
-// 워커가 그 답을 질문한 Claude의 터미널에 한 줄로 넣고 Enter를 누른다.
+// 워커가 그 답을 질문한 Claude의 터미널에 한 줄로 넣고 Enter를 누른다. Orca 채팅 세션의 질문(0.4.0)은
+// 그 세션의 오케스트레이션 메일함으로 보낸다. 카드에 전달 경로(터미널·메일함)가 보인다.
 import {
   atom,
   Badge,
@@ -22,7 +23,17 @@ import {
   update,
 } from 'orca'
 import './protocol.ts'
-import { asBatches, complete, STORE_KEY, whereOf, type Batch, type JsonValue, type Picks } from './questions.ts'
+import {
+  asBatches,
+  complete,
+  isMailbox,
+  routeLabel,
+  STORE_KEY,
+  whereOf,
+  type Batch,
+  type JsonValue,
+  type Picks,
+} from './questions.ts'
 
 /** 워커와 같은 저장소 키. 워커가 묶음을 더하면 이 atom도 바뀐다. */
 const stored = atom<JsonValue>(STORE_KEY, [], { persist: 'storage' })
@@ -85,7 +96,12 @@ async function send(b: Batch) {
       { timeoutMs: 20000 },
     )
     trace(`워커 답 ok=${r.ok} reason=${r.reason}`)
-    set(notice, r.ok ? { key: k, ok: true, text: `${b.id} 답을 터미널에 넣었습니다.` } : { key: k, ok: false, text: r.reason })
+    set(
+      notice,
+      r.ok
+        ? { key: k, ok: true, text: `${b.id} 답을 보냈습니다 — ${r.via ?? routeLabel(b)}` }
+        : { key: k, ok: false, text: r.reason },
+    )
     if (r.ok) update(picks, ({ [k]: _, ...rest }) => rest)
   } catch (err) {
     const code = err instanceof Error ? (err as Error & { code?: unknown }).code : undefined // HostError
@@ -103,12 +119,15 @@ function BatchCard({ b }: { b: Batch }) {
   const k = keyOf(b)
   const mine = read(picks)[k] ?? []
   const n = read(notice)
+  // 지금 막 실패한 이유가 있으면 그것을, 없으면 저장된 마지막 실패 이유를 보인다.
+  const failure = n !== null && n.key === k ? (n.ok ? null : n.text) : (b.error ?? null)
 
   return (
     <Card title={`질문 묶음 ${b.id}`}>
       <Stack gap="md">
         <Row gap="xs">
           {b.closed === true ? <Badge tone="danger">터미널이 닫힘</Badge> : null}
+          <Badge tone="neutral">{routeLabel(b)}</Badge>
           <Text muted size="xs">
             <RelativeTime at={b.createdAt} />
             {` · ${whereOf(b)}`}
@@ -149,8 +168,8 @@ function BatchCard({ b }: { b: Batch }) {
             )}
           </Stack>
         ))}
-        {n !== null && n.key === k && !n.ok ? <Callout tone="danger" title="보내지 못함">{n.text}</Callout> : null}
-        {read(busy) === k ? <Spinner label="터미널에 보내는 중" /> : null}
+        {failure === null ? null : <Callout tone="danger" title="보내지 못함">{failure}</Callout>}
+        {read(busy) === k ? <Spinner label={isMailbox(b) ? '메일함에 보내는 중' : '터미널에 보내는 중'} /> : null}
         <Row justify="end" gap="xs">
           {b.closed === true ? (
             <Button variant="ghost" size="sm" icon="delete" onPress={() => removeOne(b)}>
@@ -201,7 +220,7 @@ export default function Panel() {
         <EmptyState
           icon="bot"
           title="대기 중인 질문이 없습니다"
-          description="Claude가 질문 패널 도구로 물으면 여기에 카드가 뜹니다. 답을 고르면 그 Claude 터미널에 한 줄로 들어갑니다."
+          description="Claude가 질문 패널 도구로 물으면 여기에 카드가 뜹니다. 답을 고르면 그 Claude 터미널에 한 줄로 들어갑니다(채팅 세션이면 그 세션의 오케스트레이션 메일함으로 갑니다)."
         />
       ) : (
         pending.map(b => <BatchCard b={b} />)
@@ -211,7 +230,7 @@ export default function Panel() {
           <Stack gap="sm">
             {sent.map(b => (
               <Text size="xs" muted>
-                {b.sent ?? b.id}
+                {`${b.via ?? '터미널'} · ${b.sent ?? b.id}`}
               </Text>
             ))}
             <Row justify="end">
