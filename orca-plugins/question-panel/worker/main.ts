@@ -1,4 +1,6 @@
 // 질문 패널 워커. Claude의 질문 도구 호출을 훅으로 받아 저장하고, 패널이 보낸 답을 그 터미널에 넣는다.
+// 0.4.0: Orca 채팅 세션(stream-json)의 질문은 훅이 오지 않아, Claude Code question-panel MCP 서버가 남긴
+// 폴더(~/.question-panel/orca-inbox)에서 읽고, 답은 그 세션의 오케스트레이션 메일함으로 보낸다.
 //
 // 단계마다 orca.log 를 남긴다(`orca plugin logs local.question-panel`). 0.1.0은 로그가 없어
 // 답이 어디서 끊겼는지 보이지 않았다.
@@ -10,7 +12,15 @@ import {
   answerLine,
   ASK_TOOL,
   asBatches,
+  batchFromInbox,
   batchFromTool,
+  isMailbox,
+  mailBody,
+  mailSubject,
+  mailTarget,
+  parseRunCurrent,
+  parseSendResult,
+  routeLabel,
   clearClosed,
   clearSent,
   complete,
@@ -20,7 +30,10 @@ import {
   STORE_KEY,
   type Batch,
   type JsonValue,
+  type Picks,
 } from '../src/questions.ts'
+import type { WorkerIo } from './io.ts'
+import { nodeIo } from './node-io.ts'
 
 /** host.call 이 던진 오류를 「code: message」 한 줄로. */
 export const describeError = (err: unknown): string => {
@@ -48,7 +61,18 @@ const STALE = /terminal_handle_stale/
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-export default function activate(orca: OrcaWorkerApi) {
+type Sent = Result & { via?: string; line?: string }
+
+/** 폴더 보기를 멈추는 함수(deactivate 가 부른다). */
+let stopPolling: (() => void) | null = null
+
+export function deactivate() {
+  stopPolling?.()
+  stopPolling = null
+}
+
+/** io 를 받아 activate 를 만든다. 시험은 가짜 io 를 넘긴다. */
+export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorkerApi) {
   const log = (msg: string) => orca.log(`[question-panel] ${msg}`)
   const load = async () => asBatches((await orca.storage.get(STORE_KEY)) as JsonValue | null)
   const save = (list: Batch[]) => orca.storage.set(STORE_KEY, list as unknown as JsonValue) // Batch는 JSON 그대로다
@@ -185,6 +209,86 @@ export default function activate(orca: OrcaWorkerApi) {
     }
   }
 
+  /**
+   * 채팅 세션의 답: 그 세션 신원(ORCA_AGENT_SESSION_ID)으로 orca CLI 를 띄워 메일을 보낸다.
+   * 신원 없는 프로세스는 send 가 no_active_sender_terminal 로 거부된다(1.4.237 실측). 보내기 직전에
+   * run-current 로 묶인 Run 을 다시 보고(질문 뒤 Run 에 묶였을 수 있다), 읽지 못하면 질문할 때 값을 쓴다.
+   */
+  const sendMail = async (b: Batch, picks: Picks): Promise<Sent> => {
+    if (!isMailbox(b)) return { ok: false, reason: '채팅 묶음이 아닙니다.' }
+    const r = b.route
+    const program = r.cli ?? 'orca'
+    const env: Record<string, string> = {
+      ORCA_AGENT_SESSION_ID: r.sessionId,
+      ORCA_STRUCTURED_SESSION: '1',
+      ...(r.userData === null ? {} : { ORCA_USER_DATA_PATH: r.userData }),
+    }
+    const cur = await io.runCli(program, ['orchestration', 'run-current', '--json'], env)
+    const now = parseRunCurrent(cur.stdout)
+    if (now === undefined) {
+      const p = parseSendResult(cur)
+      log(`run-current(세션 ${r.sessionId}) 읽지 못함, 질문 때 값(${r.runId ?? 'Run 없음'})을 씀: ${p.ok ? '모양이 틀림' : p.why}`)
+    } else log(`run-current(세션 ${r.sessionId}) → ${now ?? 'Run 없음'}`)
+    const to = mailTarget(r.sessionId, now === undefined ? r.runId : now)
+    const subject = mailSubject(b)
+    const body = mailBody(b, picks)
+    log(`orchestration send --to ${to} --subject ${JSON.stringify(subject)} (${program})`)
+    const res = await io.runCli(
+      program,
+      ['orchestration', 'send', '--to', to, '--subject', subject, '--body', body, '--json'],
+      env,
+    )
+    const p = parseSendResult(res)
+    if (!p.ok) {
+      log(`메일 보내기 실패 → ${to}: ${p.why}`)
+
+      return { ok: false, reason: `메일함(${to})으로 보내지 못했습니다 — ${p.why}` }
+    }
+    log(`메일 보냄 ${p.messageId} → ${to}`)
+
+    return { ok: true, reason: '', via: `메일함 ${to}`, line: `${subject} ${body}` }
+  }
+
+  /** 채팅 세션이 남긴 질문 파일을 묶음으로 옮긴다. 읽은 파일은 지운다(틀린 것도 로그를 남기고 지운다). */
+  let ingesting = false
+  const ingest = async () => {
+    if (ingesting) return
+    ingesting = true
+    try {
+      const files = await io.listInbox()
+      if (files.length === 0) return
+      let list = await load()
+      const added: Batch[] = []
+      for (const f of files) {
+        let raw: unknown = null
+        try {
+          raw = JSON.parse(f.text)
+        } catch {
+          raw = null
+        }
+        const b = batchFromInbox(raw, Date.now())
+        if (b === null) log(`inbox ${f.name}: 모양이 틀려 버림`)
+        else {
+          list = addBatch(list, b)
+          added.push(b)
+          log(`inbox: 채팅 묶음 ${b.id} 저장(질문 ${b.questions.length}개, ${routeLabel(b)}, cli ${isMailbox(b) ? (b.route.cli ?? 'PATH의 orca') : '-'})`)
+        }
+        await io.removeInbox(f.name).catch(err => log(`inbox ${f.name} 지우기 실패: ${describeError(err)}`))
+      }
+      if (added.length === 0) return
+      await save(list)
+      for (const b of added) {
+        void orca.host
+          .call('notifications.show', { title: '질문 패널', body: `${b.id}: ${b.questions[0].question}` })
+          .catch(err => log(`알림 실패: ${describeError(err)}`))
+      }
+    } catch (err) {
+      log(`inbox(${io.inboxDir}) 읽기 실패: ${describeError(err)}`)
+    } finally {
+      ingesting = false
+    }
+  }
+
   orca.panels.handle('qp.answer', async ({ id, terminalId, picks }) => {
     log(`qp.answer 받음 id=${id} terminal=${terminalId} picks=${JSON.stringify(picks)}`)
     try {
@@ -192,6 +296,17 @@ export default function activate(orca: OrcaWorkerApi) {
       const b = list.find(x => x.id === id && x.terminalId === terminalId && x.status === 'pending')
       if (b === undefined) return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
       if (!complete(b, picks)) return { ok: false, reason: '모든 질문에 답을 골라 주세요.' }
+      if (isMailbox(b)) {
+        const r = await sendMail(b, picks)
+        await save(
+          r.ok
+            ? markSent(await load(), id, terminalId, r.line ?? '', r.via)
+            : patchBatch(await load(), id, terminalId, { error: r.reason }),
+        )
+        if (r.ok) log(`묶음 ${id} 보냄(${r.via})`)
+
+        return r
+      }
       if (b.closed === true || (await isClosed(terminalId))) {
         if (b.closed !== true) await save(patchBatch(await load(), id, terminalId, { closed: true }))
         log(`묶음 ${id}: 터미널 ${terminalId}이 닫힘 — 보내지 않음`)
@@ -207,11 +322,11 @@ export default function activate(orca: OrcaWorkerApi) {
       const line = answerLine(b, picks)
       const r = await send(b, line)
       if (r.ok) {
-        await save(markSent(await load(), id, terminalId, line))
+        await save(markSent(await load(), id, terminalId, line, '터미널'))
         log(`묶음 ${id} 보냄`)
-      }
+      } else await save(patchBatch(await load(), id, terminalId, { error: r.reason }))
 
-      return r
+      return { ...r, ...(r.ok ? { via: '터미널' } : {}) }
     } catch (err) {
       const why = describeError(err)
       log(`qp.answer 예외: ${why}`)
@@ -224,7 +339,8 @@ export default function activate(orca: OrcaWorkerApi) {
   const refresh = async () => {
     const list = await load()
     let next = list
-    for (const b of list.filter(x => x.status === 'pending' && x.closed !== true)) {
+    // 채팅 묶음은 터미널이 없어 닫힘을 보지 않는다.
+    for (const b of list.filter(x => x.status === 'pending' && x.closed !== true && !isMailbox(x))) {
       const patch: Partial<Batch> = (await isClosed(b.terminalId)) ? { closed: true } : {}
       if (b.terminalTitle === undefined || b.workspaceName === undefined) {
         const info = await whereInfo(b.terminalId, b.workspaceId)
@@ -240,6 +356,7 @@ export default function activate(orca: OrcaWorkerApi) {
   }
 
   orca.panels.handle('qp.refresh', async () => {
+    await ingest()
     await refresh()
 
     return { ok: true, reason: '' }
@@ -267,4 +384,16 @@ export default function activate(orca: OrcaWorkerApi) {
 
     return { ok: true, reason: '' }
   })
+
+  // 채팅 세션 질문 폴더를 본다. 훅이 있어 워커는 늘 떠 있다(pluginNeedsResidentWorker).
+  void ingest()
+  if (io.pollMs !== null) {
+    stopPolling?.()
+    const timer = setInterval(() => void ingest(), io.pollMs)
+    // 워커는 host 연결이 붙잡고 있다. 타이머가 프로세스를 붙잡지 않게 한다(시험이 끝나도록).
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    stopPolling = () => clearInterval(timer)
+  }
 }
+
+export default createWorker(nodeIo)

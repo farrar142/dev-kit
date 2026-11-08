@@ -48,7 +48,8 @@ plugins/
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)와 stdio MCP 서버(node)
     .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask) 하나. 상태 없이 mod가 넘긴 결과 글을 돌려준다
-    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록)와 node --test 시험
+    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문을 Orca 질문 패널 폴더에)와 node --test 시험
+    mcp/orca.mjs                   Orca 채팅 세션용 진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
     hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 도구 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
                                    답한 기록 지우기(하나·모두), 선택지 preview 펼치기
@@ -60,7 +61,7 @@ plugins/
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
 orca-plugins/
-  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널로
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -73,7 +74,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답한다(예: `q4 1-2`)) |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -95,6 +96,10 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-08 — Orca 질문 패널 0.4.0·question-panel 0.6.1: 채팅 UI 세션에도 답 전달
+
+- Orca 채팅 세션(stream-json)은 `agent.tool.after` 훅이 오지 않고 넣을 터미널도 없어 패널로 답할 수 없었다. 이제 question-panel MCP 서버가 채팅 세션의 질문을 `~/.question-panel/orca-inbox`에 세션 ID·Run·CLI 경로와 함께 남기고 대화창 블록 끝에 「Orca 사이드바 질문 패널로도 답할 수 있다」를 붙인다. Orca 플러그인이 그 폴더를 읽어 카드로 띄우고, 답은 그 세션 신원으로 `orca orchestration send --to run:<run_id>`(Run이 없으면 `orca_session_id:<id>`)로 보낸다(제목 `[질문 패널 답] qN`, 본문 `qN 1-2 / [질문 패널 답] 질문 = 고른 것`). 카드에 전달 경로와 실패 이유, 단계마다 로그. 근거는 `orca-plugins/question-panel/README.md` 「채팅 세션(0.4.0)」.
 
 ### 2026-11-08 — Orca 질문 패널 0.3.3: exited 터미널도 닫힘으로 알아보기
 

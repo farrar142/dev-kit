@@ -130,3 +130,29 @@ test('카드에 workspace 이름·터미널 제목을 보이고, 닫힌 터미�
   assert.equal(cleared, 1)
   await p.unmount()
 })
+
+test('채팅 묶음 카드는 전달 경로(메일함)와 저장된 실패 이유를 보이고, 보내면 보낸 곳을 알린다', async () => {
+  const chat = {
+    ...BATCH,
+    id: 'q5',
+    terminalId: 'orca_session_id:sess_1',
+    workspaceId: null,
+    route: { kind: 'mailbox', sessionId: 'sess_1', runId: 'run_xxxx', cli: null, userData: null },
+    cwd: '/home/me/app',
+    error: '메일함(run:run_xxxx)으로 보내지 못했습니다 — boom',
+  }
+  const host = mockHost({
+    storage: { batches: [chat] },
+    requests: { 'qp.answer': { ok: true, reason: '', via: '메일함 run:run_xxxx' } },
+  })
+  const p = await mount(panel, { host })
+  assert.ok(p.find({ type: 'Badge', text: '메일함 run:run_xxxx' }))
+  assert.ok(p.find({ type: 'Text', text: /채팅 · app · 세션 sess_1/ }))
+  assert.ok(p.find({ type: 'Callout', text: /boom/ }))
+  assert.equal(p.findAll({ type: 'Badge', text: '터미널이 닫힘' }).length, 0)
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '0')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  await p.press({ type: 'Button', text: '답 보내기' })
+  assert.ok(p.find({ type: 'Callout', text: /q5 답을 보냈습니다 — 메일함 run:run_xxxx/ }))
+  await p.unmount()
+})

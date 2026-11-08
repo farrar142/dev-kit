@@ -14,6 +14,26 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type Option = { label: string; description: string }
 export type Question = { question: string; header: string; multiSelect: boolean; options: Option[] }
 
+/**
+ * 답을 넣는 길(0.4.0부터). 없으면 터미널(0.3.x 묶음).
+ * - terminal: 질문 훅이 준 터미널에 terminal.sendText.
+ * - mailbox: Orca 채팅 세션(stream-json). 넣을 터미널이 없어 그 세션의 오케스트레이션 메일함으로
+ *   `orca orchestration send` 한다. Run에 묶였으면 run:<id>, 아니면 orca_session_id:<id>.
+ */
+export type Route =
+  | { kind: 'terminal' }
+  | {
+      kind: 'mailbox'
+      /** 질문한 채팅 세션의 ORCA_AGENT_SESSION_ID. 보낼 때 이 신원으로 CLI를 돌린다. */
+      sessionId: string
+      /** 질문할 때 묶여 있던 Run(`orca orchestration run-current`). 보낼 때 다시 확인한다. */
+      runId: string | null
+      /** 그 세션이 쓰던 Orca CLI 실행 파일(ORCA_CLI_COMMAND). 없으면 PATH의 orca. */
+      cli: string | null
+      /** 그 세션의 ORCA_USER_DATA_PATH(CLI가 같은 Orca를 찾게). */
+      userData: string | null
+    }
+
 export type Batch = {
   /** 묶음 ID. Claude Code 쪽 question-panel이 붙인 q<N>을 그대로 쓴다(그쪽 큐도 같이 닫히게). */
   id: string
@@ -30,6 +50,14 @@ export type Batch = {
   workspaceName?: string
   /** 질문한 터미널이 닫혔다(terminal.read 가 terminal_handle_stale, 0.3.2부터). 보내기를 막는다. */
   closed?: boolean
+  /** 답을 넣는 길(0.4.0부터). 없으면 터미널. */
+  route?: Route
+  /** 채팅 세션이 질문한 폴더(카드에 이름만 보인다). */
+  cwd?: string
+  /** 마지막 보내기 실패 이유(카드에 남는다). 보내면 지운다. */
+  error?: string
+  /** 보낸 곳(「터미널」·「메일함 run:…」) — 보낸 기록에 보인다. */
+  via?: string
 }
 
 /** agent.tool.after 훅 이벤트에서 쓰는 부분. */
@@ -121,8 +149,14 @@ export const answerLine = (b: Batch, picks: Picks): string => {
   return `[질문 패널 답 ${b.id}] ${parts.join(' / ')}`.replace(/[\r\n]+/g, ' ')
 }
 
-export const markSent = (list: readonly Batch[], id: string, terminalId: string, line: string): Batch[] =>
-  list.map(b => (b.id === id && b.terminalId === terminalId ? { ...b, status: 'sent', sent: line } : b))
+/** 보냄으로 표시한다. via 는 보낸 곳(「터미널」·「메일함 run:…」), 남아 있던 실패 이유는 지운다. */
+export const markSent = (list: readonly Batch[], id: string, terminalId: string, line: string, via = '터미널'): Batch[] =>
+  list.map(b => {
+    if (!(b.id === id && b.terminalId === terminalId)) return b
+    const { error: _, ...rest } = b
+
+    return { ...rest, status: 'sent', sent: line, via }
+  })
 
 export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b.status === 'pending')
 
@@ -136,8 +170,13 @@ export const asBatches = (v: JsonValue | null): Batch[] =>
       )
     : []
 
-/** 카드에 보일 「어디서 물었나」: workspace 이름 · 터미널 제목(모르면 터미널 id). */
+/** 카드에 보일 「어디서 물었나」: workspace 이름 · 터미널 제목(모르면 터미널 id). 채팅은 「채팅 · 폴더 이름」. */
 export const whereOf = (b: Batch): string => {
+  if (b.route?.kind === 'mailbox') {
+    const dir = b.cwd === undefined ? null : workspaceNameFrom(b.cwd)
+
+    return ['채팅', dir, `세션 ${b.route.sessionId.slice(0, 8)}`].filter(x => x !== null && x !== '').join(' · ')
+  }
   const ws = b.workspaceName ?? workspaceNameFrom(b.workspaceId)
 
   return [ws, b.terminalTitle ?? b.terminalId].filter(x => x !== null && x !== '').join(' · ')
@@ -162,3 +201,122 @@ export const removeBatch = (list: readonly Batch[], id: string, terminalId: stri
 
 /** 터미널이 닫힌 대기 묶음을 모두 지운다. */
 export const clearClosed = (list: readonly Batch[]): Batch[] => list.filter(b => b.closed !== true)
+
+// ── 채팅 세션(메일함 경로, 0.4.0) ─────────────────────────────────────────────
+
+/**
+ * Claude Code question-panel MCP 서버(0.6.1+)가 채팅 세션의 질문을 남기는 폴더. 집 폴더 아래
+ * `.question-panel/orca-inbox`. 파일 하나가 묶음 하나(JSON, INBOX_VERSION). 워커가 읽고 지운다.
+ * 채팅 세션에는 agent.tool.after 훅이 오지 않아서다(Orca가 채팅 자식 환경에서 훅 변수를 지운다,
+ * structured-session-child-env.ts).
+ */
+export const INBOX_DIR_PARTS = ['.question-panel', 'orca-inbox'] as const
+export const INBOX_VERSION = 1
+
+export const isMailbox = (b: Batch): b is Batch & { route: Extract<Route, { kind: 'mailbox' }> } =>
+  b.route?.kind === 'mailbox'
+
+const ID_RE = /^q\d{1,6}$/
+const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/
+const RUN_RE = /^run_[A-Za-z0-9_-]{1,80}$/
+
+const optStr = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+
+/** 받은 파일 하나를 묶음으로. 모양이 틀리면 null(워커가 로그를 남기고 버린다). */
+export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
+  if (!isRecord(raw) || raw.v !== INBOX_VERSION) return null
+  const id = str(raw.id)
+  const session = isRecord(raw.session) ? raw.session : null
+  const sessionId = session === null ? '' : str(session.id)
+  if (!ID_RE.test(id) || !SESSION_RE.test(sessionId)) return null
+  const questions = normalize(raw.questions)
+  if (questions.length === 0) return null
+  const runId = optStr(session?.runId)
+  const cwd = optStr(raw.cwd)
+
+  return {
+    id,
+    terminalId: `orca_session_id:${sessionId}`,
+    workspaceId: null,
+    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
+    questions,
+    status: 'pending',
+    route: {
+      kind: 'mailbox',
+      sessionId,
+      runId: runId !== null && RUN_RE.test(runId) ? runId : null,
+      cli: optStr(raw.orcaCli),
+      userData: optStr(raw.userData),
+    },
+    ...(cwd === null ? {} : { cwd }),
+  }
+}
+
+/** 메일 받는 곳: Run에 묶였으면 run:<id>(채팅 세션이 감시하는 메일함), 아니면 그 세션 주소. */
+export const mailTarget = (sessionId: string, runId: string | null) =>
+  runId === null ? `orca_session_id:${sessionId}` : `run:${runId}`
+
+/** 카드에 보일 전달 경로. */
+export const routeLabel = (b: Batch): string =>
+  isMailbox(b) ? `메일함 ${mailTarget(b.route.sessionId, b.route.runId)}` : '터미널'
+
+export const mailSubject = (b: Batch) => `[질문 패널 답] ${b.id}`
+
+/**
+ * 메일 본문 한 줄: 「q3 1-2, 2-1 / [질문 패널 답] 질문 = 고른 것 / …」.
+ * 앞의 「q3 …」은 대화창 글 답(「q4 1-2」)과 같은 모양이라 Claude Code 쪽 question-panel이 묶음을 닫고,
+ * 뒤는 패널 완료 메시지(「[질문 패널 답] 질문 = 고른 것」)와 같은 모양이다. Windows의 .cmd 실행 파일이
+ * 줄바꿈을 인자로 넘기지 못해 한 줄로 쓴다.
+ */
+export const mailBody = (b: Batch, picks: Picks): string => {
+  const nums =
+    b.questions.length === 1
+      ? (picks[0] ?? []).map(n => n + 1).join(',')
+      : b.questions.flatMap((_, i) => (picks[i] ?? []).map(n => `${i + 1}-${n + 1}`)).join(', ')
+  const parts = b.questions.map((q, i) => {
+    const labels = (picks[i] ?? []).flatMap(n => (q.options[n] === undefined ? [] : [q.options[n].label]))
+
+    return `[질문 패널 답] ${q.question} = ${labels.join(', ')}`
+  })
+
+  return `${b.id} ${nums} / ${parts.join(' / ')}`.replace(/[\r\n]+/g, ' ')
+}
+
+/** CLI의 --json 답 한 덩어리. 실패해도 JSON을 찍으므로 stdout 을 먼저 본다. */
+const parseJson = (text: string): Record<string, unknown> | null => {
+  try {
+    const v: unknown = JSON.parse(text.trim())
+
+    return isRecord(v) ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** `orca orchestration run-current --json` 의 Run id. 묶인 Run이 없으면 null, 읽지 못하면 undefined. */
+export const parseRunCurrent = (stdout: string): string | null | undefined => {
+  const j = parseJson(stdout)
+  if (j === null || j.ok !== true || !isRecord(j.result)) return undefined
+  const run = j.result.run
+  if (run === null) return null
+  const id = isRecord(run) ? str(run.id) : ''
+
+  return RUN_RE.test(id) ? id : undefined
+}
+
+export type CliRun = { code: number | null; stdout: string; stderr: string; error?: string }
+
+/** `orca orchestration send --json` 결과: 보낸 메시지 id, 아니면 사람이 읽을 이유. */
+export const parseSendResult = (r: CliRun): { ok: true; messageId: string } | { ok: false; why: string } => {
+  const j = parseJson(r.stdout)
+  if (j !== null && j.ok === true && isRecord(j.result) && isRecord(j.result.message)) {
+    return { ok: true, messageId: str(j.result.message.id) }
+  }
+  if (j !== null && isRecord(j.error)) {
+    return { ok: false, why: `${str(j.error.code)}: ${str(j.error.message)}` }
+  }
+  if (r.error !== undefined) return { ok: false, why: r.error }
+  const tail = (r.stderr.trim() || r.stdout.trim()).split(/\r?\n/).slice(-2).join(' ')
+
+  return { ok: false, why: `orca 종료 코드 ${r.code ?? '없음'}${tail === '' ? '' : ` — ${tail.slice(0, 300)}`}` }
+}

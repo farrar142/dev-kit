@@ -1,6 +1,38 @@
 // 워커 시험: 훅으로 받은 질문이 저장되고, 답이 그 터미널에 한 줄로 들어간다.
 import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
-import * as worker from './main.ts'
+import type { InboxFile, WorkerIo } from './io.ts'
+import { createWorker, deactivate, FOCUS_WAIT_MS } from './main.ts'
+import { windowsCmdLine } from './node-io.ts'
+
+/** 폴더·CLI 를 흉내 내는 가짜 io. runs 에 CLI 호출이 쌓인다. */
+const fakeIo = (
+  files: InboxFile[] = [],
+  answer: (args: string[]) => { code: number | null; stdout: string; stderr: string; error?: string } = () => ({
+    code: 0,
+    stdout: '',
+    stderr: '',
+  }),
+) => {
+  const runs: { program: string; args: string[]; env: Record<string, string> }[] = []
+  const removed: string[] = []
+  const io: WorkerIo = {
+    inboxDir: '/home/me/.question-panel/orca-inbox',
+    listInbox: async () => files.filter(f => !removed.includes(f.name)),
+    removeInbox: async name => {
+      removed.push(name)
+    },
+    runCli: async (program, args, env) => {
+      runs.push({ program, args, env })
+
+      return answer(args)
+    },
+    pollMs: null,
+  }
+
+  return { io, runs, removed }
+}
+
+const worker = { default: createWorker(fakeIo().io), deactivate, FOCUS_WAIT_MS }
 
 const ASK = {
   agent: 'claude',
@@ -209,4 +241,139 @@ test('terminal.read 가 거부 없이 빈 출력(exited)을 돌려줘도 닫힘�
   const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean }
   assert.equal(r.ok, false)
   assert.equal(host.callsOf('terminal.sendText').length, 0)
+})
+
+// ── 채팅 세션(메일함 경로, 0.4.0) ─────────────────────────────────────────────
+
+const INBOX = {
+  name: 'q4-sess_1.json',
+  text: JSON.stringify({
+    v: 1,
+    id: 'q4',
+    createdAt: 5,
+    questions: [
+      { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres', description: '' }, { label: 'SQLite', description: '' }] },
+      { question: '켤 기능', header: '', multiSelect: true, options: [{ label: '캐시', description: '' }, { label: '로그', description: '' }] },
+    ],
+    session: { id: 'sess_1', runId: 'run_xxxx' },
+    orcaCli: '/opt/orca/bin/orca',
+    userData: '/home/me/.config/orca',
+    cwd: '/home/me/work/app',
+  }),
+}
+
+const json = (v: unknown) => ({ code: 0, stdout: JSON.stringify(v), stderr: '' })
+
+test('채팅 세션 질문 파일을 묶음으로 옮기고 파일을 지우며, 답은 그 세션 신원으로 Run 메일함에 보낸다', async () => {
+  const f = fakeIo([INBOX, { name: 'bad.json', text: '{"v":1}' }], args =>
+    args[1] === 'run-current'
+      ? json({ ok: true, result: { run: { id: 'run_yyyy' } } })
+      : json({ ok: true, result: { message: { id: 'msg_1' } } }),
+  )
+  const host = mockHost({})
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.request('qp.refresh', {})
+  assert.deepEqual(f.removed.sort(), ['bad.json', 'q4-sess_1.json'])
+  const [b] = (w.host.data().storage.batches ?? []) as { id: string; terminalId: string; route: { kind: string } }[]
+  assert.equal(b.id, 'q4')
+  assert.equal(b.terminalId, 'orca_session_id:sess_1')
+  assert.equal(b.route.kind, 'mailbox')
+  assert.ok(w.logs.some(l => /bad\.json: 모양이 틀려 버림/.test(l)))
+  assert.equal(host.callsOf('notifications.show').length, 1)
+
+  const r = (await w.request('qp.answer', { id: 'q4', terminalId: 'orca_session_id:sess_1', picks: [[1], [0, 1]] })) as {
+    ok: boolean
+    via?: string
+  }
+  assert.equal(r.ok, true)
+  // 질문 뒤 Run 이 바뀌었으면(run-current) 지금 Run 으로 보낸다.
+  assert.equal(r.via, '메일함 run:run_yyyy')
+  assert.equal(host.callsOf('terminal.sendText').length, 0)
+  assert.equal(f.runs.length, 2)
+  for (const run of f.runs) {
+    assert.equal(run.program, '/opt/orca/bin/orca')
+    assert.deepEqual(run.env, {
+      ORCA_AGENT_SESSION_ID: 'sess_1',
+      ORCA_STRUCTURED_SESSION: '1',
+      ORCA_USER_DATA_PATH: '/home/me/.config/orca',
+    })
+  }
+  assert.deepEqual(f.runs[1].args, [
+    'orchestration',
+    'send',
+    '--to',
+    'run:run_yyyy',
+    '--subject',
+    '[질문 패널 답] q4',
+    '--body',
+    'q4 1-2, 2-1, 2-2 / [질문 패널 답] 어느 DB? = SQLite / [질문 패널 답] 켤 기능 = 캐시, 로그',
+    '--json',
+  ])
+  const [sent] = (w.host.data().storage.batches ?? []) as { status: string; via?: string }[]
+  assert.equal(sent.status, 'sent')
+  assert.equal(sent.via, '메일함 run:run_yyyy')
+  await w.deactivate()
+})
+
+test('Run 에 묶이지 않은 채팅 세션은 세션 주소(orca_session_id:)로 보내고, run-current 를 못 읽으면 질문 때 Run 을 쓴다', async () => {
+  const noRun = fakeIo([INBOX], args =>
+    args[1] === 'run-current' ? json({ ok: true, result: { run: null } }) : json({ ok: true, result: { message: { id: 'msg_2' } } }),
+  )
+  const w1 = await mountWorker({ default: createWorker(noRun.io), deactivate }, { host: mockHost({}) })
+  await w1.request('qp.refresh', {})
+  const r1 = (await w1.request('qp.answer', { id: 'q4', terminalId: 'orca_session_id:sess_1', picks: [[0], [0]] })) as {
+    via?: string
+  }
+  assert.equal(r1.via, '메일함 orca_session_id:sess_1')
+  await w1.deactivate()
+
+  const broken = fakeIo([INBOX], args =>
+    args[1] === 'run-current' ? { code: 1, stdout: '', stderr: 'boom' } : json({ ok: true, result: { message: { id: 'msg_3' } } }),
+  )
+  const w2 = await mountWorker({ default: createWorker(broken.io), deactivate }, { host: mockHost({}) })
+  await w2.request('qp.refresh', {})
+  const r2 = (await w2.request('qp.answer', { id: 'q4', terminalId: 'orca_session_id:sess_1', picks: [[0], [0]] })) as {
+    via?: string
+  }
+  assert.equal(r2.via, '메일함 run:run_xxxx')
+  assert.ok(w2.logs.some(l => /run-current\(세션 sess_1\) 읽지 못함, 질문 때 값\(run_xxxx\)/.test(l)))
+  await w2.deactivate()
+})
+
+test('메일 보내기가 실패하면 이유를 돌려주고 카드에 남기며 로그를 쓴다', async () => {
+  const f = fakeIo([INBOX], args =>
+    args[1] === 'run-current'
+      ? json({ ok: true, result: { run: { id: 'run_xxxx' } } })
+      : { code: 1, stdout: JSON.stringify({ ok: false, error: { code: 'no_active_sender_terminal', message: 'who?' } }), stderr: '' },
+  )
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const r = (await w.request('qp.answer', { id: 'q4', terminalId: 'orca_session_id:sess_1', picks: [[0], [0]] })) as {
+    ok: boolean
+    reason: string
+  }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /메일함\(run:run_xxxx\)으로 보내지 못했습니다 — no_active_sender_terminal: who\?/)
+  const [b] = (w.host.data().storage.batches ?? []) as { status: string; error?: string }[]
+  assert.equal(b.status, 'pending')
+  assert.equal(b.error, r.reason)
+  assert.ok(w.logs.some(l => /메일 보내기 실패 → run:run_xxxx/.test(l)))
+  await w.deactivate()
+})
+
+test('채팅 묶음은 터미널 닫힘을 보지 않는다', async () => {
+  const f = fakeIo([INBOX])
+  const host = mockHost({})
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.request('qp.refresh', {})
+  await w.request('qp.refresh', {})
+  assert.equal(host.callsOf('terminal.read').length, 0)
+  await w.deactivate()
+})
+
+test('Windows 의 .cmd 런처용 cmd.exe 한 줄: 인자를 따옴표로 감싸고 " % 줄바꿈을 바꾼다', () => {
+  assert.equal(
+    windowsCmdLine('C:\\Orca\\bin\\orca.cmd', ['send', '--body', 'a "b" 50% & c\nd', 'x\\']),
+    '""C:\\Orca\\bin\\orca.cmd" "send" "--body" "a \'b\' 50％ & c d" "x\\\\""',
+  )
 })
