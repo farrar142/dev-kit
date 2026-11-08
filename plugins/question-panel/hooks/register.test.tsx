@@ -501,13 +501,16 @@ test('preview가 문자열이 아니거나 비었으면 버린다', async ($, on
   await ui.unmount()
 })
 
-test('surface가 없는 세션(Orca 채팅 등)에서는 ask를 거부해 AskUserQuestion으로 돌리고 큐에 쌓지 않는다', async ($, on) => {
+test('surface가 없는 세션(Orca 채팅 등)에서도 ask는 막지 않고 큐에 쌓아 대화창 블록을 돌려준다', async ($, on) => {
   await setup($, on, [])
-  const ran = await $.tool.call(INPUT as any)
-  expect(JSON.stringify(ran)).toContain('AskUserQuestion')
-  expect(JSON.stringify(ran)).not.toContain('패널에 올렸다')
-  const cmd = await $.command.run({ command: 'questions' } as any)
-  expect(JSON.stringify(cmd)).toContain('AskUserQuestion으로 받습니다')
+  const ran = JSON.stringify(await $.tool.call(INPUT as any))
+  expect(ran).not.toContain('deny')
+  expect(ran).toContain('질문 묶음 q1을 쌓았다')
+  expect(ran).toContain('[질문 묶음 q1]')
+  const cmd = JSON.stringify(await $.command.run({ command: 'questions' } as any))
+  expect(cmd).toContain('패널 화면이 없습니다')
+  expect(cmd).toContain('q4 1-2')
+  expect(cmd).toContain('[질문 묶음 q1]')
 })
 
 test('원격 surface만 있어도 ask는 지금처럼 패널에 쌓는다', async ($, on) => {
