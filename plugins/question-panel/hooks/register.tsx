@@ -20,15 +20,14 @@ const draft = atom({ plugin: 'question-panel', key: 'draft' } as const, '')
 const isRemote = (surface: RenderSurface) => surface !== 'terminal'
 
 // 질문 패널을 붙일 화면이 있는가. 터미널 REPL은 늘 terminal surface를 가진다.
-// Orca 채팅(stream-json)처럼 surface가 하나도 없으면 패널도 원격 카드도 그려지지 않으므로
-// 질문을 쌓지 않고 AskUserQuestion으로 돌린다. (훅 환경에는 process가 없어 환경변수는 못 읽는다.)
+// Orca 채팅(stream-json)처럼 surface가 하나도 없으면 패널도 원격 카드도 그려지지 않는다.
+// 그래도 AskUserQuestion(세션을 막는다)으로 돌리지 않고, 질문을 쌓아 대화창 블록으로 보이게 한 뒤
+// 턴을 끝낸다 — 답은 「q4 1-2」 같은 글로 온다. (훅 환경에는 process가 없어 환경변수는 못 읽는다.)
 const panelMode = (surfaces: readonly RenderSurface[]): 'panel' | 'no-surface' =>
   surfaces.length > 0 ? 'panel' : 'no-surface'
 
-const NO_SURFACE_DENY =
-  'question-panel: 이 세션은 질문 패널을 붙일 화면이 없다(Orca 채팅 등). 질문을 쌓지 않았다. 같은 질문을 AskUserQuestion으로 다시 물어라.'
 const NO_SURFACE_TEXT =
-  '이 세션은 질문 패널을 띄울 화면이 없습니다(Orca 채팅 등). 질문은 AskUserQuestion으로 받습니다.'
+  '이 세션은 패널 화면이 없습니다(Orca 채팅 등). 질문은 대화창 블록으로 보이고, 글로 답하면 됩니다(예: q4 1-2).'
 
 type RawQuestion = {
   question?: unknown
@@ -513,7 +512,7 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const questions = normalize(e.questions)
     if (typeof questions === 'string') return { deny: `question-panel: ${questions}` }
-    if (panelMode(await $.session.surfaces()) === 'no-surface') return { deny: NO_SURFACE_DENY }
+    const mode = panelMode(await $.session.surfaces())
 
     const now = await $.clock.now()
     const list = await read($, queue)
@@ -527,6 +526,16 @@ export const register: Register = on => {
       toolUseId: e.tool_use_id,
     }
     await update($, queue, l => [...l, batch])
+    if (mode === 'no-surface') {
+      return {
+        result: [
+          `질문 묶음 ${id}을 쌓았다. 이 세션은 패널 화면이 없다(Orca 채팅 등). 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+          `답은 대화창의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
+          '',
+          chatBlock(batch),
+        ].join('\n'),
+      }
+    }
     void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
       if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
     })
@@ -564,7 +573,11 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'questions' }, async $ => {
-    if (panelMode(await $.session.surfaces()) === 'no-surface') return { text: NO_SURFACE_TEXT }
+    if (panelMode(await $.session.surfaces()) === 'no-surface') {
+      const pending = (await read($, queue)).filter(b => b.status === 'pending')
+
+      return { text: [NO_SURFACE_TEXT, ...pending.map(b => `\n${chatBlock(b)}`)].join('\n') }
+    }
     const opened = await $.ui.open({ id: PANE, title: TITLE })
     if (!opened.isPlaced) {
       return { text: `질문 패널을 열지 못했습니다(${opened.reason}). 질문은 이 줄 아래에 그립니다.` }
