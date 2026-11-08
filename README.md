@@ -96,6 +96,10 @@ orca-plugins/
 
 ## 바뀐 것
 
+### 2026-11-08 — Orca 질문 패널 0.3.2: 닫힌 터미널의 카드 정리, 카드에 workspace·터미널 이름
+
+- 닫힌 터미널에서 온 옛 카드가 남아, 누르면 포커스 대기 뒤 `outside the active worktree`가 났다. 같은 q1이 두 장이라 헷갈리기도 했다. 이제 `terminal.read`가 `terminal_handle_stale`로 거부되면 그 터미널은 닫힌 것으로 본다. 확인은 패널을 열 때, 새 질문이 올 때, 보내기 직전에 한다. 닫힌 카드는 「터미널이 닫힘」으로 보이고 보내기가 막히며, 「지우기」·「닫힌 터미널 카드 N개 지우기」로 정리한다. 카드에는 workspace 이름과 터미널 제목이 보인다. 권한 `terminal:read`가 늘었다.
+
 ### 2026-11-08 — Orca 질문 패널 0.3.1: 포커스가 바뀔 때까지 기다렸다 보내기
 
 - Windows 시험(1.4.253)에서 질문이 Orca 패널까지 왔지만 답 보내기가 `terminal is outside the active worktree`로 실패했다. `workspace.open`은 활성 worktree 바꾸기를 요청만 하고 돌아오는데, 0.3.0은 14ms 뒤 다시 보냈다. 0.3.1은 `workspace.readContext`에 대상 터미널이 들 때까지 100ms마다 최대 3초 기다린 뒤 보낸다. 포커스와 무관하게 기존 터미널에 넣는 플러그인 메서드는 Orca에 없다(근거는 `orca-plugins/question-panel/README.md`).

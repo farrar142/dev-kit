@@ -130,3 +130,67 @@ test('보내기 실패는 던지지 않고 이유를 돌려주며 로그에 남�
   assert.ok(w.logs.some(l => l.includes('hook mcp__plugin_question-panel_qp__ask terminalId=term_1')))
   assert.ok(w.logs.some(l => l.includes('qp.answer 받음 id=q2')))
 })
+
+test('질문을 저장할 때 터미널 제목과 workspace 이름도 적는다', async () => {
+  const host = mockHost({
+    results: {
+      'workspace.readContext': { branch: 'b', displayName: 'data', terminals: [{ id: 'term_1', title: 'claude 질문' }] },
+      'workspace.list': {
+        workspaces: [{ id: 'ws_1', kind: 'worktree', name: 'Data', path: '/d', branch: 'main', hostId: null }],
+        truncated: false,
+      },
+      'terminal.read': { lines: [], truncated: false },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const [b] = (w.host.data().storage.batches ?? []) as { terminalTitle?: string; workspaceName?: string }[]
+  assert.equal(b.terminalTitle, 'claude 질문')
+  assert.equal(b.workspaceName, 'Data')
+})
+
+test('닫힌 터미널(terminal_handle_stale)의 묶음은 보내지 않고 닫힘으로 표시하며, 지울 수 있다', async () => {
+  const host = mockHost({
+    results: {
+      'terminal.read': () => {
+        throw hostError('action_failed', 'terminal_handle_stale')
+      },
+      'terminal.sendText': { accepted: true },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const stored = () => (w.host.data().storage.batches ?? []) as { id: string; closed?: boolean }[]
+  // 새 질문이 오면 다시 확인하므로 저장 직후 이미 닫힘이다.
+  assert.equal(stored()[0].closed, true)
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as {
+    ok: boolean
+    reason: string
+  }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /터미널이 닫혔습니다/)
+  assert.equal(host.callsOf('terminal.sendText').length, 0)
+  await w.request('qp.clearClosed', {})
+  assert.equal(stored().length, 0)
+})
+
+test('refresh는 살아 있는 터미널을 닫힘으로 보지 않고, 권한 오류도 닫힘으로 보지 않는다', async () => {
+  let alive = true
+  const host = mockHost({
+    results: {
+      'terminal.read': () => {
+        if (alive) throw hostError('permission_denied', 'no terminal:read')
+        throw hostError('action_failed', 'terminal_handle_stale')
+      },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const stored = () => (w.host.data().storage.batches ?? []) as { id: string; closed?: boolean }[]
+  assert.equal(stored()[0].closed, undefined)
+  alive = false
+  await w.request('qp.refresh', {})
+  assert.equal(stored()[0].closed, true)
+  await w.request('qp.remove', { id: 'q2', terminalId: 'term_1' })
+  assert.equal(stored().length, 0)
+})
