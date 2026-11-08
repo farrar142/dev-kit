@@ -19,6 +19,17 @@ const draft = atom({ plugin: 'question-panel', key: 'draft' } as const, '')
 // 질문을 올린 도구 줄과 /questions 출력 줄에도 같은 내용을 그린다.
 const isRemote = (surface: RenderSurface) => surface !== 'terminal'
 
+// 질문 패널을 붙일 화면이 있는가. 터미널 REPL은 늘 terminal surface를 가진다.
+// Orca 채팅(stream-json)처럼 surface가 하나도 없으면 패널도 원격 카드도 그려지지 않으므로
+// 질문을 쌓지 않고 AskUserQuestion으로 돌린다. (훅 환경에는 process가 없어 환경변수는 못 읽는다.)
+const panelMode = (surfaces: readonly RenderSurface[]): 'panel' | 'no-surface' =>
+  surfaces.length > 0 ? 'panel' : 'no-surface'
+
+const NO_SURFACE_DENY =
+  'question-panel: 이 세션은 질문 패널을 붙일 화면이 없다(Orca 채팅 등). 질문을 쌓지 않았다. 같은 질문을 AskUserQuestion으로 다시 물어라.'
+const NO_SURFACE_TEXT =
+  '이 세션은 질문 패널을 띄울 화면이 없습니다(Orca 채팅 등). 질문은 AskUserQuestion으로 받습니다.'
+
 type RawQuestion = {
   question?: unknown
   header?: unknown
@@ -502,6 +513,7 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const questions = normalize(e.questions)
     if (typeof questions === 'string') return { deny: `question-panel: ${questions}` }
+    if (panelMode(await $.session.surfaces()) === 'no-surface') return { deny: NO_SURFACE_DENY }
 
     const now = await $.clock.now()
     const list = await read($, queue)
@@ -552,6 +564,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'questions' }, async $ => {
+    if (panelMode(await $.session.surfaces()) === 'no-surface') return { text: NO_SURFACE_TEXT }
     const opened = await $.ui.open({ id: PANE, title: TITLE })
     if (!opened.isPlaced) {
       return { text: `질문 패널을 열지 못했습니다(${opened.reason}). 질문은 이 줄 아래에 그립니다.` }

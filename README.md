@@ -69,7 +69,7 @@ plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만) |
+| question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 `ask`가 거부돼 AskUserQuestion으로 돌아간다) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -91,6 +91,10 @@ plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-08 — question-panel 0.5.1: 화면이 없는 세션은 AskUserQuestion으로
+
+- Orca 채팅(stream-json)처럼 `$.session.surfaces()`가 비어 패널을 붙일 화면이 없는 세션에서는 `ask`가 질문을 쌓지 않고 「AskUserQuestion으로 다시 물어라」로 거부하고, `/questions`는 오류 대신 「질문은 AskUserQuestion으로 받습니다」 안내를 낸다. 원격·터미널 surface가 있으면 그대로. 훅 환경에는 `process`가 없어 `ORCA_STRUCTURED_SESSION`은 읽지 못해 surface 유무만 본다. 시험 20건(`claude plugin test plugins/question-panel`).
 
 ### 2026-11-07 — issue-track 0.5.1: 지시서 틀에 컨텍스트 위생 줄
 
