@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "question-panel",
+  "name": "질문 패널",
+  "version": "0.1.0",
+  "description": "Claude Code의 question-panel 도구(mcp__question-panel__ask)가 올린 객관식 질문을 오른쪽 사이드바 카드로 띄우고, 고른 답을 그 Claude 터미널에 한 줄로 넣는다. 질문한 Claude는 턴을 끝내고 기다리지 않는다.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "pluginApi": 1,
+  "main": "worker/main.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "questions",
+        "title": "질문",
+        "icon": "agent",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.tool.after"
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" }
+  ]
+}
