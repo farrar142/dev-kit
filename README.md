@@ -46,8 +46,10 @@ plugins/
     hooks/read-guard.js            1,000줄·80KB 넘는 파일을 limit 없이 Read하면 막는다
     hooks/block-heredoc.js         6,000자 넘는 heredoc 명령을 스크립트 파일로 옮겨 source로 실행
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
-  question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)
-    hooks/register.tsx             도구 mcp__question-panel__ask 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
+  question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)와 stdio MCP 서버(node)
+    .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask) 하나. 상태 없이 mod가 넘긴 결과 글을 돌려준다
+    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록)와 node --test 시험
+    hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 도구 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
                                    답한 기록 지우기(하나·모두), 선택지 preview 펼치기
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
@@ -71,7 +73,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__question-panel__ask`·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답한다(예: `q4 1-2`)) |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답한다(예: `q4 1-2`)) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -93,6 +95,13 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-08 — question-panel 0.6.0: 질문 도구를 stdio MCP 서버로, Orca 질문 패널 0.3.0
+
+- 질문 도구를 mod 도구에서 플러그인의 stdio MCP 서버(`.mcp.json`의 `qp`, `mcp/server.mjs`, node)로 옮겼다. 이름은 `mcp__plugin_question-panel_qp__ask`. Claude Code는 mod 도구에 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca(`agent.tool.after`)가 질문을 못 받았다. MCP 도구는 훅을 탄다(2.1.319 tmux 대화형 + `matcher "*"` 기록 훅으로 확인).
+- 모델에게 보이는 질문 도구는 하나다(mod의 `ask` 등록을 뺐다). 상태(묶음 q1…·패널)는 지금처럼 mod 한 곳에만 있다: mod의 `tool.call` 훅이 그 MCP 호출을 감싸 묶음을 쌓고, 결과 글을 입력의 `panel_result`로 서버에 넘기면 서버가 그대로 돌려준다. 그래서 PostToolUse의 `tool_response`에 「질문 묶음 qN」이 들어간다. 서버가 답하지 못하면(거절·오류) 쌓은 묶음을 거둔다. mod가 없는 세션이면 서버가 묶음 없이 대화창 블록을 돌려준다.
+- `tool.describe`로 질문 도구를 ToolSearch 뒤가 아니라 처음부터 도구 목록에 두게 했다.
+- Orca 플러그인 0.3.0: 새 도구 이름을 보고, MCP 결과(content 블록 배열)에서도 묶음 ID를 읽는다. 다른 이름의 질문 도구는 로그를 남기고 무시한다.
 
 ### 2026-11-08 — Orca 질문 패널: 막힘 기록
 

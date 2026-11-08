@@ -42,7 +42,11 @@ export default function activate(orca: OrcaWorkerApi) {
 
   // 관찰만 하는 훅이라 Claude를 붙잡지 않는다. 결과에 묶음 ID(q<N>)가 있어 before 대신 after를 쓴다.
   orca.hooks.on('agent.tool.after', async event => {
-    if (event.tool !== ASK_TOOL) return
+    if (event.tool !== ASK_TOOL) {
+      // 이름이 바뀐 질문 도구(옛 mod 도구 등)가 오면 왜 무시하는지 남긴다. 다른 도구는 조용히 넘긴다.
+      if (event.tool.includes('question-panel')) log(`hook ${event.tool}: 질문 도구 이름이 아니라 무시(기대: ${ASK_TOOL})`)
+      return
+    }
     log(
       `hook ${event.tool} terminalId=${event.terminalId ?? '(없음)'} workspaceId=${event.workspaceId ?? '(없음)'} output=${
         event.output === undefined ? '(없음)' : JSON.stringify(event.output).slice(0, 120)

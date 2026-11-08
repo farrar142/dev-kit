@@ -1,10 +1,12 @@
 // 질문 묶음의 모양과 순수 로직. 워커·패널·시험이 같이 쓴다(Orca API를 부르지 않는다).
 //
-// 흐름: Claude가 mcp__question-panel__ask 를 부른다 → Orca의 agent.tool.after 훅이 입력(질문)과
+// 흐름: Claude가 질문 도구(ASK_TOOL)를 부른다 → Orca의 agent.tool.after 훅이 입력(질문)과
 // 결과(묶음 ID)를 받는다 → batchFromTool 로 묶음을 만들어 저장한다 → 패널이 카드로 그린다 →
 // 사용자가 고르면 answerLine 한 줄을 그 터미널에 넣고 Enter → Claude Code에 사용자 메시지로 들어간다.
 
-export const ASK_TOOL = 'mcp__question-panel__ask'
+// Claude Code question-panel 0.6.0부터 질문 도구는 그 플러그인의 stdio MCP 서버(qp)가 낸다.
+// 예전 mod 도구(mcp__question-panel__ask)는 Claude Code가 PostToolUse 훅을 돌리지 않아 여기 닿지 않았다.
+export const ASK_TOOL = 'mcp__plugin_question-panel_qp__ask'
 export const STORE_KEY = 'batches'
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }

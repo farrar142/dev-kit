@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { callAsk } from '../mcp/ask.mjs'
+
 const PANE = {
   plugin: 'question-panel',
   component: 'Pane',
@@ -14,7 +16,7 @@ const PANE = {
   },
 } as const
 
-const TOOL = 'mcp__question-panel__ask'
+const TOOL = 'mcp__plugin_question-panel_qp__ask'
 
 const INPUT = {
   tool: TOOL,
@@ -40,7 +42,16 @@ const INPUT = {
   ],
 }
 
-async function setup($: any, on: any, surfaces: string[] = ['desktop']) {
+// MCP 결과(content 블록)의 글.
+const textOf = (ran: any) =>
+  Array.isArray(ran.result) ? ran.result.map((b: any) => b.text).join('\n') : JSON.stringify(ran)
+
+async function setup(
+  $: any,
+  on: any,
+  surfaces: string[] = ['desktop'],
+  server: (e: any) => any = (e: any) => ({ result: callAsk(e).content }),
+) {
   mock.clock(on)
   const submitted: string[] = []
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
@@ -48,6 +59,8 @@ async function setup($: any, on: any, surfaces: string[] = ['desktop']) {
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  // MCP 서버(mcp/ask.mjs) 자리: mod가 넘긴 panel_result를 그대로 돌려준다.
+  on('tool.call', { tool: TOOL }, (_: any, e: any) => server(e))
   on('prompt.submit', (_: any, e: any) => {
     submitted.push(e.text)
 
@@ -389,7 +402,7 @@ test('「답한 기록 모두 지우기」는 보낸·대화창에서 답한 묶
   await $.tool.call(INPUT as any)
   await $.tool.call(INPUT as any)
   await answerFirst($)
-  await $.prompt.submit({ text: 'q2 1-1, 2-1' })
+  await $.prompt.submit({ text: 'q2 1-1, 2-1' } as any)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ key: 'clearsent' }))?.props.label).toBe('답한 기록 모두 지우기 (2)')
@@ -471,7 +484,7 @@ test('preview가 있는 선택지는 고르거나 「미리보기」를 누르�
 test('도구 결과 블록에 preview를 선택지 아래 코드 블록으로 넣는다', async ($, on) => {
   await setup($, on)
   const ran = (await $.tool.call(PREVIEW_INPUT as any)) as any
-  const text = String(ran.result ?? JSON.stringify(ran))
+  const text = textOf(ran)
   expect(text).toContain('- 1) 두 칸 — 왼쪽 목록\n  ```\n  +------+------+\n  | 목록 | 본문 |\n  +------+------+\n  ```')
   // 본문에 ``` 가 있으면 더 긴 울타리로 감싼다.
   expect(text).toContain('- 2) 한 칸\n  ````\n  ```ts\n  const a = 1\n  ```\n  ````')
@@ -494,7 +507,7 @@ test('preview가 문자열이 아니거나 비었으면 버린다', async ($, on
       },
     ],
   } as any)) as any
-  expect(String(ran.result ?? JSON.stringify(ran))).not.toContain('```')
+  expect(textOf(ran)).not.toContain('```')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ key: 'pv:q1:0:0' })).toBeUndefined()
   expect(await ui.find({ key: 'pv:q1:0:1' })).toBeUndefined()
@@ -517,4 +530,28 @@ test('원격 surface만 있어도 ask는 지금처럼 패널에 쌓는다', asyn
   await setup($, on, ['desktop'])
   const ran = await $.tool.call(INPUT as any)
   expect(JSON.stringify(ran)).toContain('패널에 올렸다')
+})
+
+test('질문 도구 호출은 MCP 서버로 이어지고, 서버에 넘긴 panel_result에 묶음 ID가 있다', async ($, on) => {
+  const seen: any[] = []
+  await setup($, on, ['terminal'], (e: any) => {
+    seen.push(e)
+
+    return { result: callAsk(e).content }
+  })
+  const ran = await $.tool.call(INPUT as any)
+  expect(seen).toHaveLength(1)
+  expect(seen[0].questions).toEqual(INPUT.questions)
+  expect(seen[0].panel_result).toContain('질문 묶음 q1을 패널에 올렸다')
+  expect(textOf(ran)).toBe(seen[0].panel_result)
+})
+
+// 시험 키트는 isError 결과를 흉내 낼 수 없어 거절(PreToolUse 훅이 막은 것과 같다)로 확인한다.
+test('질문 도구가 막히면(훅 거절·서버 오류) 쌓았던 묶음을 거둔다', async ($, on) => {
+  await setup($, on, ['terminal'], () => ({ deny: 'blocked by hook' }))
+  const ran: any = await $.tool.call(INPUT as any)
+  expect(ran.deny).toBeDefined()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'o:q1:0:0' })).toBeUndefined()
+  await ui.unmount()
 })

@@ -12,7 +12,7 @@ import {
 } from './questions.ts'
 
 const EVENT: ToolEvent = {
-  tool: 'mcp__question-panel__ask',
+  tool: 'mcp__plugin_question-panel_qp__ask',
   terminalId: 'term_1',
   workspaceId: 'ws_1',
   input: {
@@ -75,4 +75,9 @@ test('같은 터미널·ID는 바꾸고, 보낸 것만 지운다', () => {
 test('저장소 값이 틀린 모양이면 버린다', () => {
   assert.deepEqual(asBatches(null), [])
   assert.deepEqual(asBatches([{ id: 1 }, 'x']), [])
+})
+
+test('Claude Code PostToolUse의 MCP 결과(content 블록 배열)에서도 묶음 ID를 읽는다', () => {
+  const b = batchFromTool({ ...EVENT, output: [{ type: 'text', text: '질문 묶음 q12을 패널에 올렸다.' }] }, 1000, 'o1')
+  assert.equal(b?.id, 'q12')
 })

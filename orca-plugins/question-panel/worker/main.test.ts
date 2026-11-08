@@ -6,7 +6,7 @@ const ASK = {
   agent: 'claude',
   workspaceId: 'ws_1',
   terminalId: 'term_1',
-  tool: 'mcp__question-panel__ask',
+  tool: 'mcp__plugin_question-panel_qp__ask',
   input: {
     questions: [
       { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres' }, { label: 'SQLite' }] },
@@ -98,6 +98,6 @@ test('보내기 실패는 던지지 않고 이유를 돌려주며 로그에 남�
   }
   assert.equal(r.ok, false)
   assert.match(r.reason, /pty gone/)
-  assert.ok(w.logs.some(l => l.includes('hook mcp__question-panel__ask terminalId=term_1')))
+  assert.ok(w.logs.some(l => l.includes('hook mcp__plugin_question-panel_qp__ask terminalId=term_1')))
   assert.ok(w.logs.some(l => l.includes('qp.answer 받음 id=q2')))
 })
