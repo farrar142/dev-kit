@@ -63,6 +63,33 @@ test('다 고르기 전에는 보내기가 꺼져 있고, 고르면 번호를 �
   await p.unmount()
 })
 
+test('아무것도 안 눌러도 처음 보이는 선택지(첫 항목)로 바로 보낼 수 있다(0.4.2)', async () => {
+  const got: unknown[] = []
+  const single = { ...BATCH, questions: [BATCH.questions[0]] }
+  const multi = { ...BATCH, id: 'q3', questions: [BATCH.questions[0], { ...BATCH.questions[1], options: [{ label: '캐시', description: '' }] }] }
+  const host = mockHost({
+    storage: { batches: [single] },
+    requests: {
+      'qp.answer': input => {
+        got.push(input)
+
+        return { ok: true, reason: '' }
+      },
+    },
+  })
+  const p = await mount(panel, { host })
+  const button = { type: 'Button', text: '답 보내기' }
+  assert.equal(p.find({ type: 'RadioGroup', label: '어느 DB?' })?.props.value, '0')
+  assert.equal(p.find(button)?.props.disabled, false)
+  await p.press(button)
+  assert.deepEqual(got, [{ id: 'q2', terminalId: 'term_1', picks: [[0]] }])
+  await p.unmount()
+  // 여러 개 선택 질문은 기본 체크가 없어서 하나는 눌러야 한다
+  const p2 = await mount(panel, { host: mockHost({ storage: { batches: [multi] } }) })
+  assert.equal(p2.find(button)?.props.disabled, true)
+  await p2.unmount()
+})
+
 test('워커가 실패 이유를 돌려주면 패널 위쪽과 카드에 보인다', async () => {
   const host = mockHost({
     storage: { batches: [BATCH] },

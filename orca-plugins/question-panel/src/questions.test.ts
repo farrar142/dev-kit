@@ -12,6 +12,7 @@ import {
   batchFromTool,
   clearSent,
   complete,
+  withDefaults,
   batchFromInbox,
   mailBody,
   mailTarget,
@@ -211,4 +212,23 @@ test('지운 기록: 키에 만든 시각이 들고, 같은 묶음은 하나만,
   assert.equal(many[0].batch.createdAt, 5)
   assert.deepEqual(asDismissed(JSON.parse(JSON.stringify(one))), one)
   assert.deepEqual(asDismissed([{ key: 1 }, 'x'] as never), [])
+})
+
+test('withDefaults: 하나만 선택은 빈 선택을 첫 항목으로 채우고, 여러 개 선택은 그대로 둔다(0.4.2)', () => {
+  const b = {
+    id: 'q1',
+    terminalId: 't',
+    workspaceId: 'w',
+    createdAt: 1,
+    status: 'pending',
+    questions: [
+      { question: 'a', header: '', multiSelect: false, options: [{ label: 'x', description: '' }, { label: 'y', description: '' }] },
+      { question: 'b', header: '', multiSelect: true, options: [{ label: 'x', description: '' }] },
+    ],
+  } as const
+  const q = b as unknown as Parameters<typeof withDefaults>[0]
+  assert.deepEqual(withDefaults(q, []), [[0], []])
+  assert.deepEqual(withDefaults(q, [[1], [0]]), [[1], [0]])
+  assert.equal(complete(q, withDefaults(q, [])), false)
+  assert.equal(complete(q, withDefaults(q, [[], [0]])), true)
 })

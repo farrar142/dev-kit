@@ -97,6 +97,10 @@ orca-plugins/
 
 ## 바뀐 것
 
+### 2026-11-08 — Orca 질문 패널 0.4.2: 처음부터 선택돼 보이는 선택지로 바로 보내기
+
+- 하나만 선택 질문은 라디오가 첫 항목 체크 모양인데 답 저장소는 비어 있어 「답 보내기」가 꺼져 있었다. 이제 안 눌러도 첫 선택지가 답으로 잡힌다(여러 개 선택은 기본 없음). 근거는 `orca-plugins/question-panel/README.md` 「0.4.2」.
+
 ### 2026-11-08 — Orca 질문 패널 0.4.1·question-panel 0.6.2: 보낸 메일을 실패로 띄우던 것, 정리 기능
 
 - 채팅 세션 답 메일이 실제로 갔는데 카드가 「보내지 못함 — orca 종료 코드 0 — {"ok":true,"result":{"messageId":…}}」로 떴고, 다시 누르면 같은 메일이 또 갔다. Orca 1.4.25x의 `orchestration send`·`run-current`가 `--full` 없이는 짧은 JSON(`result.messageId`, `result.runId`)을 찍는데 긴 모양만 읽었기 때문이다. `run-current`도 못 읽어 Run에 묶인 세션인데 `orca_session_id:`로 보냈다. 이제 실패는 종료 코드≠0·`ok:false`일 때만이고 두 모양을 다 읽는다(MCP 서버도).

@@ -35,6 +35,7 @@ import {
   type Batch,
   type JsonValue,
   type Picks,
+  withDefaults,
 } from './questions.ts'
 
 /** 워커와 같은 저장소 키. 워커가 묶음을 더하면 이 atom도 바뀐다. */
@@ -108,7 +109,7 @@ const clearAll = (what: 'qp.clearSent' | 'qp.clearClosed') => {
 
 async function send(b: Batch) {
   const k = keyOf(b)
-  const chosen = read(picks)[k] ?? []
+  const chosen = withDefaults(b, read(picks)[k] ?? [])
   trace(`답 보내기 누름 ${b.id} terminal=${b.terminalId} picks=${JSON.stringify(chosen)}`)
   set(busy, k)
   set(notice, null)
@@ -144,7 +145,7 @@ async function send(b: Batch) {
 
 function BatchCard({ b }: { b: Batch }) {
   const k = keyOf(b)
-  const mine = read(picks)[k] ?? []
+  const mine = withDefaults(b, read(picks)[k] ?? [])
   const n = read(notice)
   // 지금 막 실패한 이유가 있으면 그것을, 없으면 저장된 마지막 실패 이유를 보인다.
   const failure = n !== null && n.key === k ? (n.ok ? null : n.text) : (b.error ?? null)
