@@ -94,6 +94,10 @@ orca-plugins/
 
 ## 바뀐 것
 
+### 2026-11-08 — Orca 질문 패널: 막힘 기록
+
+- Windows 시험에서 Orca 워커에 `agent.tool.after`가 오지 않았다. 원인: Claude Code는 mod 도구(`mcp__question-panel__ask`)에 PreToolUse·PostToolUse 설정 훅을 내보내지 않는다(2.1.319, `matcher "*"`로 확인. Bash는 옴). Orca 도구 훅은 그 설정 훅을 타고 오므로 질문이 Orca에 닿지 않는다. 자세한 것은 `orca-plugins/question-panel/README.md`.
+
 ### 2026-11-08 — Orca 질문 패널 0.2.0: 답이 터미널에 안 들어가던 것 조사·로그
 
 - Windows 첫 시험에서 카드는 떴지만 답이 터미널에 들어가지 않았고 로그가 비었다. Orca 소스상 `terminal.sendText`는 포커스된 worktree의 터미널만 받는다. 거부되면 질문한 workspace를 `workspace.open`으로 연 뒤 다시 보내고(`workspace:read`·`workspace:write` 권한 추가), 워커·패널 모든 단계를 `orca plugin logs`에 남기고, 실패 이유를 패널 위쪽과 카드에 보인다. 시험 15건.
