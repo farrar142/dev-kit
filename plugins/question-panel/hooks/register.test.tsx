@@ -40,10 +40,11 @@ const INPUT = {
   ],
 }
 
-async function setup($: any, on: any) {
+async function setup($: any, on: any, surfaces: string[] = ['desktop']) {
   mock.clock(on)
   const submitted: string[] = []
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('session.surfaces', () => ({ value: surfaces }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -498,4 +499,19 @@ test('preview가 문자열이 아니거나 비었으면 버린다', async ($, on
   expect(await ui.find({ key: 'pv:q1:0:0' })).toBeUndefined()
   expect(await ui.find({ key: 'pv:q1:0:1' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('surface가 없는 세션(Orca 채팅 등)에서는 ask를 거부해 AskUserQuestion으로 돌리고 큐에 쌓지 않는다', async ($, on) => {
+  await setup($, on, [])
+  const ran = await $.tool.call(INPUT as any)
+  expect(JSON.stringify(ran)).toContain('AskUserQuestion')
+  expect(JSON.stringify(ran)).not.toContain('패널에 올렸다')
+  const cmd = await $.command.run({ command: 'questions' } as any)
+  expect(JSON.stringify(cmd)).toContain('AskUserQuestion으로 받습니다')
+})
+
+test('원격 surface만 있어도 ask는 지금처럼 패널에 쌓는다', async ($, on) => {
+  await setup($, on, ['desktop'])
+  const ran = await $.tool.call(INPUT as any)
+  expect(JSON.stringify(ran)).toContain('패널에 올렸다')
 })
