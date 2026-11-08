@@ -1,6 +1,6 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.2.0 — 막힘: 아래 「막힌 곳」)
+# 질문 패널 (Orca 플러그인, 시제품 0.3.0 — Claude Code question-panel 0.6.0 이상과 함께)
 
-> **막힌 곳(2026-11-08 확인).** Claude Code는 mod 도구(`mcp__question-panel__ask`는 hooks 모듈이 등록하는 mod 도구다) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 내보내지 않는다. Claude Code 2.1.319에서 `matcher: "*"` 훅으로 확인했다. 같은 세션의 `Bash` 호출은 Pre·Post가 둘 다 왔고, 질문 도구는 둘 다 오지 않았다. Orca의 `agent.tool.after`는 이 설정 훅(`orca-agent-hook`)을 타고 오므로 질문이 Orca 워커에 닿지 않는다. Windows 시험(Orca 1.4.253)에서도 「worker 시작」 뒤로 훅 줄이 0이었다. Orca 쪽 필터 문제가 아니다: 1.4.253의 `agent-tool-call-reader.ts`에는 도구 이름 필터가 없다. 아래 흐름은 질문 도구가 훅을 타는 경우의 설계로 남긴다.
+> **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
 Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
@@ -9,7 +9,7 @@ Claude Code 마켓플레이스 플러그인이 아니다. Orca 플러그인(`orc
 ## 흐름
 
 ```
-Claude(Orca 터미널) ── mcp__question-panel__ask ──▶ Claude Code question-panel: 질문 묶음 q3 를 쌓고 블록을 돌려줌
+Claude(Orca 터미널) ── mcp__plugin_question-panel_qp__ask ──▶ Claude Code question-panel: 질문 묶음 q3 를 쌓고 블록을 돌려줌
         │                                              (Claude는 턴을 끝낸다)
         └─ Orca agent.tool.after 훅 ──▶ 워커: 입력(질문)·결과(q3)·terminalId 를 storage("batches")에 저장
                                               │
@@ -27,7 +27,7 @@ Claude(Orca 터미널) ── mcp__question-panel__ask ──▶ Claude Code que
 
 | 세션 | 질문 카드 | 답 넣기 | 근거 |
 | --- | --- | --- | --- |
-| Orca 터미널에서 도는 Claude Code | **안 됨**(mod 도구라 훅이 없음) | 경로는 있음(`terminal.sendText`) | 위 「막힌 곳」 |
+| Orca 터미널에서 도는 Claude Code(question-panel 0.6.0+) | 됨(MCP 도구라 훅을 탐) | 경로는 있음(`terminal.sendText`) | 위 「풀림」 |
 | Orca 채팅 UI(stream-json, `ORCA_STRUCTURED_SESSION=1`) | **안 됨** | **안 됨** | 아래 「채팅 세션이 막힌 까닭」 |
 | SSH·WSL 호스트의 에이전트 | 안 됨 | — | Orca 문서: 도구 훅은 SSH·WSL에 아직 없다 |
 
@@ -59,7 +59,7 @@ orca plugin open local.question-panel --panel questions --json
 - `terminal.sendText`는 **지금 포커스된 worktree에 그 터미널이 있을 때만** 받는다(Orca `plugin-host-method-bindings.ts`: `terminal is outside the active worktree`·`no active worktree`로 거부). 0.1.0은 이 오류를 패널에 제대로 못 보였다. 0.2.0은 거부되면 질문 훅이 준 `workspaceId`로 `workspace.open` 한 뒤 한 번 더 보낸다.
 - 훅의 `terminalId`와 `sendText`가 받는 id는 같은 것(터미널 handle)이다(`agent-tool-call-reader.ts`의 `setAgentToolHookTerminalResolver`).
 - 모든 단계가 `orca plugin logs local.question-panel --json`에 남는다. 워커 줄은 `[question-panel] …`, 패널 줄은 `[frame] … [question-panel/panel] …`:
-  `worker 시작` → `hook mcp__question-panel__ask terminalId=… workspaceId=… output=…` → `hook: 묶음 qN 저장` → (누르면) 패널 `답 보내기 누름` → `qp.answer 받음` → `포커스 workspace=… 터미널=… 대상 포함=true|false` → `sendText accepted=…` 또는 `sendText 실패: …` → (`workspace.open … 뒤 다시 보냄`) → `묶음 qN 보냄`, 패널 `워커 답 ok=…`.
+  `worker 시작` → `hook mcp__plugin_question-panel_qp__ask terminalId=… workspaceId=… output=…` → `hook: 묶음 qN 저장` → (누르면) 패널 `답 보내기 누름` → `qp.answer 받음` → `포커스 workspace=… 터미널=… 대상 포함=true|false` → `sendText accepted=…` 또는 `sendText 실패: …` → (`workspace.open … 뒤 다시 보냄`) → `묶음 qN 보냄`, 패널 `워커 답 ok=…`.
 - 패널 위쪽에 마지막 결과(「보냄」/「보내지 못함」+이유)가 늘 뜨고, 카드 안에도 실패 이유와 「보내는 중」이 뜬다. 카드에는 대상 터미널 id도 보인다.
 - 저장 파일: Orca userData 아래 `plugins-data/local.question-panel/storage.json`(키 `batches`).
 

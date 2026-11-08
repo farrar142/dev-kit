@@ -5,7 +5,9 @@ import type { QuestionPanelBatch, QuestionPanelQuestion } from '../types'
 
 const PANE = 'questions'
 const TITLE = '질문'
-const TOOL = 'mcp__question-panel__ask'
+// 질문 도구는 이 플러그인의 stdio MCP 서버(.mcp.json의 qp, mcp/server.mjs)가 낸다. mod 도구로 내면
+// Claude Code가 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca 등 바깥 도구가 질문을 못 받는다(0.6.0).
+const TOOL = 'mcp__plugin_question-panel_qp__ask'
 const RESOLVE_TOOL = 'mcp__question-panel__resolve'
 
 // 필드가 바뀌면 태그를 올린다: 이전 버전이 저장한 값은 비어 있는 것으로 읽힌다.
@@ -441,50 +443,6 @@ function kit($: RenderSelf, e: RenderEvent) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.tool.register({
-      name: 'ask',
-      description:
-        '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
-      isDeferred: false,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          questions: {
-            type: 'array',
-            minItems: 1,
-            maxItems: 4,
-            items: {
-              type: 'object',
-              properties: {
-                question: { type: 'string', description: '질문 글' },
-                header: { type: 'string', maxLength: 12, description: '12자 이내 짧은 칩 제목' },
-                multiSelect: { type: 'boolean', description: '여러 개 고를 수 있으면 true' },
-                options: {
-                  type: 'array',
-                  minItems: 2,
-                  maxItems: 4,
-                  items: {
-                    type: 'object',
-                    properties: {
-                      label: { type: 'string' },
-                      description: { type: 'string' },
-                      preview: {
-                        type: 'string',
-                        description:
-                          '선택. 이 선택지를 고르면 어떻게 되는지 보여 줄 마크다운(코드·ASCII 목업·설정 예시). 패널에서 고르거나 「미리보기」를 누르면 펼쳐지고, 대화창 블록에는 코드 블록으로 들어간다.',
-                      },
-                    },
-                    required: ['label', 'description'],
-                  },
-                },
-              },
-              required: ['question', 'header', 'options', 'multiSelect'],
-            },
-          },
-        },
-        required: ['questions'],
-      },
-    })
-    await $.tool.register({
       name: 'resolve',
       description:
         '질문 패널의 대기 중인 묶음을 「대화창에서 답함」으로 닫는다. 사용자가 패널 대신 대화창에 글로 답했는데 그 글에 묶음 ID(q4 등)가 없을 때 그 묶음 ID로 부른다. 패널에서 같은 질문에 또 답하는 일을 막는다.',
@@ -509,7 +467,14 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.call', { tool: TOOL }, async ($, e) => {
+  // MCP 서버의 도구는 기본으로 ToolSearch 뒤에 숨는다. 예전 mod 도구(isDeferred: false)처럼
+  // 처음부터 도구 목록에 두어, 모델이 AskUserQuestion 대신 이것을 바로 고르게 한다.
+  on('tool.describe', { tool: TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
+
+  // 질문 도구 호출을 감싼다: 묶음을 쌓고 모델이 읽을 결과 글을 만들어 입력의 panel_result로
+  // MCP 서버에 넘긴다(서버는 그 글을 그대로 돌려준다). next를 거쳐야 MCP 호출과 함께
+  // PreToolUse·PostToolUse 훅이 돌고, 그 tool_response에 「질문 묶음 qN」이 담긴다.
+  on('tool.call', { tool: TOOL }, async ($, e, next) => {
     const questions = normalize(e.questions)
     if (typeof questions === 'string') return { deny: `question-panel: ${questions}` }
     const mode = panelMode(await $.session.surfaces())
@@ -526,28 +491,28 @@ export const register: Register = on => {
       toolUseId: e.tool_use_id,
     }
     await update($, queue, l => [...l, batch])
-    if (mode === 'no-surface') {
-      return {
-        result: [
-          `질문 묶음 ${id}을 쌓았다. 이 세션은 패널 화면이 없다(Orca 채팅 등). 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
-          `답은 대화창의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
-          '',
-          chatBlock(batch),
-        ].join('\n'),
-      }
+    const head =
+      mode === 'no-surface'
+        ? [
+            `질문 묶음 ${id}을 쌓았다. 이 세션은 패널 화면이 없다(Orca 채팅 등). 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+            `답은 대화창의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
+          ]
+        : [
+            `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라.`,
+            `답은 패널의 완료(「[질문 패널 답] …」 메시지)나 대화창의 글(「${id} …」)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
+          ]
+    const panelResult = [...head, '', chatBlock(batch)].join('\n')
+    if (mode === 'panel') {
+      void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
+        if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
+      })
     }
-    void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
-      if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
-    })
 
-    return {
-      result: [
-        `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라.`,
-        `답은 패널의 완료(「[질문 패널 답] …」 메시지)나 대화창의 글(「${id} …」)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
-        '',
-        chatBlock(batch),
-      ].join('\n'),
-    }
+    const ran = await next({ ...e, panel_result: panelResult })
+    // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
+    if (ran.deny !== undefined || ran.isError === true) await update($, queue, l => l.filter(b => b.id !== id))
+
+    return ran
   })
 
   on('tool.call', { tool: RESOLVE_TOOL }, async ($, e) => {
