@@ -22,7 +22,7 @@ import {
   update,
 } from 'orca'
 import './protocol.ts'
-import { asBatches, complete, STORE_KEY, type Batch, type JsonValue, type Picks } from './questions.ts'
+import { asBatches, complete, STORE_KEY, whereOf, type Batch, type JsonValue, type Picks } from './questions.ts'
 
 /** 워커와 같은 저장소 키. 워커가 묶음을 더하면 이 atom도 바뀐다. */
 const stored = atom<JsonValue>(STORE_KEY, [], { persist: 'storage' })
@@ -61,6 +61,17 @@ const trace = (msg: string) => {
   }
 }
 
+// 패널을 열 때마다 워커가 대기 묶음의 터미널이 살아 있는지·제목·workspace 이름을 다시 확인한다.
+// 결과는 저장소를 거쳐 stored atom 으로 돌아와 카드가 다시 그려진다.
+void plugin.request('qp.refresh', {}, { timeoutMs: 20000 }).catch((err: unknown) =>
+  trace(`refresh 실패: ${err instanceof Error ? err.message : String(err)}`),
+)
+
+const removeOne = (b: Batch) => {
+  trace(`카드 지우기 ${b.id} terminal=${b.terminalId}`)
+  void plugin.request('qp.remove', { id: b.id, terminalId: b.terminalId }).catch(() => undefined)
+}
+
 async function send(b: Batch) {
   const k = keyOf(b)
   const chosen = read(picks)[k] ?? []
@@ -96,10 +107,18 @@ function BatchCard({ b }: { b: Batch }) {
   return (
     <Card title={`질문 묶음 ${b.id}`}>
       <Stack gap="md">
-        <Text muted size="xs">
-          <RelativeTime at={b.createdAt} />
-          {` · 터미널 ${b.terminalId}`}
-        </Text>
+        <Row gap="xs">
+          {b.closed === true ? <Badge tone="danger">터미널이 닫힘</Badge> : null}
+          <Text muted size="xs">
+            <RelativeTime at={b.createdAt} />
+            {` · ${whereOf(b)}`}
+          </Text>
+        </Row>
+        {b.closed === true ? (
+          <Callout tone="warning" title="터미널이 닫힘">
+            이 질문을 한 터미널이 닫혀 답을 넣을 곳이 없습니다. 「지우기」로 정리하세요.
+          </Callout>
+        ) : null}
         {b.questions.map((q, qi) => (
           <Stack gap="xs">
             <Row gap="xs">
@@ -132,12 +151,17 @@ function BatchCard({ b }: { b: Batch }) {
         ))}
         {n !== null && n.key === k && !n.ok ? <Callout tone="danger" title="보내지 못함">{n.text}</Callout> : null}
         {read(busy) === k ? <Spinner label="터미널에 보내는 중" /> : null}
-        <Row justify="end">
+        <Row justify="end" gap="xs">
+          {b.closed === true ? (
+            <Button variant="ghost" size="sm" icon="delete" onPress={() => removeOne(b)}>
+              지우기
+            </Button>
+          ) : null}
           <Button
             variant="solid"
             tone="accent"
             icon="check"
-            disabled={!complete(b, mine) || read(busy) !== null}
+            disabled={b.closed === true || !complete(b, mine) || read(busy) !== null}
             onPress={() => send(b)}
           >
             답 보내기
@@ -153,6 +177,7 @@ export default function Panel() {
   const pending = all.filter(b => b.status === 'pending').sort((a, b) => b.createdAt - a.createdAt)
   const sent = all.filter(b => b.status === 'sent')
   const last = read(notice)
+  const closed = pending.filter(b => b.closed === true)
 
   return (
     <Stack gap="md">
@@ -164,6 +189,13 @@ export default function Panel() {
         <Callout tone={last.ok ? 'success' : 'danger'} title={last.ok ? '보냄' : '보내지 못함'}>
           {last.text}
         </Callout>
+      )}
+      {closed.length === 0 ? null : (
+        <Row justify="end">
+          <Button variant="ghost" size="sm" icon="delete" onPress={() => void plugin.request('qp.clearClosed', {})}>
+            {`닫힌 터미널 카드 ${closed.length}개 지우기`}
+          </Button>
+        </Row>
       )}
       {pending.length === 0 ? (
         <EmptyState

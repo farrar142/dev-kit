@@ -8,6 +8,8 @@ import {
   clearSent,
   complete,
   markSent,
+  whereOf,
+  workspaceNameFrom,
   type ToolEvent,
 } from './questions.ts'
 
@@ -80,4 +82,14 @@ test('저장소 값이 틀린 모양이면 버린다', () => {
 test('Claude Code PostToolUse의 MCP 결과(content 블록 배열)에서도 묶음 ID를 읽는다', () => {
   const b = batchFromTool({ ...EVENT, output: [{ type: 'text', text: '질문 묶음 q12을 패널에 올렸다.' }] }, 1000, 'o1')
   assert.equal(b?.id, 'q12')
+})
+
+test('workspace 이름을 모르면 workspace id의 마지막 경로 이름을 쓴다(Windows 경로 포함)', () => {
+  assert.equal(workspaceNameFrom('d3076cdb::C:/Users/me/orca/workspaces/Sandcorp/data'), 'data')
+  assert.equal(workspaceNameFrom('r::C:\\Users\\me\\proj\\'), 'proj')
+  assert.equal(workspaceNameFrom(null), null)
+  const b = batchFromTool(EVENT, 1, 'o1')
+  if (b === null) return assert.fail('묶음이 없다')
+  assert.equal(whereOf(b), 'ws_1 · term_1')
+  assert.equal(whereOf({ ...b, workspaceName: 'Data', terminalTitle: 'claude' }), 'Data · claude')
 })

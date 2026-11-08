@@ -92,3 +92,41 @@ test('워커 요청이 거부돼도(예: unavailable) 이유가 보인다', asyn
   assert.ok(p.find({ type: 'Callout', text: /워커에 닿지 못했습니다 \(unavailable\)/ }))
   await p.unmount()
 })
+
+test('카드에 workspace 이름·터미널 제목을 보이고, 닫힌 터미널 카드는 보내기를 막고 지우기를 준다', async () => {
+  const removed: unknown[] = []
+  let cleared = 0
+  const host = mockHost({
+    storage: {
+      batches: [
+        { ...BATCH, workspaceName: 'Data', terminalTitle: 'claude 질문' },
+        { ...BATCH, terminalId: 'term_old', closed: true },
+      ],
+    },
+    requests: {
+      'qp.remove': input => {
+        removed.push(input)
+
+        return { ok: true, reason: '' }
+      },
+      'qp.clearClosed': () => {
+        cleared += 1
+
+        return { ok: true, reason: '' }
+      },
+    },
+  })
+  const p = await mount(panel, { host })
+  assert.ok(p.find({ type: 'Text', text: /Data · claude 질문/ }))
+  // 제목을 모르면 workspace id의 마지막 이름과 터미널 id로.
+  assert.ok(p.find({ type: 'Text', text: /ws_1 · term_old/ }))
+  assert.equal(p.findAll({ type: 'Badge', text: '터미널이 닫힘' }).length, 1)
+  const sends = p.findAll({ type: 'Button', text: '답 보내기' })
+  assert.equal(sends.length, 2)
+  assert.equal(sends[1].props.disabled, true)
+  await p.press({ type: 'Button', text: '지우기' })
+  assert.deepEqual(removed, [{ id: 'q2', terminalId: 'term_old' }])
+  await p.press({ type: 'Button', text: '닫힌 터미널 카드 1개 지우기' })
+  assert.equal(cleared, 1)
+  await p.unmount()
+})

@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.3.1 — Claude Code question-panel 0.6.0 이상과 함께)
+# 질문 패널 (Orca 플러그인, 시제품 0.3.2 — Claude Code question-panel 0.6.0 이상과 함께)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -40,7 +40,7 @@ Claude(Orca 터미널) ── mcp__plugin_question-panel_qp__ask ──▶ Claud
 
 ## 설치 (Orca 1.4.248 이상, 데스크톱)
 
-플러그인은 코드를 돌리므로 Orca가 승인을 묻는다(`terminal:send`·`storage:own`·`notifications:show`·`workspace:read`·`workspace:write`, 훅 `agent.tool.after`). `workspace:*`는 0.2.0에서 더했다: 포커스 확인과, 질문한 터미널의 workspace로 옮겨 다시 보내기.
+플러그인은 코드를 돌리므로 Orca가 승인을 묻는다(`terminal:send`·`storage:own`·`notifications:show`·`workspace:read`·`workspace:write`, 훅 `agent.tool.after`). `workspace:*`는 0.2.0에서 더했다: 포커스 확인과, 질문한 터미널의 workspace로 옮겨 다시 보내기. `terminal:read`는 0.3.2에서 더했다: 질문한 터미널이 닫혔는지 확인(내용은 읽지 않고 1줄 읽기의 성공·실패만 본다).
 
 ```sh
 # 이 저장소를 받은 뒤, Orca 호스트의 절대 경로로
@@ -58,6 +58,7 @@ orca plugin open local.question-panel --panel questions --json
 
 - `terminal.sendText`는 **지금 포커스된 worktree에 그 터미널이 있을 때만** 받는다(Orca `plugin-host-method-bindings.ts`: `terminal is outside the active worktree`·`no active worktree`로 거부). 0.1.0은 이 오류를 패널에 제대로 못 보였다. 0.2.0은 거부되면 질문 훅이 준 `workspaceId`로 `workspace.open` 한 뒤 한 번 더 보낸다.
 - **0.3.1: `workspace.open` 뒤 포커스가 바뀔 때까지 기다린다.** `workspace.open`은 worktree를 활성으로 바꾸라고 요청만 하고 곧 돌아온다(`worktree.activate` effect). `sendText`가 읽는 활성 worktree(저장된 workspace 세션의 `activeWorktreeId`, `terminal-interactive-wait.ts`의 `resolveActiveWorktreeContext`)는 그 뒤에 바뀐다. 1.4.253 Windows 시험에서 0.3.0은 14ms 뒤 다시 보내 같은 오류로 실패했다. 0.3.1은 `workspace.readContext`의 터미널 목록에 대상이 들 때까지(`sendText`와 같은 검사) 100ms마다 최대 3초 기다린 뒤 보낸다. 3초가 지나도 안 바뀌면 한 번 더 보내 보고, 그래도 거부되면 「그 workspace로 옮긴 뒤 다시 누르세요」를 보인다.
+- **0.3.2: 닫힌 터미널의 카드.** 닫힌 터미널의 handle로 `terminal.read`를 부르면 Orca가 `terminal_handle_stale`로 거부한다(`pty-terminal-summary.ts`의 `getLiveLeafForHandle`, 포커스와 무관). 워커는 패널을 열 때(`qp.refresh`), 새 질문이 올 때, 답 보내기 직전에 이것으로 대기 묶음을 확인한다. 닫혔으면 카드에 「터미널이 닫힘」을 띄우고 보내기를 막는다. 카드마다 「지우기」 버튼이 있고, 패널 위쪽에 「닫힌 터미널 카드 N개 지우기」 버튼이 있다. 다른 오류(권한 등)는 닫힘으로 보지 않는다. 카드에는 `workspace 이름 · 터미널 제목`이 보인다. 제목은 질문할 때 그 터미널이 포커스된 workspace에 있어야 알 수 있고, 모르면 터미널 id를 보인다. workspace 이름은 `workspace.list`에서 가져오고, 없으면 workspace id의 마지막 경로 이름을 쓴다.
 - 포커스와 무관하게 기존 터미널에 글을 넣는 플러그인 메서드는 1.4.253에 없다. 플러그인 host 메서드 27개 중 터미널에 글을 넣는 것은 `terminal.sendText`뿐이다. Orca 내부의 `agent.launch` effect에는 기존 터미널을 다시 쓰는 `reuseTerminal`+`prompt`가 있지만, 플러그인의 `agent.launch`는 늘 새 터미널을 만들어 그 길을 열어 주지 않는다.
 - 훅의 `terminalId`와 `sendText`가 받는 id는 같은 것(터미널 handle)이다(`agent-tool-call-reader.ts`의 `setAgentToolHookTerminalResolver`).
 - 모든 단계가 `orca plugin logs local.question-panel --json`에 남는다. 워커 줄은 `[question-panel] …`, 패널 줄은 `[frame] … [question-panel/panel] …`:

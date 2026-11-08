@@ -24,6 +24,12 @@ export type Batch = {
   status: 'pending' | 'sent'
   /** 보낸 답 줄(보낸 뒤 기록용). */
   sent?: string
+  /** 질문한 터미널의 제목(포커스된 workspace에서 보였을 때만 안다, 0.3.2부터). */
+  terminalTitle?: string
+  /** 질문한 workspace의 이름(workspace.list, 0.3.2부터). */
+  workspaceName?: string
+  /** 질문한 터미널이 닫혔다(terminal.read 가 terminal_handle_stale, 0.3.2부터). 보내기를 막는다. */
+  closed?: boolean
 }
 
 /** agent.tool.after 훅 이벤트에서 쓰는 부분. */
@@ -129,3 +135,30 @@ export const asBatches = (v: JsonValue | null): Batch[] =>
           : [],
       )
     : []
+
+/** 카드에 보일 「어디서 물었나」: workspace 이름 · 터미널 제목(모르면 터미널 id). */
+export const whereOf = (b: Batch): string => {
+  const ws = b.workspaceName ?? workspaceNameFrom(b.workspaceId)
+
+  return [ws, b.terminalTitle ?? b.terminalId].filter(x => x !== null && x !== '').join(' · ')
+}
+
+/** workspace.list 에 없을 때 workspace id(「repo::C:/…/data」)의 마지막 경로 이름. */
+export const workspaceNameFrom = (workspaceId: string | null): string | null => {
+  if (workspaceId === null) return null
+  const tail = workspaceId.split('::').pop() ?? ''
+  const name = tail.split(/[\\/]/).filter(Boolean).pop()
+
+  return name === undefined || name === '' ? null : name
+}
+
+/** 같은 터미널·같은 ID 묶음에 필드를 덧씌운다. */
+export const patchBatch = (list: readonly Batch[], id: string, terminalId: string, patch: Partial<Batch>): Batch[] =>
+  list.map(b => (b.id === id && b.terminalId === terminalId ? { ...b, ...patch } : b))
+
+/** 묶음 하나를 지운다. */
+export const removeBatch = (list: readonly Batch[], id: string, terminalId: string): Batch[] =>
+  list.filter(b => !(b.id === id && b.terminalId === terminalId))
+
+/** 터미널이 닫힌 대기 묶음을 모두 지운다. */
+export const clearClosed = (list: readonly Batch[]): Batch[] => list.filter(b => b.closed !== true)
