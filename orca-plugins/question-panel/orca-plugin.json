@@ -3,7 +3,7 @@
   "execution": "trusted-worker",
   "id": "question-panel",
   "name": "질문 패널",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Claude Code의 question-panel 질문 도구(MCP 서버 qp의 ask, 0.6.0부터)가 올린 객관식 질문을 오른쪽 사이드바 카드로 띄우고, 고른 답을 그 Claude 터미널에 한 줄로 넣는다. 질문한 Claude는 턴을 끝내고 기다리지 않는다.",
   "engines": {
     "orca": ">=1.4.248"

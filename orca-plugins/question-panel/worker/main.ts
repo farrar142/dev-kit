@@ -33,6 +33,14 @@ export const describeError = (err: unknown): string => {
 // terminal.sendText 는 포커스된 worktree에 그 터미널이 있을 때만 받는다(Orca plugin-host-method-bindings).
 const OUTSIDE_FOCUS = /outside the active worktree|no active worktree/
 
+// workspace.open 은 worktree를 활성으로 바꾸라고 요청만 하고 돌아온다. sendText 가 읽는 활성 worktree
+// (저장된 workspace 세션의 activeWorktreeId)는 그 뒤에 바뀐다. 1.4.253 Windows에서 14ms 뒤 다시 보내자
+// 여전히 포커스 밖이었다. 그래서 readContext 의 터미널 목록에 대상이 들 때까지(sendText 와 같은 검사) 기다린다.
+export const FOCUS_WAIT_MS = 3000
+export const FOCUS_POLL_MS = 100
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
 export default function activate(orca: OrcaWorkerApi) {
   const log = (msg: string) => orca.log(`[question-panel] ${msg}`)
   const load = async () => asBatches((await orca.storage.get(STORE_KEY)) as JsonValue | null)
@@ -66,6 +74,17 @@ export default function activate(orca: OrcaWorkerApi) {
       .catch(err => log(`알림 실패: ${describeError(err)}`))
   })
 
+  /** 대상 터미널이 포커스된 worktree에 들 때까지 기다린다. 들면 걸린 ms, 시간 안에 안 들면 null. */
+  const waitFocus = async (terminalId: string): Promise<number | null> => {
+    const start = Date.now()
+    for (;;) {
+      const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
+      if (ctx?.terminals.some(t => t.id === terminalId) === true) return Date.now() - start
+      if (Date.now() - start >= FOCUS_WAIT_MS) return null
+      await sleep(FOCUS_POLL_MS)
+    }
+  }
+
   const send = async (b: Batch, line: string): Promise<Result> => {
     const attempt = async (): Promise<Result> => {
       const { accepted } = await orca.host.call('terminal.sendText', { terminalId: b.terminalId, text: line, enter: true })
@@ -86,7 +105,12 @@ export default function activate(orca: OrcaWorkerApi) {
       // 질문한 터미널이 지금 포커스된 workspace 밖이다. 그 workspace를 연 뒤 한 번 더.
       try {
         await orca.host.call('workspace.open', { workspaceId: b.workspaceId })
-        log(`workspace.open ${b.workspaceId} 뒤 다시 보냄`)
+        const waited = await waitFocus(b.terminalId)
+        log(
+          waited === null
+            ? `workspace.open ${b.workspaceId} 뒤 ${FOCUS_WAIT_MS}ms 안에 포커스가 대상 터미널로 안 바뀜, 그래도 한 번 보냄`
+            : `workspace.open ${b.workspaceId} 뒤 포커스 바뀜(${waited}ms), 다시 보냄`,
+        )
 
         return await attempt()
       } catch (err2) {
