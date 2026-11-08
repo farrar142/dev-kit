@@ -70,16 +70,32 @@ export default function activate(orca: OrcaWorkerApi) {
     return { ...(title === undefined ? {} : { terminalTitle: title }), ...(name === undefined ? {} : { workspaceName: name }) }
   }
 
-  /** 터미널이 닫혔나. 다른 오류(권한·연결)는 모른다로 보고 막지 않는다. */
+  /**
+   * 터미널이 닫혔나. 닫힘 = terminal.read 가 stale 로 거부하거나, 출력(lines)이 비었다.
+   * 1.4.253 에서 닫힌(exited) handle 은 거부 대신 빈 tail 을 돌려주는데, 플러그인 host 의 terminal.read
+   * 는 런타임 답의 status 를 버리고 {lines, truncated} 만 준다(plugin-host-workspace-method-bindings.ts).
+   * 질문을 낸 에이전트가 살아 있는 터미널에는 늘 출력이 있으므로 빈 출력을 닫힘으로 본다.
+   * 다른 오류(권한·연결)는 판정 불가로 보고 막지 않는다. 판정마다 한 줄 남긴다.
+   */
   const isClosed = async (terminalId: string): Promise<boolean> => {
     try {
-      await orca.host.call('terminal.read', { terminalId, maxLines: 1 })
+      const read = await orca.host.call('terminal.read', { terminalId, maxLines: 1 })
+      if (read.lines.length === 0) {
+        log(`닫힘 판정 ${terminalId}: 닫힘(terminal.read 출력이 비었다 — exited)`)
+
+        return true
+      }
+      log(`닫힘 판정 ${terminalId}: 살아 있음`)
 
       return false
     } catch (err) {
       const why = describeError(err)
-      if (STALE.test(why)) return true
-      log(`terminal.read ${terminalId} 실패(닫힘으로 보지 않음): ${why}`)
+      if (STALE.test(why)) {
+        log(`닫힘 판정 ${terminalId}: 닫힘(terminal_handle_stale)`)
+
+        return true
+      }
+      log(`닫힘 판정 ${terminalId}: 판정 불가(닫힘으로 보지 않음): ${why}`)
 
       return false
     }
