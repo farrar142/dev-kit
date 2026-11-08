@@ -7,6 +7,7 @@ import {
   asDismissed,
   cliErrorCode,
   DISMISSED_MAX,
+  DISMISSED_TTL_MS,
   dismissKey,
   asBatches,
   batchFromTool,
@@ -209,9 +210,31 @@ test('지운 기록: 키에 만든 시각이 들고, 같은 묶음은 하나만,
     0,
   )
   assert.equal(many.length, DISMISSED_MAX)
-  assert.equal(many[0].batch.createdAt, 5)
+  assert.equal(many[0].key, 'term_1/q1@5')
   assert.deepEqual(asDismissed(JSON.parse(JSON.stringify(one))), one)
   assert.deepEqual(asDismissed([{ key: 1 }, 'x'] as never), [])
+})
+
+test('지운 기록(0.4.3): 묶음 전체는 마지막 되돌릴 지우기에만, 오래된 기록은 버린다', () => {
+  const b = { ...batchFromTool(EVENT, 7, 'x')!, id: 'q1' }
+  const c = { ...b, id: 'q2' }
+  // 정리 버튼(되돌리기 없음)은 키·시각만 남긴다.
+  assert.deepEqual(addDismissed([], [b], 100), [{ key: 'term_1/q1@7', at: 100 }])
+  // 카드 지우기는 되돌리기용 묶음을 붙이고, 다음 지우기 때 앞 것의 묶음을 떼어 낸다.
+  const first = addDismissed([], [b], 100, true)
+  assert.equal(first[0].batch?.id, 'q1')
+  const second = addDismissed(first, [c], 200, true)
+  assert.deepEqual(second[0], { key: 'term_1/q1@7', at: 100 })
+  assert.equal(second[1].batch?.id, 'q2')
+  // 일주일 넘은 기록은 다음에 더할 때 버린다.
+  assert.deepEqual(
+    addDismissed(first, [c], 100 + DISMISSED_TTL_MS + 1).map(d => d.key),
+    ['term_1/q2@7'],
+  )
+  // 0.4.2가 남긴 묶음 든 기록도 읽고, 다음에 더할 때 묶음을 떼어 낸다.
+  const old = asDismissed(JSON.parse(JSON.stringify(first)))
+  assert.equal(old[0].batch?.id, 'q1')
+  assert.equal(JSON.stringify(addDismissed(old, [c], 300)).includes('questions'), false)
 })
 
 test('withDefaults: 하나만 선택은 빈 선택을 첫 항목으로 채우고, 여러 개 선택은 그대로 둔다(0.4.2)', () => {

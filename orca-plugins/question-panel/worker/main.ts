@@ -84,11 +84,14 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   const loadDismissed = async () => asDismissed((await orca.storage.get(DISMISSED_KEY)) as JsonValue | null)
 
   /** 정리 하나: drop 에 걸린 묶음을 지우고 지운 기록에 남긴다(되돌리기·다시 뜨지 않게). 지운 수. */
-  const dismiss = async (drop: (b: Batch) => boolean, why: string): Promise<number> => {
+  const dismiss = async (drop: (b: Batch) => boolean, why: string, undoable = false): Promise<number> => {
     const { keep, removed } = splitBy(await load(), drop)
     if (removed.length === 0) return 0
     await save(keep)
-    await orca.storage.set(DISMISSED_KEY, addDismissed(await loadDismissed(), removed, Date.now()) as unknown as JsonValue)
+    await orca.storage.set(
+      DISMISSED_KEY,
+      addDismissed(await loadDismissed(), removed, Date.now(), undoable) as unknown as JsonValue,
+    )
     log(`${why}: ${removed.map(b => `${b.id}(${b.terminalId})`).join(', ')} 지움`)
 
     return removed.length
@@ -436,8 +439,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   }
 
   orca.panels.handle('qp.refresh', async () => {
+    const start = Date.now()
     await ingest()
     await refresh()
+    log(`qp.refresh 끝(${Date.now() - start}ms)`)
 
     return { ok: true, reason: '' }
   })
@@ -445,15 +450,15 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   // 정리(0.4.1). 지운 묶음은 지운 기록(DISMISSED_KEY)에 남겨 되돌릴 수 있고, 질문 폴더에 같은 파일이
   // 남아 있어도 다시 띄우지 않는다(ingest).
   orca.panels.handle('qp.remove', async ({ id, terminalId }) => {
-    const n = await dismiss(b => b.id === id && b.terminalId === terminalId, '카드 지우기')
+    const n = await dismiss(b => b.id === id && b.terminalId === terminalId, '카드 지우기', true)
 
     return n === 0 ? { ok: false, reason: '이미 지웠거나 없는 묶음입니다.' } : { ok: true, reason: '' }
   })
 
   orca.panels.handle('qp.undoRemove', async ({ id, terminalId }) => {
     const all = await loadDismissed()
-    const hit = all.filter(d => d.batch.id === id && d.batch.terminalId === terminalId).pop()
-    if (hit === undefined) return { ok: false, reason: '되돌릴 묶음이 없습니다.' }
+    const hit = all.filter(d => d.batch?.id === id && d.batch.terminalId === terminalId).pop()
+    if (hit?.batch === undefined) return { ok: false, reason: '되돌릴 묶음이 없습니다.' }
     await save(addBatch(await load(), hit.batch))
     await orca.storage.set(DISMISSED_KEY, all.filter(d => d !== hit) as unknown as JsonValue)
     log(`묶음 ${id}(terminal ${terminalId}) 되돌림`)
