@@ -70,7 +70,7 @@ const runCli = (program: string, args: string[], extraEnv: Record<string, string
         code,
         stdout,
         stderr,
-        ...(timedOut ? { error: `orca 가 ${CLI_TIMEOUT_MS}ms 안에 끝나지 않음` } : {}),
+        ...(timedOut ? { error: `orca 가 ${CLI_TIMEOUT_MS}ms 안에 끝나지 않음`, timedOut: true } : {}),
       })
     })
   })

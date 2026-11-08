@@ -123,6 +123,10 @@ test('채팅 세션 판정과 run-current 읽기', () => {
   assert.equal(parseRunId(JSON.stringify({ ok: true, result: { run: { id: 'run_ab' } } })), 'run_ab')
   assert.equal(parseRunId(JSON.stringify({ ok: true, result: { run: null } })), null)
   assert.equal(parseRunId('garbage'), null)
+  // 1.4.25x 기본(짧은 모양): {ok, result: {runId}}
+  assert.equal(parseRunId('{"ok":true,"result":{"runId":"run_xxxx","objective":"o"}}\n'), 'run_xxxx')
+  assert.equal(parseRunId('{"ok":true,"result":{"runId":null}}'), null)
+  assert.equal(parseRunId('warn: x\n{"ok":true,"result":{"runId":"run_ab"}}'), 'run_ab')
 })
 
 test('server.mjs: Orca 채팅 세션 환경이면 집 폴더에 질문 파일을 남기고(orca 를 못 띄우면 Run 없이) 안내를 붙인다', async () => {

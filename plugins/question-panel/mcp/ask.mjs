@@ -107,15 +107,26 @@ export const orcaChat = env => {
 /** mod가 만든 결과 글의 「질문 묶음 q3」. */
 export const batchIdOf = text => text.match(/질문 묶음 (q\d+)/)?.[1] ?? null
 
-/** `orca orchestration run-current --json` 의 Run id(없거나 못 읽으면 null). */
+/**
+ * `orca orchestration run-current --json` 의 Run id(없거나 못 읽으면 null).
+ * 1.4.25x 기본은 짧은 모양 `{ok, result: {runId}}`, `--full`·옛 CLI는 `{ok, result: {run: {id}}}`.
+ * 앞에 다른 줄이 끼어도 끝에서부터 JSON 줄을 찾는다.
+ */
 export const parseRunId = stdout => {
-  try {
-    const id = JSON.parse(stdout)?.result?.run?.id
-
-    return typeof id === 'string' && /^run_[A-Za-z0-9_-]+$/.test(id) ? id : null
-  } catch {
-    return null
+  const tryJson = t => {
+    try {
+      return JSON.parse(t)
+    } catch {
+      return null
+    }
   }
+  const text = String(stdout ?? '')
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('{'))
+  const j = tryJson(text.trim()) ?? lines.reverse().map(tryJson).find(v => v !== null) ?? null
+  const r = j?.result
+  const id = typeof r?.runId === 'string' ? r.runId : r?.run?.id
+
+  return typeof id === 'string' && /^run_[A-Za-z0-9_-]+$/.test(id) ? id : null
 }
 
 /** 질문 파일 하나(Orca 질문 패널 batchFromInbox 가 읽는 모양). */

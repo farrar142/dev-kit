@@ -2,7 +2,12 @@
 import { assert, test } from 'orca/testing'
 import {
   addBatch,
+  addDismissed,
   answerLine,
+  asDismissed,
+  cliErrorCode,
+  DISMISSED_MAX,
+  dismissKey,
   asBatches,
   batchFromTool,
   clearSent,
@@ -142,11 +147,68 @@ test('CLI 답 읽기: run-current 의 Run·없음·못 읽음, send 의 성공·
   })
   assert.deepEqual(
     parseSendResult({ code: 1, stdout: JSON.stringify({ ok: false, error: { code: 'x', message: 'y' } }), stderr: '' }),
-    { ok: false, why: 'x: y' },
+    { ok: false, why: 'x: y', maybeSent: false },
   )
-  assert.deepEqual(parseSendResult({ code: null, stdout: '', stderr: '', error: 'ENOENT' }), { ok: false, why: 'ENOENT' })
+  assert.deepEqual(parseSendResult({ code: null, stdout: '', stderr: '', error: 'ENOENT' }), {
+    ok: false,
+    why: 'ENOENT',
+    maybeSent: false,
+  })
   assert.deepEqual(parseSendResult({ code: 2, stdout: '', stderr: 'a\nUnknown command: orchestration' }), {
     ok: false,
     why: 'orca 종료 코드 2 — a Unknown command: orchestration',
+    maybeSent: true,
   })
+})
+
+// 0.4.1: Windows Orca 1.4.253 의 실제 출력. 메일은 갔는데 0.4.0 은 「보내지 못함」으로 띄웠다.
+test('CLI 짧은 결과(1.4.25x 기본): send 의 messageId, run-current 의 runId 를 읽는다', () => {
+  const real = '{"ok":true,"result":{"messageId":"msg_6e38a5a1a9b0"}}'
+  assert.deepEqual(parseSendResult({ code: 0, stdout: `${real}\n`, stderr: '' }), { ok: true, messageId: 'msg_6e38a5a1a9b0' })
+  // 앞에 다른 줄이 끼어도, 종료 코드 0 인데 모르는 모양이어도 성공이다(실패는 코드≠0·ok:false 만).
+  assert.deepEqual(parseSendResult({ code: 0, stdout: `note: hi\n${real}`, stderr: '' }), {
+    ok: true,
+    messageId: 'msg_6e38a5a1a9b0',
+  })
+  assert.deepEqual(parseSendResult({ code: 0, stdout: 'Sent msg_1', stderr: '' }), { ok: true, messageId: '' })
+  assert.deepEqual(parseSendResult({ code: 0, stdout: '{"ok":true,"result":{"relay":{"messageId":"msg_r"}}}', stderr: '' }), {
+    ok: true,
+    messageId: 'msg_r',
+  })
+  // 종료 코드 0 이어도 ok:false 면 실패이고, 서버가 거부했으니 보냈을 리 없다.
+  assert.deepEqual(parseSendResult({ code: 0, stdout: '{"ok":false,"error":{"code":"c","message":"m"}}', stderr: '' }), {
+    ok: false,
+    why: 'c: m',
+    maybeSent: false,
+  })
+  // 시간 초과: 돌기는 했으니 보냈을 수 있다.
+  assert.deepEqual(parseSendResult({ code: null, stdout: '', stderr: '', error: 'slow', timedOut: true }), {
+    ok: false,
+    why: 'slow',
+    maybeSent: true,
+  })
+  assert.equal(parseRunCurrent('{"ok":true,"result":{"runId":"run_xxxx","objective":"o"}}'), 'run_xxxx')
+  assert.equal(parseRunCurrent('{"ok":true,"result":{"runId":null}}'), null)
+  assert.equal(parseRunCurrent('{"ok":true,"result":{"runId":"nope"}}'), undefined)
+  assert.equal(parseRunCurrent('{"ok":true,"result":{}}'), undefined)
+  assert.equal(cliErrorCode('{"ok":false,"error":{"code":"session_caller_unknown","message":"x"}}'), 'session_caller_unknown')
+  assert.equal(cliErrorCode('{"ok":true,"result":{"runId":null}}'), null)
+})
+
+test('지운 기록: 키에 만든 시각이 들고, 같은 묶음은 하나만, 오래된 것부터 버린다', () => {
+  const b = { ...batchFromTool(EVENT, 7, 'x')!, id: 'q1' }
+  assert.equal(dismissKey(b), 'term_1/q1@7')
+  const one = addDismissed([], [b], 100)
+  const again = addDismissed(one, [b], 200)
+  assert.equal(again.length, 1)
+  assert.equal(again[0].at, 200)
+  const many = addDismissed(
+    [],
+    Array.from({ length: DISMISSED_MAX + 5 }, (_, i) => ({ ...b, createdAt: i })),
+    0,
+  )
+  assert.equal(many.length, DISMISSED_MAX)
+  assert.equal(many[0].batch.createdAt, 5)
+  assert.deepEqual(asDismissed(JSON.parse(JSON.stringify(one))), one)
+  assert.deepEqual(asDismissed([{ key: 1 }, 'x'] as never), [])
 })

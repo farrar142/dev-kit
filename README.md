@@ -74,7 +74,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -96,6 +96,12 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-08 — Orca 질문 패널 0.4.1·question-panel 0.6.2: 보낸 메일을 실패로 띄우던 것, 정리 기능
+
+- 채팅 세션 답 메일이 실제로 갔는데 카드가 「보내지 못함 — orca 종료 코드 0 — {"ok":true,"result":{"messageId":…}}」로 떴고, 다시 누르면 같은 메일이 또 갔다. Orca 1.4.25x의 `orchestration send`·`run-current`가 `--full` 없이는 짧은 JSON(`result.messageId`, `result.runId`)을 찍는데 긴 모양만 읽었기 때문이다. `run-current`도 못 읽어 Run에 묶인 세션인데 `orca_session_id:`로 보냈다. 이제 실패는 종료 코드≠0·`ok:false`일 때만이고 두 모양을 다 읽는다(MCP 서버도).
+- 중복 막기: 보내는 중 두 번째 누름은 거절, 실제로 갔을 수 있는 실패는 카드에 「이미 보냈을 수 있음」.
+- 정리: 카드마다 ×(되돌리기), 위쪽 「답한 것·보낸 것 모두 지우기」·「닫힌 세션 질문 지우기」(터미널 닫힘·채팅 세션 없음 = `session_caller_unknown`). 지운 묶음은 질문 폴더에 파일이 남아도 다시 뜨지 않는다. 근거는 `orca-plugins/question-panel/README.md` 「0.4.1」.
 
 ### 2026-11-08 — Orca 질문 패널 0.4.0·question-panel 0.6.1: 채팅 UI 세션에도 답 전달
 
