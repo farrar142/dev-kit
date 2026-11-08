@@ -139,7 +139,7 @@ test('질문을 저장할 때 터미널 제목과 workspace 이름도 적는다'
         workspaces: [{ id: 'ws_1', kind: 'worktree', name: 'Data', path: '/d', branch: 'main', hostId: null }],
         truncated: false,
       },
-      'terminal.read': { lines: [], truncated: false },
+      'terminal.read': { lines: ['❯'], truncated: false },
     },
   })
   const w = await mountWorker(worker, { host })
@@ -193,4 +193,20 @@ test('refresh는 살아 있는 터미널을 닫힘으로 보지 않고, 권한 �
   assert.equal(stored()[0].closed, true)
   await w.request('qp.remove', { id: 'q2', terminalId: 'term_1' })
   assert.equal(stored().length, 0)
+})
+
+test('terminal.read 가 거부 없이 빈 출력(exited)을 돌려줘도 닫힘으로 보고, 판정을 로그에 남긴다', async () => {
+  let lines: string[] = ['❯ 질문']
+  const host = mockHost({ results: { 'terminal.read': () => ({ lines, truncated: false }) } })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const stored = () => (w.host.data().storage.batches ?? []) as { closed?: boolean }[]
+  await w.request('qp.refresh', {})
+  assert.equal(stored()[0].closed, undefined)
+  lines = []
+  await w.request('qp.refresh', {})
+  assert.equal(stored()[0].closed, true)
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean }
+  assert.equal(r.ok, false)
+  assert.equal(host.callsOf('terminal.sendText').length, 0)
 })
