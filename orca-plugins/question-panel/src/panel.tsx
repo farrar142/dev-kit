@@ -14,6 +14,7 @@ import {
   RadioGroup,
   read,
   RelativeTime,
+  Spinner,
   Row,
   set,
   Stack,
@@ -27,7 +28,7 @@ import { asBatches, complete, STORE_KEY, type Batch, type JsonValue, type Picks 
 const stored = atom<JsonValue>(STORE_KEY, [], { persist: 'storage' })
 /** 묶음별 고른 번호. 키는 `${terminalId}/${id}`. */
 const picks = atom<Record<string, Picks>>('picks', {}, { persist: 'plugin' })
-const notice = atom<{ key: string; text: string } | null>(null)
+const notice = atom<{ key: string; ok: boolean; text: string } | null>(null)
 const busy = atom<string | null>(null)
 
 const keyOf = (b: Batch) => `${b.terminalId}/${b.id}`
@@ -51,15 +52,37 @@ const toggle = (k: string, qi: number, n: number, on: boolean) =>
     return { ...all, [k]: cur }
   })
 
+// 패널의 console.warn 은 `orca plugin logs` 에 [frame] 줄로 남는다.
+const trace = (msg: string) => {
+  try {
+    console.warn(`[question-panel/panel] ${msg}`)
+  } catch {
+    // 콘솔이 없는 환경이면 건너뛴다
+  }
+}
+
 async function send(b: Batch) {
   const k = keyOf(b)
+  const chosen = read(picks)[k] ?? []
+  trace(`답 보내기 누름 ${b.id} terminal=${b.terminalId} picks=${JSON.stringify(chosen)}`)
   set(busy, k)
+  set(notice, null)
   try {
-    const r = await plugin.request('qp.answer', { id: b.id, terminalId: b.terminalId, picks: read(picks)[k] ?? [] })
-    set(notice, r.ok ? null : { key: k, text: r.reason })
+    const r = await plugin.request(
+      'qp.answer',
+      { id: b.id, terminalId: b.terminalId, picks: chosen },
+      { timeoutMs: 20000 },
+    )
+    trace(`워커 답 ok=${r.ok} reason=${r.reason}`)
+    set(notice, r.ok ? { key: k, ok: true, text: `${b.id} 답을 터미널에 넣었습니다.` } : { key: k, ok: false, text: r.reason })
     if (r.ok) update(picks, ({ [k]: _, ...rest }) => rest)
   } catch (err) {
-    set(notice, { key: k, text: `보내지 못했습니다: ${err instanceof Error ? err.message : String(err)}` })
+    const code = err instanceof Error ? (err as Error & { code?: unknown }).code : undefined // HostError
+    const text = `워커에 닿지 못했습니다${typeof code === 'string' ? ` (${code})` : ''}: ${
+      err instanceof Error ? err.message : String(err)
+    }`
+    trace(text)
+    set(notice, { key: k, ok: false, text })
   } finally {
     set(busy, null)
   }
@@ -75,6 +98,7 @@ function BatchCard({ b }: { b: Batch }) {
       <Stack gap="md">
         <Text muted size="xs">
           <RelativeTime at={b.createdAt} />
+          {` · 터미널 ${b.terminalId}`}
         </Text>
         {b.questions.map((q, qi) => (
           <Stack gap="xs">
@@ -106,7 +130,8 @@ function BatchCard({ b }: { b: Batch }) {
             )}
           </Stack>
         ))}
-        {n !== null && n.key === k ? <Callout tone="warning">{n.text}</Callout> : null}
+        {n !== null && n.key === k && !n.ok ? <Callout tone="danger" title="보내지 못함">{n.text}</Callout> : null}
+        {read(busy) === k ? <Spinner label="터미널에 보내는 중" /> : null}
         <Row justify="end">
           <Button
             variant="solid"
@@ -127,6 +152,7 @@ export default function Panel() {
   const all = asBatches(read(stored))
   const pending = all.filter(b => b.status === 'pending').sort((a, b) => b.createdAt - a.createdAt)
   const sent = all.filter(b => b.status === 'sent')
+  const last = read(notice)
 
   return (
     <Stack gap="md">
@@ -134,6 +160,11 @@ export default function Panel() {
         <Heading level={2}>질문</Heading>
         <Badge tone={pending.length > 0 ? 'warning' : 'success'}>{`${pending.length}개 대기`}</Badge>
       </Row>
+      {last === null ? null : (
+        <Callout tone={last.ok ? 'success' : 'danger'} title={last.ok ? '보냄' : '보내지 못함'}>
+          {last.text}
+        </Callout>
+      )}
       {pending.length === 0 ? (
         <EmptyState
           icon="bot"

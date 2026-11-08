@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.1.0)
+# 질문 패널 (Orca 플러그인, 시제품 0.2.0)
 
 Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
@@ -38,7 +38,7 @@ Claude(Orca 터미널) ── mcp__question-panel__ask ──▶ Claude Code que
 
 ## 설치 (Orca 1.4.248 이상, 데스크톱)
 
-플러그인은 코드를 돌리므로 Orca가 승인을 묻는다(`terminal:send`·`storage:own`·`notifications:show`, 훅 `agent.tool.after`).
+플러그인은 코드를 돌리므로 Orca가 승인을 묻는다(`terminal:send`·`storage:own`·`notifications:show`·`workspace:read`·`workspace:write`, 훅 `agent.tool.after`). `workspace:*`는 0.2.0에서 더했다: 포커스 확인과, 질문한 터미널의 workspace로 옮겨 다시 보내기.
 
 ```sh
 # 이 저장소를 받은 뒤, Orca 호스트의 절대 경로로
@@ -52,10 +52,19 @@ orca plugin open local.question-panel --panel questions --json
 
 확인: Orca 터미널에서 Claude Code(question-panel 0.5.2+ 설치)를 띄우고 질문 도구를 부르게 한다 → 「질문」 패널에 카드 → 고르고 「답 보내기」 → 그 터미널에 `[질문 패널 답 q1] …` 줄이 들어가 Claude가 이어서 답한다.
 
+## 답이 안 들어갈 때 (0.2.0)
+
+- `terminal.sendText`는 **지금 포커스된 worktree에 그 터미널이 있을 때만** 받는다(Orca `plugin-host-method-bindings.ts`: `terminal is outside the active worktree`·`no active worktree`로 거부). 0.1.0은 이 오류를 패널에 제대로 못 보였다. 0.2.0은 거부되면 질문 훅이 준 `workspaceId`로 `workspace.open` 한 뒤 한 번 더 보낸다.
+- 훅의 `terminalId`와 `sendText`가 받는 id는 같은 것(터미널 handle)이다(`agent-tool-call-reader.ts`의 `setAgentToolHookTerminalResolver`).
+- 모든 단계가 `orca plugin logs local.question-panel --json`에 남는다. 워커 줄은 `[question-panel] …`, 패널 줄은 `[frame] … [question-panel/panel] …`:
+  `worker 시작` → `hook mcp__question-panel__ask terminalId=… workspaceId=… output=…` → `hook: 묶음 qN 저장` → (누르면) 패널 `답 보내기 누름` → `qp.answer 받음` → `포커스 workspace=… 터미널=… 대상 포함=true|false` → `sendText accepted=…` 또는 `sendText 실패: …` → (`workspace.open … 뒤 다시 보냄`) → `묶음 qN 보냄`, 패널 `워커 답 ok=…`.
+- 패널 위쪽에 마지막 결과(「보냄」/「보내지 못함」+이유)가 늘 뜨고, 카드 안에도 실패 이유와 「보내는 중」이 뜬다. 카드에는 대상 터미널 id도 보인다.
+- 저장 파일: Orca userData 아래 `plugins-data/local.question-panel/storage.json`(키 `batches`).
+
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 11건(로직 6·워커 3·패널 2)
+orca plugin test orca-plugins/question-panel --json    # 시험 15건(로직 6·워커 5·패널 4)
 orca plugin check orca-plugins/question-panel --json
 npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin types 로 .orca/types 를 만든다
 ```

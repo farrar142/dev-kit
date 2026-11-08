@@ -1,5 +1,5 @@
 // 패널 시험: 저장된 묶음을 카드로 그리고, 다 고르면 「답 보내기」가 워커에 고른 번호를 보낸다.
-import { assert, mockHost, mount, test } from 'orca/testing'
+import { assert, hostError, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel.tsx'
 
 const BATCH = {
@@ -60,5 +60,35 @@ test('다 고르기 전에는 보내기가 꺼져 있고, 고르면 번호를 �
   assert.equal(p.find(button)?.props.disabled, false)
   await p.press(button)
   assert.deepEqual(got, [{ id: 'q2', terminalId: 'term_1', picks: [[1], [1]] }])
+  await p.unmount()
+})
+
+test('워커가 실패 이유를 돌려주면 패널 위쪽과 카드에 보인다', async () => {
+  const host = mockHost({
+    storage: { batches: [BATCH] },
+    requests: { 'qp.answer': { ok: false, reason: '터미널에 넣지 못했습니다 — x' } },
+  })
+  const p = await mount(panel, { host })
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '0')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  await p.press({ type: 'Button', text: '답 보내기' })
+  assert.equal(p.findAll({ type: 'Callout', text: /터미널에 넣지 못했습니다 — x/ }).length, 2)
+  await p.unmount()
+})
+
+test('워커 요청이 거부돼도(예: unavailable) 이유가 보인다', async () => {
+  const host = mockHost({
+    storage: { batches: [BATCH] },
+    requests: {
+      'qp.answer': () => {
+        throw hostError('unavailable', 'no worker')
+      },
+    },
+  })
+  const p = await mount(panel, { host })
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '0')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  await p.press({ type: 'Button', text: '답 보내기' })
+  assert.ok(p.find({ type: 'Callout', text: /워커에 닿지 못했습니다 \(unavailable\)/ }))
   await p.unmount()
 })

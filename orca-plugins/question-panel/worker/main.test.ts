@@ -1,5 +1,5 @@
 // 워커 시험: 훅으로 받은 질문이 저장되고, 답이 그 터미널에 한 줄로 들어간다.
-import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as worker from './main.ts'
 
 const ASK = {
@@ -54,4 +54,50 @@ test('터미널이 답을 받지 않으면 묶음을 대기로 남긴다', async
   assert.equal(r.ok, false)
   const stored = JSON.stringify(w.host.data().storage.batches)
   assert.match(stored, /"status":"pending"/)
+})
+
+test('포커스 밖 터미널이면 그 workspace를 연 뒤 다시 보낸다', async () => {
+  let opened = false
+  const host = mockHost({
+    results: {
+      'workspace.readContext': { branch: 'b', displayName: '다른 곳', terminals: [] },
+      'workspace.open': () => {
+        opened = true
+
+        return { opened: true }
+      },
+      'terminal.sendText': () => {
+        if (!opened) throw new Error('terminal is outside the active worktree')
+
+        return { accepted: true }
+      },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  assert.deepEqual(host.callsOf('workspace.open'), [{ workspaceId: 'ws_1' }])
+  assert.ok(w.logs.some(l => l.includes('sendText 실패: terminal is outside the active worktree')))
+  assert.ok(w.logs.some(l => l.includes('묶음 q2 보냄')))
+})
+
+test('보내기 실패는 던지지 않고 이유를 돌려주며 로그에 남긴다', async () => {
+  const host = mockHost({
+    results: {
+      'terminal.sendText': () => {
+        throw hostError('action_failed', 'pty gone')
+      },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as {
+    ok: boolean
+    reason: string
+  }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /pty gone/)
+  assert.ok(w.logs.some(l => l.includes('hook mcp__question-panel__ask terminalId=term_1')))
+  assert.ok(w.logs.some(l => l.includes('qp.answer 받음 id=q2')))
 })
