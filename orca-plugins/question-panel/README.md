@@ -1,4 +1,6 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.2.0)
+# 질문 패널 (Orca 플러그인, 시제품 0.2.0 — 막힘: 아래 「막힌 곳」)
+
+> **막힌 곳(2026-11-08 확인).** Claude Code는 mod 도구(`mcp__question-panel__ask`는 hooks 모듈이 등록하는 mod 도구다) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 내보내지 않는다. Claude Code 2.1.319에서 `matcher: "*"` 훅으로 확인했다. 같은 세션의 `Bash` 호출은 Pre·Post가 둘 다 왔고, 질문 도구는 둘 다 오지 않았다. Orca의 `agent.tool.after`는 이 설정 훅(`orca-agent-hook`)을 타고 오므로 질문이 Orca 워커에 닿지 않는다. Windows 시험(Orca 1.4.253)에서도 「worker 시작」 뒤로 훅 줄이 0이었다. Orca 쪽 필터 문제가 아니다: 1.4.253의 `agent-tool-call-reader.ts`에는 도구 이름 필터가 없다. 아래 흐름은 질문 도구가 훅을 타는 경우의 설계로 남긴다.
 
 Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
@@ -25,7 +27,7 @@ Claude(Orca 터미널) ── mcp__question-panel__ask ──▶ Claude Code que
 
 | 세션 | 질문 카드 | 답 넣기 | 근거 |
 | --- | --- | --- | --- |
-| Orca 터미널에서 도는 Claude Code | 됨 | 됨(`terminal.sendText`) | 훅 `agent.tool.after`는 Orca 터미널의 에이전트 도구 호출에 온다 |
+| Orca 터미널에서 도는 Claude Code | **안 됨**(mod 도구라 훅이 없음) | 경로는 있음(`terminal.sendText`) | 위 「막힌 곳」 |
 | Orca 채팅 UI(stream-json, `ORCA_STRUCTURED_SESSION=1`) | **안 됨** | **안 됨** | 아래 「채팅 세션이 막힌 까닭」 |
 | SSH·WSL 호스트의 에이전트 | 안 됨 | — | Orca 문서: 도구 훅은 SSH·WSL에 아직 없다 |
 
