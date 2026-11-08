@@ -58,6 +58,11 @@ export type Batch = {
   error?: string
   /** 보낸 곳(「터미널」·「메일함 run:…」) — 보낸 기록에 보인다. */
   via?: string
+  /**
+   * 앞선 보내기가 실패로 끝났지만 실제로는 갔을 수 있다(CLI가 돌았고 서버가 거부하지 않았다, 0.4.1).
+   * 카드에 「이미 보냈을 수 있음」을 보인다. 보내면 지운다.
+   */
+  maybeSent?: boolean
 }
 
 /** agent.tool.after 훅 이벤트에서 쓰는 부분. */
@@ -153,12 +158,49 @@ export const answerLine = (b: Batch, picks: Picks): string => {
 export const markSent = (list: readonly Batch[], id: string, terminalId: string, line: string, via = '터미널'): Batch[] =>
   list.map(b => {
     if (!(b.id === id && b.terminalId === terminalId)) return b
-    const { error: _, ...rest } = b
+    const { error: _, maybeSent: __, ...rest } = b
 
     return { ...rest, status: 'sent', sent: line, via }
   })
 
 export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b.status === 'pending')
+
+// ── 지운 묶음(0.4.1) ─────────────────────────────────────────────────────────
+
+/**
+ * 지운 묶음의 기록. 같은 묶음이 채팅 질문 폴더에 남아 있어도(파일 지우기 실패 등) 다시 띄우지 않고,
+ * 「되돌리기」로 되살린다. 키에 만든 시각을 넣는다: 같은 세션이 나중에 같은 q 번호로 다시 물으면 새 묶음이다.
+ */
+export const DISMISSED_KEY = 'dismissed'
+export const DISMISSED_MAX = 100
+
+export type Dismissed = { key: string; at: number; batch: Batch }
+
+export const dismissKey = (b: Pick<Batch, 'id' | 'terminalId' | 'createdAt'>) => `${b.terminalId}/${b.id}@${b.createdAt}`
+
+export const asDismissed = (v: JsonValue | null): Dismissed[] =>
+  Array.isArray(v)
+    ? v.flatMap(d =>
+        isRecord(d) && typeof d.key === 'string' && typeof d.at === 'number' && asBatches([d.batch as JsonValue]).length === 1
+          ? [d as unknown as Dismissed] // 저장소에는 이 모듈이 쓴 값만 들어간다
+          : [],
+      )
+    : []
+
+/** 지운 묶음들을 기록에 더한다(새 것이 뒤, 오래된 것부터 버려 DISMISSED_MAX 개). */
+export const addDismissed = (list: readonly Dismissed[], removed: readonly Batch[], now: number): Dismissed[] => {
+  const keys = new Set(removed.map(dismissKey))
+
+  return [...list.filter(d => !keys.has(d.key)), ...removed.map(batch => ({ key: dismissKey(batch), at: now, batch }))].slice(
+    -DISMISSED_MAX,
+  )
+}
+
+/** 정리 하나: 남길 묶음과 지운 묶음으로 나눈다. */
+export const splitBy = (list: readonly Batch[], drop: (b: Batch) => boolean): { keep: Batch[]; removed: Batch[] } => ({
+  keep: list.filter(b => !drop(b)),
+  removed: list.filter(drop),
+})
 
 /** 저장소에서 읽은 값을 묶음 목록으로(모양이 틀린 것은 버린다). */
 export const asBatches = (v: JsonValue | null): Batch[] =>
@@ -194,13 +236,6 @@ export const workspaceNameFrom = (workspaceId: string | null): string | null => 
 /** 같은 터미널·같은 ID 묶음에 필드를 덧씌운다. */
 export const patchBatch = (list: readonly Batch[], id: string, terminalId: string, patch: Partial<Batch>): Batch[] =>
   list.map(b => (b.id === id && b.terminalId === terminalId ? { ...b, ...patch } : b))
-
-/** 묶음 하나를 지운다. */
-export const removeBatch = (list: readonly Batch[], id: string, terminalId: string): Batch[] =>
-  list.filter(b => !(b.id === id && b.terminalId === terminalId))
-
-/** 터미널이 닫힌 대기 묶음을 모두 지운다. */
-export const clearClosed = (list: readonly Batch[]): Batch[] => list.filter(b => b.closed !== true)
 
 // ── 채팅 세션(메일함 경로, 0.4.0) ─────────────────────────────────────────────
 
@@ -282,10 +317,9 @@ export const mailBody = (b: Batch, picks: Picks): string => {
   return `${b.id} ${nums} / ${parts.join(' / ')}`.replace(/[\r\n]+/g, ' ')
 }
 
-/** CLI의 --json 답 한 덩어리. 실패해도 JSON을 찍으므로 stdout 을 먼저 본다. */
-const parseJson = (text: string): Record<string, unknown> | null => {
+const tryJson = (text: string): Record<string, unknown> | null => {
   try {
-    const v: unknown = JSON.parse(text.trim())
+    const v: unknown = JSON.parse(text)
 
     return isRecord(v) ? v : null
   } catch {
@@ -293,30 +327,99 @@ const parseJson = (text: string): Record<string, unknown> | null => {
   }
 }
 
-/** `orca orchestration run-current --json` 의 Run id. 묶인 Run이 없으면 null, 읽지 못하면 undefined. */
+/**
+ * CLI의 --json 답 한 덩어리. 실패해도 JSON을 찍으므로 stdout 을 먼저 본다. 1.4.25x 의 orchestration
+ * 명령은 `--full` 이 없으면 짧은 한 줄(`{"ok":true,"result":{…}}`)을 찍는다(agent-view.ts
+ * printOrchestrationFields). 앞에 다른 줄이 끼어도 읽도록 통째로 안 되면 끝에서부터 `{` 로 시작하는 줄을 본다.
+ */
+const parseJson = (text: string): Record<string, unknown> | null => {
+  const whole = tryJson(text.trim())
+  if (whole !== null) return whole
+  const lines = text.split(/\r?\n/).map(l => l.trim())
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].startsWith('{')) continue
+    const j = tryJson(lines[i])
+    if (j !== null) return j
+  }
+
+  return null
+}
+
+/**
+ * `orca orchestration run-current --json` 의 Run id. 묶인 Run이 없으면 null, 읽지 못하면 undefined.
+ * 짧은 모양(기본, 1.4.25x): `{ok, result: {runId: "run_…" | null, objective}}`.
+ * 긴 모양(`--full`·옛 CLI): `{ok, result: {run: {id} | null}}`.
+ */
 export const parseRunCurrent = (stdout: string): string | null | undefined => {
   const j = parseJson(stdout)
   if (j === null || j.ok !== true || !isRecord(j.result)) return undefined
-  const run = j.result.run
-  if (run === null) return null
-  const id = isRecord(run) ? str(run.id) : ''
+  const r = j.result
+  if ('runId' in r) {
+    if (r.runId === null) return null
+    const id = str(r.runId)
+
+    return RUN_RE.test(id) ? id : undefined
+  }
+  if (!('run' in r)) return undefined
+  if (r.run === null) return null
+  const id = isRecord(r.run) ? str(r.run.id) : ''
 
   return RUN_RE.test(id) ? id : undefined
 }
 
-export type CliRun = { code: number | null; stdout: string; stderr: string; error?: string }
+/** CLI 오류 답의 code(`{ok:false, error:{code}}`). 없으면 null. */
+export const cliErrorCode = (stdout: string): string | null => {
+  const j = parseJson(stdout)
 
-/** `orca orchestration send --json` 결과: 보낸 메시지 id, 아니면 사람이 읽을 이유. */
-export const parseSendResult = (r: CliRun): { ok: true; messageId: string } | { ok: false; why: string } => {
+  return j !== null && j.ok !== true && isRecord(j.error) && str(j.error.code) !== '' ? str(j.error.code) : null
+}
+
+/** 채팅 세션이 이 호스트에 없다(Orca가 지웠다). run-current 가 이 code 로 거부한다(orchestration-session-caller-codes.ts). */
+export const SESSION_GONE = 'session_caller_unknown'
+
+export type CliRun = {
+  code: number | null
+  stdout: string
+  stderr: string
+  error?: string
+  /** 시간 안에 끝나지 않아 죽였다(돌기는 했으니 보냈을 수 있다). */
+  timedOut?: boolean
+}
+
+/** 짧은 모양 `result.messageId`, 긴 모양 `result.message.id`, 여럿 `result.messageIds`, 릴레이 `result.relay.messageId`. */
+const messageIdOf = (r: Record<string, unknown>): string => {
+  if (typeof r.messageId === 'string') return r.messageId
+  if (isRecord(r.message)) return str(r.message.id)
+  if (Array.isArray(r.messageIds) && typeof r.messageIds[0] === 'string') return r.messageIds[0]
+  if (isRecord(r.relay)) return str(r.relay.messageId)
+
+  return ''
+}
+
+/**
+ * `orca orchestration send --json` 결과. 실패는 종료 코드≠0 이거나 `ok:false` 일 때만이다(0.4.0은
+ * `result.message.id` 가 없으면 실패로 봐서, 실제로 간 메일을 「보내지 못함」으로 띄웠다).
+ * 실패일 때 maybeSent: CLI가 돌았고 서버가 거부하지도 않았다 — 실제로는 갔을 수 있다.
+ */
+export const parseSendResult = (
+  r: CliRun,
+): { ok: true; messageId: string } | { ok: false; why: string; maybeSent: boolean } => {
   const j = parseJson(r.stdout)
-  if (j !== null && j.ok === true && isRecord(j.result) && isRecord(j.result.message)) {
-    return { ok: true, messageId: str(j.result.message.id) }
+  if (j !== null && j.ok === false) {
+    const e = isRecord(j.error) ? j.error : {}
+
+    return { ok: false, why: `${str(e.code) || 'error'}: ${str(e.message)}`, maybeSent: false }
   }
-  if (j !== null && isRecord(j.error)) {
-    return { ok: false, why: `${str(j.error.code)}: ${str(j.error.message)}` }
+  if (r.code === 0 && r.error === undefined) {
+    return { ok: true, messageId: j !== null && isRecord(j.result) ? messageIdOf(j.result) : '' }
   }
-  if (r.error !== undefined) return { ok: false, why: r.error }
+  const ran = r.code !== null || r.timedOut === true
+  if (r.error !== undefined) return { ok: false, why: r.error, maybeSent: ran }
   const tail = (r.stderr.trim() || r.stdout.trim()).split(/\r?\n/).slice(-2).join(' ')
 
-  return { ok: false, why: `orca 종료 코드 ${r.code ?? '없음'}${tail === '' ? '' : ` — ${tail.slice(0, 300)}`}` }
+  return {
+    ok: false,
+    why: `orca 종료 코드 ${r.code ?? '없음'}${tail === '' ? '' : ` — ${tail.slice(0, 300)}`}`,
+    maybeSent: ran,
+  }
 }

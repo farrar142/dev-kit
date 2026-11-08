@@ -6,17 +6,22 @@ export type Result = {
   reason: string
   /** 보낸 곳(「터미널」·「메일함 run:…」, 0.4.0부터). 보냈을 때만. */
   via?: string
+  /** 실패했지만 실제로는 갔을 수 있다(메일함, 0.4.1). */
+  maybeSent?: boolean
 }
 
 declare module 'orca' {
   interface PluginRequests {
     'qp.answer': { input: { id: string; terminalId: string; picks: Picks }; output: Result }
+    /** 답한 것·보낸 것을 모두 지운다. */
     'qp.clearSent': { input: Record<string, never>; output: Result }
     /** 대기 묶음마다 터미널이 살아 있는지·제목·workspace 이름을 다시 확인한다(패널을 열 때). */
     'qp.refresh': { input: Record<string, never>; output: Result }
-    /** 묶음 하나를 지운다(닫힌 터미널의 카드 정리). */
+    /** 묶음 하나를 지운다(지운 기록에 남아 되돌릴 수 있다, 0.4.1). */
     'qp.remove': { input: { id: string; terminalId: string }; output: Result }
-    /** 터미널이 닫힌 묶음을 모두 지운다. */
+    /** 방금 지운 묶음을 되살린다(0.4.1). */
+    'qp.undoRemove': { input: { id: string; terminalId: string }; output: Result }
+    /** 닫힌 세션(터미널 exited·채팅 세션 없음)의 대기 묶음을 모두 지운다. */
     'qp.clearClosed': { input: Record<string, never>; output: Result }
   }
 }

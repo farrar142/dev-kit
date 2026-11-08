@@ -11,6 +11,7 @@ import {
   Collapsible,
   EmptyState,
   Heading,
+  IconButton,
   plugin,
   RadioGroup,
   read,
@@ -20,6 +21,7 @@ import {
   set,
   Stack,
   Text,
+  Toolbar,
   update,
 } from 'orca'
 import './protocol.ts'
@@ -41,6 +43,8 @@ const stored = atom<JsonValue>(STORE_KEY, [], { persist: 'storage' })
 const picks = atom<Record<string, Picks>>('picks', {}, { persist: 'plugin' })
 const notice = atom<{ key: string; ok: boolean; text: string } | null>(null)
 const busy = atom<string | null>(null)
+/** 방금 지운 카드(되돌리기). */
+const removed = atom<{ id: string; terminalId: string } | null>(null)
 
 const keyOf = (b: Batch) => `${b.terminalId}/${b.id}`
 
@@ -78,9 +82,28 @@ void plugin.request('qp.refresh', {}, { timeoutMs: 20000 }).catch((err: unknown)
   trace(`refresh 실패: ${err instanceof Error ? err.message : String(err)}`),
 )
 
-const removeOne = (b: Batch) => {
+// 정리(0.4.1): 확인 없이 바로 지우고, 위쪽에 「되돌리기」를 띄운다.
+async function removeOne(b: Batch) {
   trace(`카드 지우기 ${b.id} terminal=${b.terminalId}`)
-  void plugin.request('qp.remove', { id: b.id, terminalId: b.terminalId }).catch(() => undefined)
+  const r = await plugin.request('qp.remove', { id: b.id, terminalId: b.terminalId }).catch(() => null)
+  if (r?.ok === true) {
+    set(removed, { id: b.id, terminalId: b.terminalId })
+    update(picks, ({ [keyOf(b)]: _, ...rest }) => rest)
+  }
+}
+
+async function undoRemove() {
+  const last = read(removed)
+  if (last === null) return
+  trace(`되돌리기 ${last.id} terminal=${last.terminalId}`)
+  set(removed, null)
+  await plugin.request('qp.undoRemove', last).catch(() => null)
+}
+
+const clearAll = (what: 'qp.clearSent' | 'qp.clearClosed') => {
+  trace(`정리 ${what}`)
+  set(removed, null)
+  void plugin.request(what, {}).catch(() => undefined)
 }
 
 async function send(b: Batch) {
@@ -100,7 +123,11 @@ async function send(b: Batch) {
       notice,
       r.ok
         ? { key: k, ok: true, text: `${b.id} 답을 보냈습니다 — ${r.via ?? routeLabel(b)}` }
-        : { key: k, ok: false, text: r.reason },
+        : {
+            key: k,
+            ok: false,
+            text: r.maybeSent === true ? `${r.reason} (실제로는 갔을 수 있습니다 — 채팅을 먼저 확인하세요)` : r.reason,
+          },
     )
     if (r.ok) update(picks, ({ [k]: _, ...rest }) => rest)
   } catch (err) {
@@ -121,21 +148,38 @@ function BatchCard({ b }: { b: Batch }) {
   const n = read(notice)
   // 지금 막 실패한 이유가 있으면 그것을, 없으면 저장된 마지막 실패 이유를 보인다.
   const failure = n !== null && n.key === k ? (n.ok ? null : n.text) : (b.error ?? null)
+  const closedText = isMailbox(b) ? '채팅 세션이 없음' : '터미널이 닫힘'
+  const sending = read(busy) === k
 
   return (
     <Card title={`질문 묶음 ${b.id}`}>
       <Stack gap="md">
         <Row gap="xs">
-          {b.closed === true ? <Badge tone="danger">터미널이 닫힘</Badge> : null}
+          {b.closed === true ? <Badge tone="danger">{closedText}</Badge> : null}
           <Badge tone="neutral">{routeLabel(b)}</Badge>
           <Text muted size="xs">
             <RelativeTime at={b.createdAt} />
             {` · ${whereOf(b)}`}
           </Text>
+          <IconButton
+            icon="close"
+            label={`${b.id} 카드 지우기`}
+            variant="ghost"
+            size="sm"
+            disabled={sending}
+            onPress={() => removeOne(b)}
+          />
         </Row>
         {b.closed === true ? (
-          <Callout tone="warning" title="터미널이 닫힘">
-            이 질문을 한 터미널이 닫혀 답을 넣을 곳이 없습니다. 「지우기」로 정리하세요.
+          <Callout tone="warning" title={closedText}>
+            {isMailbox(b)
+              ? '이 질문을 한 채팅 세션이 Orca에 없어 답을 보낼 곳이 없습니다. 「지우기」로 정리하세요.'
+              : '이 질문을 한 터미널이 닫혀 답을 넣을 곳이 없습니다. 「지우기」로 정리하세요.'}
+          </Callout>
+        ) : null}
+        {b.maybeSent === true ? (
+          <Callout tone="warning" title="이미 보냈을 수 있음">
+            {`앞선 보내기는 실패로 끝났지만 실제로는 갔을 수 있습니다. 채팅에 「[질문 패널 답] ${b.id}」 메일이 왔는지 먼저 확인하고, 안 왔을 때만 다시 보내세요.`}
           </Callout>
         ) : null}
         {b.questions.map((q, qi) => (
@@ -169,7 +213,7 @@ function BatchCard({ b }: { b: Batch }) {
           </Stack>
         ))}
         {failure === null ? null : <Callout tone="danger" title="보내지 못함">{failure}</Callout>}
-        {read(busy) === k ? <Spinner label={isMailbox(b) ? '메일함에 보내는 중' : '터미널에 보내는 중'} /> : null}
+        {sending ? <Spinner label={isMailbox(b) ? '메일함에 보내는 중' : '터미널에 보내는 중'} /> : null}
         <Row justify="end" gap="xs">
           {b.closed === true ? (
             <Button variant="ghost" size="sm" icon="delete" onPress={() => removeOne(b)}>
@@ -183,7 +227,7 @@ function BatchCard({ b }: { b: Batch }) {
             disabled={b.closed === true || !complete(b, mine) || read(busy) !== null}
             onPress={() => send(b)}
           >
-            답 보내기
+            {b.error === undefined ? '답 보내기' : '다시 보내기'}
           </Button>
         </Row>
       </Stack>
@@ -197,6 +241,7 @@ export default function Panel() {
   const sent = all.filter(b => b.status === 'sent')
   const last = read(notice)
   const closed = pending.filter(b => b.closed === true)
+  const gone = read(removed)
 
   return (
     <Stack gap="md">
@@ -209,12 +254,29 @@ export default function Panel() {
           {last.text}
         </Callout>
       )}
-      {closed.length === 0 ? null : (
-        <Row justify="end">
-          <Button variant="ghost" size="sm" icon="delete" onPress={() => void plugin.request('qp.clearClosed', {})}>
-            {`닫힌 터미널 카드 ${closed.length}개 지우기`}
-          </Button>
-        </Row>
+      {sent.length === 0 && closed.length === 0 ? null : (
+        <Toolbar label="정리" gap="xs">
+          {sent.length === 0 ? null : (
+            <Button variant="ghost" size="sm" icon="delete" onPress={() => clearAll('qp.clearSent')}>
+              {`답한 것·보낸 것 모두 지우기 (${sent.length})`}
+            </Button>
+          )}
+          {closed.length === 0 ? null : (
+            <Button variant="ghost" size="sm" icon="delete" onPress={() => clearAll('qp.clearClosed')}>
+              {`닫힌 세션 질문 지우기 (${closed.length})`}
+            </Button>
+          )}
+        </Toolbar>
+      )}
+      {gone === null ? null : (
+        <Callout tone="neutral" title="카드를 지웠습니다">
+          <Row justify="between" gap="xs">
+            <Text size="sm">{`${gone.id} 카드를 지웠습니다.`}</Text>
+            <Button variant="ghost" size="sm" onPress={() => undoRemove()}>
+              되돌리기
+            </Button>
+          </Row>
+        </Callout>
       )}
       {pending.length === 0 ? (
         <EmptyState
@@ -233,11 +295,6 @@ export default function Panel() {
                 {`${b.via ?? '터미널'} · ${b.sent ?? b.id}`}
               </Text>
             ))}
-            <Row justify="end">
-              <Button variant="ghost" size="sm" icon="delete" onPress={() => void plugin.request('qp.clearSent', {})}>
-                보낸 기록 지우기
-              </Button>
-            </Row>
           </Stack>
         </Collapsible>
       )}

@@ -9,7 +9,14 @@ import '../src/protocol.ts'
 import type { Result } from '../src/protocol.ts'
 import {
   addBatch,
+  addDismissed,
   answerLine,
+  asDismissed,
+  cliErrorCode,
+  DISMISSED_KEY,
+  dismissKey,
+  SESSION_GONE,
+  splitBy,
   ASK_TOOL,
   asBatches,
   batchFromInbox,
@@ -21,16 +28,14 @@ import {
   parseRunCurrent,
   parseSendResult,
   routeLabel,
-  clearClosed,
-  clearSent,
   complete,
   patchBatch,
-  removeBatch,
   markSent,
   STORE_KEY,
   type Batch,
   type JsonValue,
   type Picks,
+  type Route,
 } from '../src/questions.ts'
 import type { WorkerIo } from './io.ts'
 import { nodeIo } from './node-io.ts'
@@ -61,7 +66,7 @@ const STALE = /terminal_handle_stale/
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-type Sent = Result & { via?: string; line?: string }
+type Sent = Result & { via?: string; line?: string; maybeSent?: boolean }
 
 /** 폴더 보기를 멈추는 함수(deactivate 가 부른다). */
 let stopPolling: (() => void) | null = null
@@ -76,6 +81,21 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   const log = (msg: string) => orca.log(`[question-panel] ${msg}`)
   const load = async () => asBatches((await orca.storage.get(STORE_KEY)) as JsonValue | null)
   const save = (list: Batch[]) => orca.storage.set(STORE_KEY, list as unknown as JsonValue) // Batch는 JSON 그대로다
+  const loadDismissed = async () => asDismissed((await orca.storage.get(DISMISSED_KEY)) as JsonValue | null)
+
+  /** 정리 하나: drop 에 걸린 묶음을 지우고 지운 기록에 남긴다(되돌리기·다시 뜨지 않게). 지운 수. */
+  const dismiss = async (drop: (b: Batch) => boolean, why: string): Promise<number> => {
+    const { keep, removed } = splitBy(await load(), drop)
+    if (removed.length === 0) return 0
+    await save(keep)
+    await orca.storage.set(DISMISSED_KEY, addDismissed(await loadDismissed(), removed, Date.now()) as unknown as JsonValue)
+    log(`${why}: ${removed.map(b => `${b.id}(${b.terminalId})`).join(', ')} 지움`)
+
+    return removed.length
+  }
+
+  /** 보내는 중인 묶음(`${terminalId}/${id}`). 같은 묶음을 두 번 보내지 않는다. */
+  const inflight = new Set<string>()
 
   log('worker 시작')
 
@@ -137,6 +157,8 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         event.output === undefined ? '(없음)' : JSON.stringify(event.output).slice(0, 120)
       }`,
     )
+    // 폴더 읽기(ingest)도 저장소를 고친다. 끝나기를 기다리고, 저장 직전에 다시 읽어 덮어쓰지 않는다.
+    await ingest()
     const list = await load()
     const b = batchFromTool(event, Date.now(), `o${list.length + 1}`)
     if (b === null) {
@@ -145,7 +167,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       return
     }
     const info = await whereInfo(b.terminalId, b.workspaceId)
-    await save(addBatch(list, { ...b, ...info }))
+    await save(addBatch(await load(), { ...b, ...info }))
     log(
       `hook: 묶음 ${b.id} 저장(질문 ${b.questions.length}개, terminal ${b.terminalId}, 제목 ${
         info.terminalTitle ?? '(모름)'
@@ -209,6 +231,13 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     }
   }
 
+  /** 채팅 세션 신원으로 CLI 를 돌릴 환경. */
+  const cliEnv = (r: Extract<Route, { kind: 'mailbox' }>): Record<string, string> => ({
+    ORCA_AGENT_SESSION_ID: r.sessionId,
+    ORCA_STRUCTURED_SESSION: '1',
+    ...(r.userData === null ? {} : { ORCA_USER_DATA_PATH: r.userData }),
+  })
+
   /**
    * 채팅 세션의 답: 그 세션 신원(ORCA_AGENT_SESSION_ID)으로 orca CLI 를 띄워 메일을 보낸다.
    * 신원 없는 프로세스는 send 가 no_active_sender_terminal 로 거부된다(1.4.237 실측). 보내기 직전에
@@ -218,11 +247,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     if (!isMailbox(b)) return { ok: false, reason: '채팅 묶음이 아닙니다.' }
     const r = b.route
     const program = r.cli ?? 'orca'
-    const env: Record<string, string> = {
-      ORCA_AGENT_SESSION_ID: r.sessionId,
-      ORCA_STRUCTURED_SESSION: '1',
-      ...(r.userData === null ? {} : { ORCA_USER_DATA_PATH: r.userData }),
-    }
+    const env = cliEnv(r)
     const cur = await io.runCli(program, ['orchestration', 'run-current', '--json'], env)
     const now = parseRunCurrent(cur.stdout)
     if (now === undefined) {
@@ -240,24 +265,33 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     )
     const p = parseSendResult(res)
     if (!p.ok) {
-      log(`메일 보내기 실패 → ${to}: ${p.why}`)
+      log(`메일 보내기 실패 → ${to}: ${p.why}${p.maybeSent ? ' (CLI는 돌았다 — 실제로는 갔을 수 있음)' : ''}`)
 
-      return { ok: false, reason: `메일함(${to})으로 보내지 못했습니다 — ${p.why}` }
+      return { ok: false, reason: `메일함(${to})으로 보내지 못했습니다 — ${p.why}`, maybeSent: p.maybeSent }
     }
-    log(`메일 보냄 ${p.messageId} → ${to}`)
+    log(`메일 보냄 ${p.messageId === '' ? '(id 모름, 종료 코드 0)' : p.messageId} → ${to}`)
 
     return { ok: true, reason: '', via: `메일함 ${to}`, line: `${subject} ${body}` }
   }
 
   /** 채팅 세션이 남긴 질문 파일을 묶음으로 옮긴다. 읽은 파일은 지운다(틀린 것도 로그를 남기고 지운다). */
-  let ingesting = false
-  const ingest = async () => {
-    if (ingesting) return
-    ingesting = true
+  // 이미 읽는 중이면 그 읽기를 같이 기다린다(패널의 qp.refresh 가 시작 때 읽기와 겹쳐도 결과를 본다).
+  let ingesting: Promise<void> | null = null
+  const ingest = (): Promise<void> => {
+    ingesting ??= ingestOnce().finally(() => {
+      ingesting = null
+    })
+
+    return ingesting
+  }
+  const ingestOnce = async () => {
     try {
       const files = await io.listInbox()
       if (files.length === 0) return
-      let list = await load()
+      // 이미 있는 묶음(보낸 것 포함)과 지운 묶음은 다시 넣지 않는다. 파일 지우기가 실패해 같은 파일이
+      // 남아 있어도 보낸 카드가 대기로 되살아나 또 보내는 일이 없게.
+      const have = new Set((await load()).map(dismissKey))
+      const gone = new Set((await loadDismissed()).map(d => d.key))
       const added: Batch[] = []
       for (const f of files) {
         let raw: unknown = null
@@ -268,15 +302,19 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         }
         const b = batchFromInbox(raw, Date.now())
         if (b === null) log(`inbox ${f.name}: 모양이 틀려 버림`)
-        else {
-          list = addBatch(list, b)
+        else if (gone.has(dismissKey(b))) log(`inbox ${f.name}: 지운 묶음 ${b.id}이라 다시 띄우지 않고 버림`)
+        else if (have.has(dismissKey(b))) {
+          // 이미 받은 묶음 — 파일만 다시 지운다.
+        } else {
+          have.add(dismissKey(b))
           added.push(b)
           log(`inbox: 채팅 묶음 ${b.id} 저장(질문 ${b.questions.length}개, ${routeLabel(b)}, cli ${isMailbox(b) ? (b.route.cli ?? 'PATH의 orca') : '-'})`)
         }
         await io.removeInbox(f.name).catch(err => log(`inbox ${f.name} 지우기 실패: ${describeError(err)}`))
       }
       if (added.length === 0) return
-      await save(list)
+      // 저장 직전에 다시 읽는다(그사이 훅이 저장했을 수 있다).
+      await save(added.reduce(addBatch, await load()))
       for (const b of added) {
         void orca.host
           .call('notifications.show', { title: '질문 패널', body: `${b.id}: ${b.questions[0].question}` })
@@ -284,8 +322,6 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       }
     } catch (err) {
       log(`inbox(${io.inboxDir}) 읽기 실패: ${describeError(err)}`)
-    } finally {
-      ingesting = false
     }
   }
 
@@ -296,37 +332,38 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       const b = list.find(x => x.id === id && x.terminalId === terminalId && x.status === 'pending')
       if (b === undefined) return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
       if (!complete(b, picks)) return { ok: false, reason: '모든 질문에 답을 골라 주세요.' }
-      if (isMailbox(b)) {
-        const r = await sendMail(b, picks)
-        await save(
-          r.ok
-            ? markSent(await load(), id, terminalId, r.line ?? '', r.via)
-            : patchBatch(await load(), id, terminalId, { error: r.reason }),
-        )
-        if (r.ok) log(`묶음 ${id} 보냄(${r.via})`)
+      if (isMailbox(b) && b.closed === true) {
+        log(`묶음 ${id}: 채팅 세션 ${b.route.sessionId}이 Orca에 없음 — 보내지 않음`)
 
-        return r
+        return { ok: false, reason: '질문한 채팅 세션이 Orca에 없습니다. 이 카드는 「지우기」로 정리하세요.' }
       }
-      if (b.closed === true || (await isClosed(terminalId))) {
-        if (b.closed !== true) await save(patchBatch(await load(), id, terminalId, { closed: true }))
-        log(`묶음 ${id}: 터미널 ${terminalId}이 닫힘 — 보내지 않음`)
+      const k = `${terminalId}/${id}`
+      if (inflight.has(k)) {
+        log(`묶음 ${id}: 이미 보내는 중 — 이번 누름은 무시`)
 
-        return { ok: false, reason: '질문한 터미널이 닫혔습니다. 이 카드는 「지우기」로 정리하세요.' }
+        return { ok: false, reason: `${id}을(를) 이미 보내는 중입니다. 끝날 때까지 기다리세요.` }
       }
-      const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
-      log(
-        `포커스 workspace=${ctx?.displayName ?? '(없음)'} 터미널=${
-          ctx === null ? '-' : ctx.terminals.map(t => t.id).join(',')
-        } 대상 포함=${ctx?.terminals.some(t => t.id === terminalId) ?? false}`,
-      )
-      const line = answerLine(b, picks)
-      const r = await send(b, line)
-      if (r.ok) {
-        await save(markSent(await load(), id, terminalId, line, '터미널'))
-        log(`묶음 ${id} 보냄`)
-      } else await save(patchBatch(await load(), id, terminalId, { error: r.reason }))
+      inflight.add(k)
+      try {
+        if (isMailbox(b)) {
+          const r = await sendMail(b, picks)
+          await save(
+            r.ok
+              ? markSent(await load(), id, terminalId, r.line ?? '', r.via)
+              : patchBatch(await load(), id, terminalId, {
+                  error: r.reason,
+                  ...(r.maybeSent === true || b.maybeSent === true ? { maybeSent: true } : {}),
+                }),
+          )
+          if (r.ok) log(`묶음 ${id} 보냄(${r.via})`)
 
-      return { ...r, ...(r.ok ? { via: '터미널' } : {}) }
+          return r
+        }
+
+        return await answerTerminal(b, id, terminalId, picks)
+      } finally {
+        inflight.delete(k)
+      }
     } catch (err) {
       const why = describeError(err)
       log(`qp.answer 예외: ${why}`)
@@ -334,6 +371,30 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       return { ok: false, reason: `워커 오류 — ${why}` }
     }
   })
+
+  /** 터미널 묶음의 답: 그 터미널에 한 줄로 넣는다. */
+  const answerTerminal = async (b: Batch, id: string, terminalId: string, picks: Picks): Promise<Result> => {
+    if (b.closed === true || (await isClosed(terminalId))) {
+      if (b.closed !== true) await save(patchBatch(await load(), id, terminalId, { closed: true }))
+      log(`묶음 ${id}: 터미널 ${terminalId}이 닫힘 — 보내지 않음`)
+
+      return { ok: false, reason: '질문한 터미널이 닫혔습니다. 이 카드는 「지우기」로 정리하세요.' }
+    }
+    const ctx = await orca.host.call('workspace.readContext', {}).catch(() => null)
+    log(
+      `포커스 workspace=${ctx?.displayName ?? '(없음)'} 터미널=${
+        ctx === null ? '-' : ctx.terminals.map(t => t.id).join(',')
+      } 대상 포함=${ctx?.terminals.some(t => t.id === terminalId) ?? false}`,
+    )
+    const line = answerLine(b, picks)
+    const r = await send(b, line)
+    if (r.ok) {
+      await save(markSent(await load(), id, terminalId, line, '터미널'))
+      log(`묶음 ${id} 보냄`)
+    } else await save(patchBatch(await load(), id, terminalId, { error: r.reason }))
+
+    return { ...r, ...(r.ok ? { via: '터미널' } : {}) }
+  }
 
   /** 대기 묶음마다 터미널이 닫혔는지 보고, 모르던 제목·workspace 이름을 채운다. */
   const refresh = async () => {
@@ -352,6 +413,25 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         log(`refresh: 묶음 ${b.id}(terminal ${b.terminalId}) ${JSON.stringify(patch)}`)
       }
     }
+    // 채팅 묶음: 그 세션 신원으로 run-current 를 불러 본다. 세션이 없으면(session_caller_unknown) 닫힘,
+    // 있으면 지금 Run 으로 배지를 맞춘다. 쉬는 세션(not_live 등)은 닫힘으로 보지 않는다.
+    for (const b of list.filter(x => x.status === 'pending' && x.closed !== true && isMailbox(x))) {
+      if (!isMailbox(b)) continue
+      const res = await io.runCli(b.route.cli ?? 'orca', ['orchestration', 'run-current', '--json'], cliEnv(b.route))
+      const code = cliErrorCode(res.stdout)
+      const now = parseRunCurrent(res.stdout)
+      let patch: Partial<Batch> | null = null
+      if (code === SESSION_GONE) {
+        patch = { closed: true }
+        log(`닫힘 판정 채팅 세션 ${b.route.sessionId}: 닫힘(${SESSION_GONE})`)
+      } else if (now !== undefined && now !== b.route.runId) {
+        patch = { route: { ...b.route, runId: now } }
+        log(`refresh: 채팅 묶음 ${b.id} Run ${b.route.runId ?? '없음'} → ${now ?? '없음'}`)
+      } else if (now === undefined) {
+        log(`닫힘 판정 채팅 세션 ${b.route.sessionId}: 판정 불가(닫힘으로 보지 않음): ${code ?? `종료 코드 ${res.code ?? '없음'}`}`)
+      }
+      if (patch !== null) next = patchBatch(next, b.id, b.terminalId, patch)
+    }
     if (next !== list) await save(next)
   }
 
@@ -362,25 +442,35 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     return { ok: true, reason: '' }
   })
 
+  // 정리(0.4.1). 지운 묶음은 지운 기록(DISMISSED_KEY)에 남겨 되돌릴 수 있고, 질문 폴더에 같은 파일이
+  // 남아 있어도 다시 띄우지 않는다(ingest).
   orca.panels.handle('qp.remove', async ({ id, terminalId }) => {
-    await save(removeBatch(await load(), id, terminalId))
-    log(`묶음 ${id}(terminal ${terminalId}) 지움`)
+    const n = await dismiss(b => b.id === id && b.terminalId === terminalId, '카드 지우기')
+
+    return n === 0 ? { ok: false, reason: '이미 지웠거나 없는 묶음입니다.' } : { ok: true, reason: '' }
+  })
+
+  orca.panels.handle('qp.undoRemove', async ({ id, terminalId }) => {
+    const all = await loadDismissed()
+    const hit = all.filter(d => d.batch.id === id && d.batch.terminalId === terminalId).pop()
+    if (hit === undefined) return { ok: false, reason: '되돌릴 묶음이 없습니다.' }
+    await save(addBatch(await load(), hit.batch))
+    await orca.storage.set(DISMISSED_KEY, all.filter(d => d !== hit) as unknown as JsonValue)
+    log(`묶음 ${id}(terminal ${terminalId}) 되돌림`)
 
     return { ok: true, reason: '' }
   })
 
   orca.panels.handle('qp.clearClosed', async () => {
-    const list = await load()
-    const next = clearClosed(list)
-    await save(next)
-    log(`닫힌 터미널 묶음 ${list.length - next.length}개 지움`)
+    const n = await dismiss(b => b.status === 'pending' && b.closed === true, '닫힌 세션 묶음 정리')
+    log(`닫힌 세션 묶음 ${n}개 지움`)
 
     return { ok: true, reason: '' }
   })
 
   orca.panels.handle('qp.clearSent', async () => {
-    await save(clearSent(await load()))
-    log('보낸 기록 지움')
+    const n = await dismiss(b => b.status === 'sent', '보낸 기록 정리')
+    log(`보낸 묶음 ${n}개 지움`)
 
     return { ok: true, reason: '' }
   })

@@ -289,7 +289,8 @@ test('채팅 세션 질문 파일을 묶음으로 옮기고 파일을 지우며,
   // 질문 뒤 Run 이 바뀌었으면(run-current) 지금 Run 으로 보낸다.
   assert.equal(r.via, '메일함 run:run_yyyy')
   assert.equal(host.callsOf('terminal.sendText').length, 0)
-  assert.equal(f.runs.length, 2)
+  // refresh 의 run-current(세션이 살아 있나), 보내기 직전 run-current, send.
+  assert.equal(f.runs.length, 3)
   for (const run of f.runs) {
     assert.equal(run.program, '/opt/orca/bin/orca')
     assert.deepEqual(run.env, {
@@ -298,7 +299,7 @@ test('채팅 세션 질문 파일을 묶음으로 옮기고 파일을 지우며,
       ORCA_USER_DATA_PATH: '/home/me/.config/orca',
     })
   }
-  assert.deepEqual(f.runs[1].args, [
+  assert.deepEqual(f.runs[2].args, [
     'orchestration',
     'send',
     '--to',
@@ -376,4 +377,150 @@ test('Windows 의 .cmd 런처용 cmd.exe 한 줄: 인자를 따옴표로 감싸�
     windowsCmdLine('C:\\Orca\\bin\\orca.cmd', ['send', '--body', 'a "b" 50% & c\nd', 'x\\']),
     '""C:\\Orca\\bin\\orca.cmd" "send" "--body" "a \'b\' 50％ & c d" "x\\\\""',
   )
+})
+
+// ── 0.4.1: 실제 출력 모양, 중복 방지, 정리 ────────────────────────────────────
+
+const CHAT = 'orca_session_id:sess_1'
+const line = (s: string) => ({ code: 0, stdout: `${s}\n`, stderr: '' })
+type Stored = { id: string; status: string; error?: string; maybeSent?: boolean; closed?: boolean; route?: { runId: string | null } }
+
+test('Windows 1.4.253 의 짧은 결과({ok,result:{messageId}}, {runId})를 성공·Run 으로 읽는다', async () => {
+  const f = fakeIo([INBOX], args =>
+    args[1] === 'run-current'
+      ? line('{"ok":true,"result":{"runId":"run_xxxx","objective":"o"}}')
+      : line('{"ok":true,"result":{"messageId":"msg_6e38a5a1a9b0"}}'),
+  )
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const r = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean; via?: string }
+  assert.equal(r.ok, true)
+  assert.equal(r.via, '메일함 run:run_xxxx')
+  assert.ok(w.logs.some(l => /메일 보냄 msg_6e38a5a1a9b0 → run:run_xxxx/.test(l)))
+  const [b] = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.equal(b.status, 'sent')
+  const again = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean }
+  assert.equal(again.ok, false, '보낸 묶음은 다시 보내지 않는다')
+  assert.equal(f.runs.filter(x => x.args[1] === 'send').length, 1)
+  await w.deactivate()
+})
+
+test('보내는 중에 또 누르면 두 번째는 보내지 않는다', async () => {
+  let open = () => {}
+  const gate = new Promise<void>(resolve => {
+    open = resolve
+  })
+  const f = fakeIo([INBOX], args =>
+    args[1] === 'run-current' ? line('{"ok":true,"result":{"runId":null}}') : line('{"ok":true,"result":{"messageId":"msg_1"}}'),
+  )
+  const slow: WorkerIo = {
+    ...f.io,
+    runCli: async (program, args, env) => {
+      if (args[1] === 'send') await gate
+      return f.io.runCli(program, args, env)
+    },
+  }
+  const w = await mountWorker({ default: createWorker(slow), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const first = w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] }) as Promise<{ ok: boolean }>
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const second = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean; reason: string }
+  assert.equal(second.ok, false)
+  assert.match(second.reason, /이미 보내는 중/)
+  open()
+  assert.equal((await first).ok, true)
+  assert.equal(f.runs.filter(x => x.args[1] === 'send').length, 1)
+  await w.deactivate()
+})
+
+test('CLI가 돌았는데 결과를 모르면 「이미 보냈을 수 있음」을 남기고, 다시 보내면 지운다', async () => {
+  let fail = true
+  const f = fakeIo([INBOX], args =>
+    args[1] === 'run-current'
+      ? line('{"ok":true,"result":{"runId":"run_xxxx"}}')
+      : fail
+        ? { code: 1, stdout: '', stderr: 'socket hang up' }
+        : line('{"ok":true,"result":{"messageId":"msg_2"}}'),
+  )
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const r = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean; maybeSent?: boolean }
+  assert.equal(r.ok, false)
+  assert.equal(r.maybeSent, true)
+  let [b] = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.equal(b.maybeSent, true)
+  assert.match(b.error ?? '', /socket hang up/)
+  fail = false
+  const ok = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean }
+  assert.equal(ok.ok, true)
+  ;[b] = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.equal(b.status, 'sent')
+  assert.equal(b.maybeSent, undefined)
+  assert.equal(b.error, undefined)
+  await w.deactivate()
+})
+
+test('카드 지우기는 지운 기록에 남아 되돌릴 수 있고, 질문 폴더에 같은 파일이 남아 있어도 다시 뜨지 않는다', async () => {
+  const f = fakeIo([INBOX], args => (args[1] === 'run-current' ? line('{"ok":true,"result":{"runId":"run_xxxx"}}') : line('{}')))
+  // 파일 지우기가 안 되는 폴더(권한 등): 늘 같은 파일이 보인다.
+  const sticky: WorkerIo = { ...f.io, listInbox: async () => [INBOX] }
+  const w = await mountWorker({ default: createWorker(sticky), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  assert.equal(((w.host.data().storage.batches ?? []) as Stored[]).length, 1)
+  const r = (await w.request('qp.remove', { id: 'q4', terminalId: CHAT })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  assert.equal(((w.host.data().storage.batches ?? []) as Stored[]).length, 0)
+  assert.equal(((w.host.data().storage.dismissed ?? []) as unknown[]).length, 1)
+  await w.request('qp.refresh', {})
+  assert.equal(((w.host.data().storage.batches ?? []) as Stored[]).length, 0, '지운 묶음은 다시 뜨지 않는다')
+  assert.ok(w.logs.some(l => /지운 묶음 q4이라 다시 띄우지 않고 버림/.test(l)))
+  const u = (await w.request('qp.undoRemove', { id: 'q4', terminalId: CHAT })) as { ok: boolean }
+  assert.equal(u.ok, true)
+  const back = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.deepEqual(back.map(b => b.id), ['q4'])
+  assert.equal(((w.host.data().storage.dismissed ?? []) as unknown[]).length, 0)
+  const none = (await w.request('qp.undoRemove', { id: 'q4', terminalId: CHAT })) as { ok: boolean }
+  assert.equal(none.ok, false)
+  await w.deactivate()
+})
+
+test('채팅 세션이 Orca에 없으면(session_caller_unknown) 닫힘이고, 「닫힌 세션 질문 지우기」·「보낸 것 지우기」는 그것만 지운다', async () => {
+  const gone = fakeIo([INBOX], args =>
+    args[1] === 'run-current'
+      ? { code: 1, stdout: '{"ok":false,"error":{"code":"session_caller_unknown","message":"No Orca agent session"}}', stderr: '' }
+      : line('{}'),
+  )
+  const host = mockHost({
+    results: { 'terminal.read': { lines: ['$'], truncated: false }, 'terminal.sendText': { accepted: true } },
+  })
+  const w = await mountWorker({ default: createWorker(gone.io), deactivate }, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  await w.request('qp.refresh', {})
+  const byId = () => Object.fromEntries(((w.host.data().storage.batches ?? []) as Stored[]).map(b => [b.id, b]))
+  assert.equal(byId().q4.closed, true)
+  assert.equal(byId().q2.closed, undefined)
+  assert.ok(w.logs.some(l => /닫힘 판정 채팅 세션 sess_1: 닫힘\(session_caller_unknown\)/.test(l)))
+  const no = (await w.request('qp.answer', { id: 'q4', terminalId: CHAT, picks: [[0], [0]] })) as { ok: boolean }
+  assert.equal(no.ok, false)
+  await w.request('qp.clearClosed', {})
+  assert.deepEqual(Object.keys(byId()), ['q2'])
+  await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })
+  assert.equal(byId().q2.status, 'sent')
+  await w.request('qp.clearSent', {})
+  assert.deepEqual(Object.keys(byId()), [])
+  assert.equal(((w.host.data().storage.dismissed ?? []) as unknown[]).length, 2)
+  await w.deactivate()
+})
+
+test('쉬는 채팅 세션(session_caller_not_live)은 닫힘으로 보지 않는다', async () => {
+  const f = fakeIo([INBOX], () => ({
+    code: 1,
+    stdout: '{"ok":false,"error":{"code":"session_caller_not_live","message":"x"}}',
+    stderr: '',
+  }))
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const [b] = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.equal(b.closed, undefined)
+  await w.deactivate()
 })
