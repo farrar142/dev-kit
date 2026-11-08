@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.4.1 — Claude Code question-panel 0.6.2 이상과 함께)
+# 질문 패널 (Orca 플러그인, 시제품 0.4.2 — Claude Code question-panel 0.6.2 이상과 함께)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -76,6 +76,11 @@ orca plugin open local.question-panel --panel questions --json
 확인: Orca 터미널에서 Claude Code(question-panel 0.6.1+ 설치)를 띄우고 질문 도구를 부르게 한다 → 「질문」 패널에 카드 → 고르고 「답 보내기」 → 그 터미널에 `[질문 패널 답 q1] …` 줄이 들어가 Claude가 이어서 답한다.
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
+
+## 0.4.2 — 처음부터 선택돼 보이는 선택지로 바로 보내기
+
+- 증상: 하나만 선택 질문의 라디오는 값이 없어도 첫 항목이 체크된 모양으로 그려지는데, 답 저장소(`picks`)는 비어 있어 `complete`가 false였다. 「답 보내기」가 꺼져 있다가 다른 항목을 눌렀다 돌아와야 켜졌다.
+- 고침: `withDefaults`로 하나만 선택 질문의 빈 선택을 `[0]`으로 채워 화면·보내기 판단·전송 값을 맞췄다. 여러 개 선택은 기본 체크가 없으므로 그대로(하나는 눌러야 함).
 
 ## 0.4.1 — 보낸 메일을 실패로 띄우던 것, 정리 기능
 

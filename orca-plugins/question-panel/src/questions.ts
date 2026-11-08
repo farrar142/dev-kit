@@ -132,6 +132,17 @@ export const addBatch = (list: readonly Batch[], b: Batch): Batch[] => [
 /** 질문마다 고른 선택지 번호(0부터). 빈 배열이면 그 질문은 안 고른 것. */
 export type Picks = number[][]
 
+/**
+ * 화면에 보이는 선택을 그대로 답으로 잡는다(0.4.2). 하나만 선택 질문은 라디오가 처음부터 첫 항목이
+ * 선택된 모양이라, 아직 안 눌렀어도 첫 선택지를 고른 것으로 본다. 여러 개 선택은 체크 상태 그대로(기본 없음).
+ */
+export const withDefaults = (b: Batch, picks: Picks): Picks =>
+  b.questions.map((q, i) => {
+    const p = picks[i] ?? []
+
+    return !q.multiSelect && p.length === 0 && q.options.length > 0 ? [0] : p
+  })
+
 export const complete = (b: Batch, picks: Picks) =>
   b.questions.every((q, i) => {
     const p = picks[i] ?? []
