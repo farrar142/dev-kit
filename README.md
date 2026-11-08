@@ -94,6 +94,10 @@ orca-plugins/
 
 ## 바뀐 것
 
+### 2026-11-08 — Orca 질문 패널 0.2.0: 답이 터미널에 안 들어가던 것 조사·로그
+
+- Windows 첫 시험에서 카드는 떴지만 답이 터미널에 들어가지 않았고 로그가 비었다. Orca 소스상 `terminal.sendText`는 포커스된 worktree의 터미널만 받는다. 거부되면 질문한 workspace를 `workspace.open`으로 연 뒤 다시 보내고(`workspace:read`·`workspace:write` 권한 추가), 워커·패널 모든 단계를 `orca plugin logs`에 남기고, 실패 이유를 패널 위쪽과 카드에 보인다. 시험 15건.
+
 ### 2026-11-08 — Orca 질문 패널 시제품 0.1.0 (`orca-plugins/question-panel/`)
 
 - Claude Code 마켓플레이스 밖의 Orca 플러그인. Orca 터미널의 Claude가 `mcp__question-panel__ask`를 부르면 훅 `agent.tool.after`가 질문을 저장하고, Orca 오른쪽 사이드바 「질문」 패널에 카드로 띄운다. 고른 답은 `terminal.sendText`로 그 터미널에 `[질문 패널 답 q3] …` 한 줄로 들어가 Claude Code 쪽 묶음도 닫힌다. Orca 채팅 UI 세션은 플러그인 API에 메시지를 넣을 길이 없고 도구 훅도 오지 않아 안 된다(까닭·대안은 그 폴더 README). 시험 11건(`orca plugin test`).
