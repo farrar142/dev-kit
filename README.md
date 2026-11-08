@@ -96,6 +96,10 @@ orca-plugins/
 
 ## 바뀐 것
 
+### 2026-11-08 — Orca 질문 패널 0.3.1: 포커스가 바뀔 때까지 기다렸다 보내기
+
+- Windows 시험(1.4.253)에서 질문이 Orca 패널까지 왔지만 답 보내기가 `terminal is outside the active worktree`로 실패했다. `workspace.open`은 활성 worktree 바꾸기를 요청만 하고 돌아오는데, 0.3.0은 14ms 뒤 다시 보냈다. 0.3.1은 `workspace.readContext`에 대상 터미널이 들 때까지 100ms마다 최대 3초 기다린 뒤 보낸다. 포커스와 무관하게 기존 터미널에 넣는 플러그인 메서드는 Orca에 없다(근거는 `orca-plugins/question-panel/README.md`).
+
 ### 2026-11-08 — question-panel 0.6.0: 질문 도구를 stdio MCP 서버로, Orca 질문 패널 0.3.0
 
 - 질문 도구를 mod 도구에서 플러그인의 stdio MCP 서버(`.mcp.json`의 `qp`, `mcp/server.mjs`, node)로 옮겼다. 이름은 `mcp__plugin_question-panel_qp__ask`. Claude Code는 mod 도구에 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca(`agent.tool.after`)가 질문을 못 받았다. MCP 도구는 훅을 탄다(2.1.319 tmux 대화형 + `matcher "*"` 기록 훅으로 확인).

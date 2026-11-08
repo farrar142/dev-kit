@@ -56,30 +56,59 @@ test('터미널이 답을 받지 않으면 묶음을 대기로 남긴다', async
   assert.match(stored, /"status":"pending"/)
 })
 
-test('포커스 밖 터미널이면 그 workspace를 연 뒤 다시 보낸다', async () => {
+// Orca 1.4.253: workspace.open 은 곧바로 돌아오고, 활성 worktree는 조금 뒤에 바뀐다.
+// 여기서는 open 뒤 readContext 를 세 번 읽어야 포커스가 바뀐 것으로 흉내 낸다.
+const focusHost = (switchAfterReads: number) => {
   let opened = false
-  const host = mockHost({
+  let reads = 0
+  const focused = () => opened && reads >= switchAfterReads
+
+  return mockHost({
     results: {
-      'workspace.readContext': { branch: 'b', displayName: '다른 곳', terminals: [] },
+      'workspace.readContext': () => {
+        if (opened) reads += 1
+
+        return { branch: 'b', displayName: focused() ? '대상' : 'main', terminals: focused() ? [{ id: 'term_1' }] : [] }
+      },
       'workspace.open': () => {
         opened = true
 
         return { opened: true }
       },
       'terminal.sendText': () => {
-        if (!opened) throw new Error('terminal is outside the active worktree')
+        if (!focused()) throw hostError('action_failed', 'terminal is outside the active worktree')
 
         return { accepted: true }
       },
     },
   })
+}
+
+test('포커스 밖 터미널이면 그 workspace를 열고 포커스가 바뀔 때까지 기다린 뒤 다시 보낸다', async () => {
+  const host = focusHost(3)
   const w = await mountWorker(worker, { host })
   await w.hooks.fire('agent.tool.after', ASK)
   const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean }
   assert.equal(r.ok, true)
   assert.deepEqual(host.callsOf('workspace.open'), [{ workspaceId: 'ws_1' }])
-  assert.ok(w.logs.some(l => l.includes('sendText 실패: terminal is outside the active worktree')))
+  assert.equal(host.callsOf('terminal.sendText').length, 2)
+  assert.ok(w.logs.some(l => l.includes('sendText 실패: action_failed: terminal is outside the active worktree')))
+  assert.ok(w.logs.some(l => /포커스 바뀜\(\d+ms\), 다시 보냄/.test(l)))
   assert.ok(w.logs.some(l => l.includes('묶음 q2 보냄')))
+})
+
+test('포커스가 끝내 안 바뀌면 기다린 뒤 한 번 더 보내고, 실패 이유를 돌려준다', async () => {
+  const host = focusHost(Number.POSITIVE_INFINITY)
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as {
+    ok: boolean
+    reason: string
+  }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /workspace 밖입니다/)
+  assert.equal(host.callsOf('terminal.sendText').length, 2)
+  assert.ok(w.logs.some(l => l.includes(`${worker.FOCUS_WAIT_MS}ms 안에 포커스가 대상 터미널로 안 바뀜`)))
 })
 
 test('보내기 실패는 던지지 않고 이유를 돌려주며 로그에 남긴다', async () => {
