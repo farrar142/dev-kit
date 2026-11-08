@@ -57,6 +57,8 @@ plugins/
   context-cap/                     세션 컨텍스트 상한 훅(Node, issue-worker 본 세션 또는 환경변수가 있을 때 켜짐)
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
+orca-plugins/
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널로
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -91,6 +93,10 @@ plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-08 — Orca 질문 패널 시제품 0.1.0 (`orca-plugins/question-panel/`)
+
+- Claude Code 마켓플레이스 밖의 Orca 플러그인. Orca 터미널의 Claude가 `mcp__question-panel__ask`를 부르면 훅 `agent.tool.after`가 질문을 저장하고, Orca 오른쪽 사이드바 「질문」 패널에 카드로 띄운다. 고른 답은 `terminal.sendText`로 그 터미널에 `[질문 패널 답 q3] …` 한 줄로 들어가 Claude Code 쪽 묶음도 닫힌다. Orca 채팅 UI 세션은 플러그인 API에 메시지를 넣을 길이 없고 도구 훅도 오지 않아 안 된다(까닭·대안은 그 폴더 README). 시험 11건(`orca plugin test`).
 
 ### 2026-11-08 — question-panel 0.5.2: 화면이 없는 세션도 비블로킹으로
 
