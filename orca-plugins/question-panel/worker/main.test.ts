@@ -484,6 +484,27 @@ test('카드 지우기는 지운 기록에 남아 되돌릴 수 있고, 질문 �
   await w.deactivate()
 })
 
+test('정리 버튼으로 지운 기록에는 묶음 전체가 남지 않는다(0.4.3, 저장소가 커지지 않게)', async () => {
+  const f = fakeIo([INBOX], args => (args[1] === 'run-current' ? line('{"ok":true,"result":{"runId":"run_xxxx"}}') : line('{}')))
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  assert.ok(w.logs.some(l => /qp\.refresh 끝\(\d+ms\)/.test(l)))
+  const r = (await w.request('qp.remove', { id: 'q4', terminalId: CHAT })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  const [d] = (w.host.data().storage.dismissed ?? []) as { key: string; batch?: unknown }[]
+  assert.ok(d.batch !== undefined, '카드 지우기는 되돌리기용 묶음을 남긴다')
+  // 되돌린 뒤 정리 버튼으로 다시 지우면 키·시각만 남는다.
+  await w.request('qp.undoRemove', { id: 'q4', terminalId: CHAT })
+  const bs = (w.host.data().storage.batches ?? []) as Stored[]
+  assert.equal(bs.length, 1)
+  await w.request('qp.clearClosed', {})
+  await w.request('qp.remove', { id: 'q4', terminalId: CHAT })
+  await w.request('qp.clearSent', {})
+  const all = (w.host.data().storage.dismissed ?? []) as { key: string; batch?: unknown }[]
+  assert.ok(all.slice(0, -1).every(x => x.batch === undefined), '마지막 카드 지우기 말고는 묶음이 없다')
+  await w.deactivate()
+})
+
 test('채팅 세션이 Orca에 없으면(session_caller_unknown) 닫힘이고, 「닫힌 세션 질문 지우기」·「보낸 것 지우기」는 그것만 지운다', async () => {
   const gone = fakeIo([INBOX], args =>
     args[1] === 'run-current'

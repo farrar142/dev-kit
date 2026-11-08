@@ -77,6 +77,10 @@ const trace = (msg: string) => {
   }
 }
 
+// 패널 문서가 (다시) 뜰 때마다 한 줄(0.4.3). Orca 가 패널을 「응답하지 않음」으로 멈추면 사이드바 탭을
+// 오갈 때 문서가 새로 뜨므로, 이 줄의 간격으로 멈춤이 얼마나 잦은지 로그에서 센다(README 「무응답」).
+trace(`패널 문서 로드 ${new Date().toISOString()}`)
+
 // 패널을 열 때마다 워커가 대기 묶음의 터미널이 살아 있는지·제목·workspace 이름을 다시 확인한다.
 // 결과는 저장소를 거쳐 stored atom 으로 돌아와 카드가 다시 그려진다.
 void plugin.request('qp.refresh', {}, { timeoutMs: 20000 }).catch((err: unknown) =>

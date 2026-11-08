@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.4.2 — Claude Code question-panel 0.6.2 이상과 함께)
+# 질문 패널 (Orca 플러그인, 시제품 0.4.3 — Claude Code question-panel 0.6.2 이상과 함께)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -77,6 +77,28 @@ orca plugin open local.question-panel --panel questions --json
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
 
+## 0.4.3 — 「응답하지 않습니다」(패널 무응답) 조사와 정리
+
+증상: 사이드바 「질문」 패널이 질문이 없을 때도 가끔 「This plugin panel stopped responding and was suspended」로 바뀌고, 다른 사이드바 패널로 갔다 와야 다시 뜬다.
+
+**Orca가 판정하는 방식**(stablyai/orca main, 1.4.253 무렵 소스):
+- `ui: "components"` 패널은 Orca가 화면에 그리고, 플러그인의 `src/panel.tsx`는 숨겨진 0크기 `<webview>` 게스트에서 돈다(`PluginDeclarativePanel.tsx`, `plugin-frame-element.tsx` — 이 게스트는 `backgroundThrottling=false`).
+- 렌더러의 watchdog이 그 게스트에 10초마다 ping을 보내고, 5초 안에 pong이 없으면 패널을 `unresponsive`로 바꾼다(`plugin-frame-bridge.ts` `PANEL_WATCHDOG_PING_INTERVAL_MS`·`PONG_TIMEOUT_MS`, `plugin-panel-watchdog.ts`). 창이 숨겨져 있으면 ping을 건너뛴다.
+- pong은 게스트 문서의 shell이 ping을 받자마자 동기로 보낸다(`plugin-panel-shell.ts` `receive`). 워커는 이 판정과 무관하다. 워커가 멈춰도 패널은 「응답하지 않음」이 되지 않는다.
+- **자동 복구는 없다.** 한 번 멈춘 watchdog은 다시 돌지 않고, 문서가 그대로면 `unresponsive`를 유지한다(`use-plugin-frame-entry.ts`: 「a session rotation must not revive a frame the watchdog suspended」). 사이드바 탭을 바꾸면 패널이 새로 마운트되어서 다시 뜬다(`right-sidebar-panel-content.tsx` `key={effectiveTab}`). 플러그인 API에는 자기 패널을 다시 띄우는 메서드가 없다.
+
+**이 플러그인 쪽에서 본 것:**
+- 워커는 동기로 막는 곳이 없다. 폴더 읽기는 `fs/promises`, `orca` CLI는 `spawn`(시간 한도 20초)이고, 1.5초 폴링은 겹치지 않는다(`ingest`가 진행 중인 읽기를 같이 기다린다). 애초에 워커는 따로 뜬 프로세스라 패널의 pong을 막을 수 없다.
+- 패널 문서는 질문이 없으면 빈 화면 하나와 첫 `qp.refresh` 요청뿐이다. 주기 타이머도, 저장소에 되쓰는 루프도 없다(`persist: 'storage'` atom은 저장소 값을 받을 때 다시 쓰지 않는다 — `declarative-atoms.ts` `applyStorageValue`).
+- 그래서 무응답은 ping·pong이 지나는 길(렌더러 → Electron 메인 → 게스트)이나 게스트 이벤트 루프가 5초 넘게 밀릴 때 Orca가 내리는 판정으로 본다. 플러그인 코드에서는 원인을 찾지 못했다. Orca 쪽에서 고칠 몫(멈춘 패널 자동 재시도)으로 남긴다.
+- 그래도 고친 것: 지운 기록(`dismissed`)이 지운 묶음 전체를 들고 있어 지울수록 저장소가 커졌다(11개에 약 13KB). 이 값은 저장소가 바뀔 때마다 게스트에 다시 읽힌다. 이제 기록은 키와 시각만 남기고, 묶음 전체는 되돌릴 수 있는 마지막 카드 지우기 하나에만 붙인다. 7일이 지난 기록은 버린다(상한 100개는 그대로). 0.4.2가 남긴 기록은 다음에 지울 때 줄어든다.
+- 로그 두 줄을 더했다. 패널 `패널 문서 로드 <시각>`은 패널 문서가 (다시) 뜰 때마다, 워커 `qp.refresh 끝(Nms)`은 패널을 열 때 확인이 걸린 시간이다.
+
+**재현·확인 방법**(Windows Orca, 0.4.3 설치 뒤):
+1. 「질문」 패널을 열어 둔 채 30분 이상 평소처럼 쓴다(창을 최소화하지 않는다).
+2. `orca plugin logs local.question-panel --json`에서 `[question-panel/panel] 패널 문서 로드` 줄의 시각을 본다. 패널이 멈췄다가 탭을 오가 되살아날 때마다 한 줄씩 늘어난다. 멈춘 시각 근처에 워커 줄(`qp.refresh 끝`, `inbox …`, `hook …`)이 없으면, 플러그인 일 없이 Orca 쪽 지연으로 멈춘 것이다.
+3. `plugins-data\local.question-panel\storage.json`의 `dismissed` 항목에 `batch`가 마지막 하나 말고는 없는지 본다(카드 하나를 지운 뒤).
+
 ## 0.4.2 — 처음부터 선택돼 보이는 선택지로 바로 보내기
 
 - 증상: 하나만 선택 질문의 라디오는 값이 없어도 첫 항목이 체크된 모양으로 그려지는데, 답 저장소(`picks`)는 비어 있어 `complete`가 false였다. 「답 보내기」가 꺼져 있다가 다른 항목을 눌렀다 돌아와야 켜졌다.
@@ -102,14 +124,14 @@ orca plugin open local.question-panel --panel questions --json
 - 모든 단계가 `orca plugin logs local.question-panel --json`에 남는다. 워커 줄은 `[question-panel] …`, 패널 줄은 `[frame] … [question-panel/panel] …`:
   `worker 시작` → `hook mcp__plugin_question-panel_qp__ask terminalId=… workspaceId=… output=…` → `hook: 묶음 qN 저장` → (누르면) 패널 `답 보내기 누름` → `qp.answer 받음` → `포커스 workspace=… 터미널=… 대상 포함=true|false` → `sendText accepted=…` 또는 `sendText 실패: …` → (`workspace.open … 뒤 포커스 바뀜(Nms), 다시 보냄` 또는 `… 3000ms 안에 포커스가 대상 터미널로 안 바뀜, 그래도 한 번 보냄`) → `묶음 qN 보냄`, 패널 `워커 답 ok=…`.
 - 패널 위쪽에 마지막 결과(「보냄」/「보내지 못함」+이유)가 늘 뜨고, 카드 안에도 실패 이유와 「보내는 중」이 뜬다. 카드에는 대상 터미널 id도 보인다.
-- 저장 파일: Orca userData 아래 `plugins-data/local.question-panel/storage.json`(키 `batches`, 지운 기록 `dismissed`).
+- 저장 파일: Orca userData 아래 `plugins-data/local.question-panel/storage.json`(키 `batches`, 지운 기록 `dismissed` — 0.4.3부터 키·시각만, 마지막 카드 지우기만 묶음 전체).
 - **채팅 세션(0.4.0) 로그:** `inbox: 채팅 묶음 qN 저장(질문 N개, 메일함 run:…, cli …)` → (누르면) `qp.answer 받음` → `run-current(세션 …) → run_… | Run 없음`(또는 `읽지 못함, 질문 때 값(…)을 씀: 이유`) → `orchestration send --to … --subject "[질문 패널 답] qN" (실행 파일)` → `메일 보냄 msg_… → …` 또는 `메일 보내기 실패 → …: 코드: 이유` → `묶음 qN 보냄(메일함 …)`. 폴더를 못 읽으면 `inbox(경로) 읽기 실패`, 모양이 틀린 파일은 `inbox 파일: 모양이 틀려 버림`.
 - 카드에는 전달 경로 배지(「터미널」·「메일함 run:…」)와, 마지막 실패 이유가 남는다(패널을 다시 열어도). 보낸 기록에는 `보낸 곳 · 보낸 글`.
 
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 42건(로직 13·워커 21·패널 8)
+orca plugin test orca-plugins/question-panel --json    # 시험 46건(로직 15·워커 22·패널 9)
 node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·stdio 포함) 9건
 orca plugin check orca-plugins/question-panel --json
 npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin types 로 .orca/types 를 만든다

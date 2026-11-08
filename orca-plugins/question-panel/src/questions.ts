@@ -184,27 +184,44 @@ export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b
  */
 export const DISMISSED_KEY = 'dismissed'
 export const DISMISSED_MAX = 100
+/** 이보다 오래된 지운 기록은 버린다(0.4.3). 질문 폴더 파일은 몇 초 안에 지워지므로 넉넉하다. */
+export const DISMISSED_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
-export type Dismissed = { key: string; at: number; batch: Batch }
+/**
+ * 지운 기록 하나. 0.4.3부터 묶음 전체(`batch`)는 되돌릴 수 있는 마지막 카드 지우기에만 남긴다.
+ * 0.4.1~0.4.2는 모든 기록에 묶음 전체를 들고 있어 저장소가 지울수록 커졌다(11개에 13KB).
+ */
+export type Dismissed = { key: string; at: number; batch?: Batch }
 
 export const dismissKey = (b: Pick<Batch, 'id' | 'terminalId' | 'createdAt'>) => `${b.terminalId}/${b.id}@${b.createdAt}`
 
 export const asDismissed = (v: JsonValue | null): Dismissed[] =>
   Array.isArray(v)
-    ? v.flatMap(d =>
-        isRecord(d) && typeof d.key === 'string' && typeof d.at === 'number' && asBatches([d.batch as JsonValue]).length === 1
-          ? [d as unknown as Dismissed] // 저장소에는 이 모듈이 쓴 값만 들어간다
-          : [],
-      )
+    ? v.flatMap((d): Dismissed[] => {
+        if (!isRecord(d) || typeof d.key !== 'string' || typeof d.at !== 'number') return []
+        const [batch] = d.batch === undefined ? [] : asBatches([d.batch as JsonValue])
+
+        return [{ key: d.key, at: d.at, ...(batch === undefined ? {} : { batch }) }]
+      })
     : []
 
-/** 지운 묶음들을 기록에 더한다(새 것이 뒤, 오래된 것부터 버려 DISMISSED_MAX 개). */
-export const addDismissed = (list: readonly Dismissed[], removed: readonly Batch[], now: number): Dismissed[] => {
+/**
+ * 지운 묶음들을 기록에 더한다(새 것이 뒤). 기록은 키·시각만 남기고, `undoable` 이면 이번에 지운 묶음
+ * 전체를 되돌리기용으로 붙인다(앞선 기록의 묶음은 떼어 낸다 — 패널은 마지막 지우기만 되돌린다).
+ * DISMISSED_TTL_MS 보다 오래된 것과 DISMISSED_MAX 를 넘는 오래된 것은 버린다.
+ */
+export const addDismissed = (
+  list: readonly Dismissed[],
+  removed: readonly Batch[],
+  now: number,
+  undoable = false,
+): Dismissed[] => {
   const keys = new Set(removed.map(dismissKey))
 
-  return [...list.filter(d => !keys.has(d.key)), ...removed.map(batch => ({ key: dismissKey(batch), at: now, batch }))].slice(
-    -DISMISSED_MAX,
-  )
+  return [
+    ...list.filter(d => !keys.has(d.key) && now - d.at <= DISMISSED_TTL_MS).map(d => ({ key: d.key, at: d.at })),
+    ...removed.map(batch => ({ key: dismissKey(batch), at: now, ...(undoable ? { batch } : {}) })),
+  ].slice(-DISMISSED_MAX)
 }
 
 /** 정리 하나: 남길 묶음과 지운 묶음으로 나눈다. */
