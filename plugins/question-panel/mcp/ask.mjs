@@ -10,7 +10,7 @@
 // tool_response에 「질문 묶음 qN」이 들어간다.
 //
 // mod가 없는 세션(훅 모듈이 꺼졌거나 불러오지 못한 경우)에는 panel_result가 없다. 그때는
-// 묶음 없이 질문을 대화창 블록으로 돌려준다.
+// 묶음 없이 질문을 대화창 블록으로 돌려준다(패널이 없으니 QUESTION_PANEL_ECHO와 무관하게).
 //
 // Orca 채팅 세션(0.6.1): stream-json 채팅에는 Orca의 agent.tool.after 훅이 오지 않는다(Orca가 채팅
 // 자식 환경에서 훅 변수를 지운다). 그래서 이 서버가 질문을 집 폴더 `.question-panel/orca-inbox`에
@@ -23,7 +23,7 @@
 export const ASK = {
   name: 'ask',
   description:
-    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 목록에 없는 답은 패널의 「기타」로 글이 올 수 있다(「q4 기타 / [질문 패널 답] 질문 = 기타: 글」). 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
+    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 「질문」 패널(Claude Code 데스크톱 앱·CLI, Orca 사이드바)에 쌓인다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(q4)」 정도로 짧게 말하고 턴을 마쳐라. 답은 「[질문 패널 답] 질문 = 고른 것」 메시지나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 목록에 없는 답은 패널의 「기타」로 글이 올 수 있다(「q4 기타 / [질문 패널 답] 질문 = 기타: 글」). 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -49,7 +49,7 @@ export const ASK = {
                   preview: {
                     type: 'string',
                     description:
-                      '선택. 이 선택지를 고르면 어떻게 되는지 보여 줄 마크다운(코드·ASCII 목업·설정 예시). 패널에서 고르거나 「미리보기」를 누르면 펼쳐지고, 대화창 블록에는 코드 블록으로 들어간다.',
+                      '선택. 이 선택지를 고르면 어떻게 되는지 보여 줄 마크다운(코드·ASCII 목업·설정 예시). 패널에서 고르거나 「미리보기」를 누르면 펼쳐지고, 대화창 블록(QUESTION_PANEL_ECHO=1일 때)에는 코드 블록으로 들어간다.',
                   },
                 },
                 required: ['label', 'description'],
@@ -81,6 +81,12 @@ export const RESOLVE = {
 }
 
 const str = v => (typeof v === 'string' ? v : '')
+
+/**
+ * 옛 동작(질문 블록을 대화창에 옮겨 적게 하는 결과)을 켰는가(0.7.0). 기본은 끔: 데스크톱 앱·CLI·Orca 모두
+ * 질문 패널을 그린다. Remote Control·폰처럼 패널이 정말 안 보이는 화면에서만 QUESTION_PANEL_ECHO=1로 켠다.
+ */
+export const echoOn = env => /^(1|true|on|yes)$/i.test(str(env?.QUESTION_PANEL_ECHO).trim())
 const BATCH_ID = /^q\d{1,6}$/
 /** 묶음 ID 목록(소문자, 모양이 맞는 것만, 중복 없음). */
 const batchIds = v => [...new Set((Array.isArray(v) ? v : [v]).map(x => str(x).trim().toLowerCase()).filter(x => BATCH_ID.test(x)))]
@@ -215,8 +221,11 @@ export const callAsk = (args, ctx) => {
   if (ctx !== undefined) closedToOrca(args?.panel_closed, ctx)
   if (typeof prepared === 'string' && prepared !== '') {
     const sent = ctx !== undefined && toOrca(args?.questions, prepared, ctx)
+    // mod가 넘긴 옛 결과(블록을 옮겨 적게 하는 글). QUESTION_PANEL_ECHO=1일 때만 그것을 돌려준다.
+    const echo = str(args?.panel_echo)
+    const text = echo !== '' && echoOn(ctx?.env) ? echo : prepared
 
-    return { content: [{ type: 'text', text: sent ? `${prepared}\n\n${ORCA_NOTE}` : prepared }] }
+    return { content: [{ type: 'text', text: sent ? `${text}\n\n${ORCA_NOTE}` : text }] }
   }
   const questions = Array.isArray(args?.questions) ? args.questions : []
   if (questions.length === 0) return { isError: true, content: [{ type: 'text', text: 'questions가 비었다.' }] }

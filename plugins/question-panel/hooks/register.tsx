@@ -25,13 +25,13 @@ const isRemote = (surface: RenderSurface) => surface !== 'terminal'
 
 // 질문 패널을 붙일 화면이 있는가. 터미널 REPL은 늘 terminal surface를 가진다.
 // Orca 채팅(stream-json)처럼 surface가 하나도 없으면 패널도 원격 카드도 그려지지 않는다.
-// 그래도 AskUserQuestion(세션을 막는다)으로 돌리지 않고, 질문을 쌓아 대화창 블록으로 보이게 한 뒤
-// 턴을 끝낸다 — 답은 「q4 1-2」 같은 글로 온다. (훅 환경에는 process가 없어 환경변수는 못 읽는다.)
+// 그래도 AskUserQuestion(세션을 막는다)으로 돌리지 않고 질문을 쌓은 뒤 턴을 끝낸다. Orca 채팅이면
+// MCP 서버가 Orca 사이드바 질문 패널로 넘기고, 답은 메일이나 「q4 1-2」 같은 글로 온다.
 const panelMode = (surfaces: readonly RenderSurface[]): 'panel' | 'no-surface' =>
   surfaces.length > 0 ? 'panel' : 'no-surface'
 
 const NO_SURFACE_TEXT =
-  '이 세션은 패널 화면이 없습니다(Orca 채팅 등). 질문은 대화창 블록으로 보이고, 글로 답하면 됩니다(예: q4 1-2).'
+  '이 세션은 Claude Code 패널 화면이 없습니다(Orca 채팅 등 — Orca 사이드바 「질문」 패널에서 답할 수 있습니다). 대기 중인 질문은 아래와 같고, 글로 답해도 됩니다(예: q4 1-2).'
 
 type RawQuestion = {
   question?: unknown
@@ -485,24 +485,28 @@ export const register: Register = on => {
       toolUseId: e.tool_use_id,
     }
     await update($, queue, l => [...l, batch])
-    const head =
-      mode === 'no-surface'
-        ? [
-            `질문 묶음 ${id}을 쌓았다. 이 세션은 패널 화면이 없다(Orca 채팅 등). 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
-            `답은 대화창의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
-          ]
-        : [
-            `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라.`,
-            `답은 패널의 완료(「[질문 패널 답] …」 메시지)나 대화창의 글(「${id} …」)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`,
-          ]
-    const panelResult = [...head, '', chatBlock(batch)].join('\n')
+    // 결과 글은 짧게: 데스크톱 앱·CLI·Orca(터미널·채팅) 모두 질문 패널을 그리므로 질문을 대화창에
+    // 다시 쓰지 않게 한다(0.7.0). 패널이 정말 안 보이는 화면(Remote Control·폰)용 옛 결과(블록을 옮겨
+    // 적게 하는 글)는 panel_echo로 따로 넘기고, MCP 서버가 QUESTION_PANEL_ECHO=1일 때만 그것을 돌려준다
+    // (훅 환경에는 process가 없어 환경변수는 서버만 읽는다).
+    const replyLine = `답은 「[질문 패널 답] …」 메시지(Orca면 제목 「[질문 패널 답] ${id}」 메일)나 사용자의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`
+    const panelResult = [
+      `질문 묶음 ${id}을 패널에 올렸다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(${id})」 정도로 짧게 말하고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+      replyLine,
+    ].join('\n')
+    const panelEcho = [
+      `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+      replyLine,
+      '',
+      chatBlock(batch),
+    ].join('\n')
     if (mode === 'panel') {
       void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
         if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
       })
     }
 
-    const ran = await next({ ...e, panel_result: panelResult, panel_closed: chatClosed(list) })
+    const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(list) })
     // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
     if (ran.deny !== undefined || ran.isError === true) await update($, queue, l => l.filter(b => b.id !== id))
 

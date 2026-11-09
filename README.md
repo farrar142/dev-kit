@@ -48,7 +48,7 @@ plugins/
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)와 stdio MCP 서버(node)
     .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask)와 닫기 도구 resolve(…_qp__resolve, 0.6.3). 상태 없이 mod가 넘긴 결과 글을 돌려준다
-    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문·닫힘을 Orca 질문 패널 폴더에)와 node --test 시험
+    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, `QUESTION_PANEL_ECHO`일 때·mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문·닫힘을 Orca 질문 패널 폴더에)와 node --test 시험
     mcp/orca.mjs                   Orca 채팅 세션용 진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
     hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 호출도 감싸 패널 묶음을 닫음, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
@@ -74,7 +74,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -96,6 +96,12 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-09 — question-panel 0.7.0: 질문을 대화창에 다시 옮겨 적지 않기
+
+- Claude Code 데스크톱 앱·CLI·Orca(터미널 탭·채팅 UI) 모두 질문 패널을 그리게 되어, `ask` 결과의 「아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라」와 질문 블록이 중복이 되었다. 이제 결과는 짧다: 「질문 묶음 qN을 패널에 올렸다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(qN)」 정도로 짧게 말하고 턴을 마쳐라」와 답이 오는 길(「[질문 패널 답] …」 메시지·메일, 「qN 1-2」 글, ID 없는 글이면 `resolve`). 도구 설명도 같이 고쳤다.
+- 패널이 정말 안 보이는 화면(Remote Control·폰)용으로 옛 동작을 남겼다: Claude Code를 띄우는 환경에 `QUESTION_PANEL_ECHO=1`(`true`·`on`·`yes`도 됨, `settings.json`의 `env`도 됨)이면 예전처럼 블록을 옮겨 적게 하는 결과를 돌려준다. mod 훅 환경에는 `process`가 없어 mod는 두 글(`panel_result`·`panel_echo`)을 모두 MCP 서버에 넘기고, 환경변수는 서버가 읽어 고른다. mod가 없는 세션은 패널이 없으니 지금처럼 블록을 돌려준다.
+- 시험: mod 23건(`claude plugin test plugins/question-panel`), 서버 13건(`node --test plugins/question-panel/mcp`).
 
 ### 2026-11-09 — Orca 질문 패널 0.4.4·question-panel 0.6.3: 「기타(직접 입력)」 답, 닫힌 묶음에 또 답이 가던 것
 
