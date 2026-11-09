@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
-import { ASK, callAsk, handle, ORCA_NOTE, orcaChat, parseRunId } from './ask.mjs'
+import { ASK, callAsk, callResolve, handle, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
 
 const Q = [
   { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres', description: '관계형' }, { label: 'SQLite', description: '' }] },
@@ -30,8 +30,10 @@ test('질문이 없으면 오류', () => {
   assert.equal(callAsk({}).isError, true)
 })
 
-test('tools/list는 ask 하나만 낸다, 모르는 도구·메서드는 오류, 알림에는 답하지 않는다', () => {
-  assert.deepEqual(handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }).result.tools.map(t => t.name), ['ask'])
+test('tools/list는 ask·resolve를 낸다, 모르는 도구·메서드는 오류, 알림에는 답하지 않는다', () => {
+  assert.deepEqual(handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }).result.tools.map(t => t.name), ['ask', 'resolve'])
+  assert.equal(RESOLVE.inputSchema.properties.panel_result, undefined)
+  assert.equal(handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'toString' } }).error.code, -32602)
   assert.equal(ASK.inputSchema.properties.panel_result, undefined)
   assert.equal(handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'x' } }).error.code, -32602)
   assert.equal(handle({ jsonrpc: '2.0', id: 3, method: 'nope' }).error.code, -32601)
@@ -159,4 +161,40 @@ test('server.mjs: Orca 채팅 세션 환경이면 집 폴더에 질문 파일을
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// 0.6.3: resolve 가 mod 도구였을 때는 Orca 질문 패널(채팅 세션은 폴더 경로)에 닫힘이 닿지 않았다.
+test('resolve: 채팅 세션이면 닫힌 묶음(id·panel_closed)을 Orca 질문 패널 폴더에 남기고 mod 글을 돌려준다', () => {
+  const f = fakeCtx(CHAT_ENV)
+  const r = callResolve({ id: 'Q3', panel_result: '묶음 q3을 「대화창에서 답함」으로 닫았다.', panel_closed: ['q1', 'q3', 'bad'] }, f.ctx)
+  assert.equal(r.content[0].text, '묶음 q3을 「대화창에서 답함」으로 닫았다.')
+  assert.deepEqual(f.writes, [
+    {
+      dir: '/home/me/.question-panel/orca-inbox',
+      name: 'closed-sess_1-7-q3_q1.json',
+      entry: { v: 1, kind: 'closed', ids: ['q3', 'q1'], session: { id: 'sess_1' }, at: 7 },
+    },
+  ])
+  // 터미널 세션은 Orca 훅이 resolve 호출을 보므로 남기지 않는다.
+  const term = fakeCtx({ ORCA_AGENT_SESSION_ID: 'sess_1' })
+  callResolve({ id: 'q3', panel_result: 'x' }, term.ctx)
+  assert.deepEqual(term.writes, [])
+  // mod 가 없으면 서버 글, ID가 틀리면 오류.
+  const noMod = fakeCtx(CHAT_ENV)
+  assert.match(callResolve({ id: 'q3' }, noMod.ctx).content[0].text, /Orca 질문 패널에 알렸다/)
+  assert.equal(callResolve({ id: 'nope' }).isError, true)
+})
+
+test('ask: mod 가 붙인 panel_closed 도 채팅 세션이면 닫힘 파일로 남기고, 안내에 「기타」를 적는다', () => {
+  const f = fakeCtx(CHAT_ENV)
+  callAsk({ questions: Q, panel_result: '질문 묶음 q4를 쌓았다.', panel_closed: ['q3'] }, f.ctx)
+  assert.deepEqual(
+    f.writes.map(w => w.name),
+    ['closed-sess_1-7-q3.json', 'q4-sess_1.json'],
+  )
+  assert.match(ORCA_NOTE, /「기타」/)
+  assert.match(ASK.description, /기타: 글/)
+  const empty = fakeCtx(CHAT_ENV)
+  callAsk({ questions: Q, panel_result: '질문 묶음 q4를 쌓았다.', panel_closed: [] }, empty.ctx)
+  assert.deepEqual(empty.writes.map(w => w.name), ['q4-sess_1.json'])
 })

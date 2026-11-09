@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.4.3 — Claude Code question-panel 0.6.2 이상과 함께)
+# 질문 패널 (Orca 플러그인, 시제품 0.4.4 — Claude Code question-panel 0.6.3 이상과 함께)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -77,6 +77,21 @@ orca plugin open local.question-panel --panel questions --json
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
 
+## 0.4.4 — 「기타(직접 입력)」 답, 대화창에서 닫힌 묶음
+
+- **기타.** 질문마다 선택지 아래 「기타 — 직접 입력」. 하나만 선택이면 라디오의 한 항목이라 다른 선택지와 배타, 여러 개 선택이면 체크박스라 함께 고른다. 고르면 여러 줄 글 상자(`Textarea`, 3줄)가 열리고 글자 수(`N/2000자`)가 보인다. 글이 비었거나 2000자를 넘으면 그 질문은 답하지 않은 것으로 보고 「답 보내기」를 끈다(워커도 같은 `complete`로 다시 막는다). 0.4.2의 기본 선택 규칙(하나만 선택의 빈 선택 = 첫 항목)은 그대로이고, 기타를 고른 질문은 `[OTHER]`라 기본값이 덮지 않는다.
+- **답 꼴.** `picks` 안에서 기타는 `-1`(`OTHER`), 글은 `qp.answer`의 `texts`(질문마다 한 칸, 기타를 고른 질문이 있을 때만 싣는다). 번호 자리에 「기타」, 값은 `기타: <글>`(Claude Code 패널의 기타 꼴과 같다), 기타는 선택지 뒤에 온다.
+  - 메일 본문(채팅 세션): `q4 기타 / [질문 패널 답] 어느 DB? = 기타: 둘 다 섞어 쓰기`, 여러 질문이면 `q4 1-기타, 2-2, 2-기타 / …`.
+  - 터미널 줄: `[질문 패널 답 q4] 1) 어느 DB? = 기타: 둘 다 섞어 쓰기 [기타]`.
+  - 글의 줄바꿈은 ` ↵ `로 바꿔 한 줄로 보낸다(터미널은 줄바꿈에서 먼저 제출하고, Windows `.cmd`는 줄바꿈 인자를 못 넘긴다). 글은 `spawn` 인자 배열의 한 칸으로 가서 셸이 해석하지 않는다. Windows는 `.cmd` 런처라 `cmd.exe /c` 한 줄을 거치는데, 그때만 `"`가 `'`로, `%`가 `％`로 바뀐다(0.4.0 `windowsCmdLine`).
+- **닫힌 묶음에 또 답이 가던 것(2026-11-09).** 원인: `resolve`가 Claude Code **mod 도구**(`mcp__question-panel__resolve`)였다. Claude Code는 mod 도구에 `PreToolUse`·`PostToolUse` 훅을 돌리지 않으므로(위 「풀림」과 같은 이유) Orca 터미널 세션의 `agent.tool.after`가 resolve를 못 봤고, 채팅 세션은 MCP 서버가 질문 때만 폴더에 쓰고 닫힘은 남기지 않았다. 그래서 mod 패널에서는 닫힌 q3이 Orca 카드에는 대기로 남아 답 메일이 갔다.
+- **고침.** question-panel 0.6.3이 resolve를 MCP 서버 도구 `mcp__plugin_question-panel_qp__resolve`로 옮겼다(mod는 `tool.call`로 감싸 자기 패널 묶음을 닫고 서버로 넘긴다).
+  - 터미널 세션: 워커가 그 도구의 `agent.tool.after`를 받아 같은 터미널의 묶음을 닫는다.
+  - 채팅 세션: 서버가 질문 폴더에 닫힘 파일 `closed-<세션>-<시각>-<ID들>.json`(`{v:1, kind:'closed', ids, session:{id}, at}`)을 남기고, 워커가 읽어 닫는다.
+  - 대화창 글(`q4 1-2`)로 닫힌 묶음: mod의 `prompt.submit` 훅에는 바깥으로 알릴 길이 없어, 다음 질문·resolve 호출의 `panel_closed`에 실려 같은 길로 간다.
+  - 닫힌 카드는 「대화창에서 답함」으로 보낸 기록에 들어가고, 패널에서 다시 보내면 워커가 「대화창에서 이미 답해 닫혔습니다」로 막는다. 닫힘 시각보다 뒤에 같은 q 번호로 다시 물은 묶음은 닫지 않는다.
+- 로그: `resolve: <터미널> 의 q3 → q3 「대화창에서 답함」으로 닫음`, `inbox closed-….json: orca_session_id:… 의 q3 → …`, `hook panel_closed: …`.
+
 ## 0.4.3 — 「응답하지 않습니다」(패널 무응답) 조사와 정리
 
 증상: 사이드바 「질문」 패널이 질문이 없을 때도 가끔 「This plugin panel stopped responding and was suspended」로 바뀌고, 다른 사이드바 패널로 갔다 와야 다시 뜬다.
@@ -131,8 +146,8 @@ orca plugin open local.question-panel --panel questions --json
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 46건(로직 15·워커 22·패널 9)
-node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·stdio 포함) 9건
+orca plugin test orca-plugins/question-panel --json    # 시험 56건(로직 18·워커 27·패널 11)
+node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·stdio 포함) 11건
 orca plugin check orca-plugins/question-panel --json
 npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin types 로 .orca/types 를 만든다
 ```
@@ -141,8 +156,8 @@ npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin type
 
 - `orca-plugin.json` — trusted-worker, 패널 `questions`, 훅 `agent.tool.after`
 - `src/questions.ts` — 묶음 모양과 순수 로직(훅 이벤트·채팅 질문 파일 → 묶음, 답 줄·메일 본문 만들기, CLI 답 읽기)
-- `src/protocol.ts` — 패널 ↔ 워커 요청(`qp.answer`·`qp.refresh`·`qp.remove`·`qp.undoRemove`·`qp.clearSent`·`qp.clearClosed`)
-- `src/panel.tsx` — 질문 카드(하나만: RadioGroup, 여럿: Checkbox)
+- `src/protocol.ts` — 패널 ↔ 워커 요청(`qp.answer`(0.4.4부터 `texts`)·`qp.refresh`·`qp.remove`·`qp.undoRemove`·`qp.clearSent`·`qp.clearClosed`)
+- `src/panel.tsx` — 질문 카드(하나만: RadioGroup, 여럿: Checkbox, 둘 다 「기타」+Textarea)
 - `worker/main.ts` — 훅·폴더로 저장, 답을 터미널에 넣거나 메일함으로 보내기
 - Claude Code 쪽: `plugins/question-panel/mcp/ask.mjs`(`toOrca`: 채팅 세션 판정·질문 파일 모양·안내 한 줄)·`mcp/orca.mjs`(진짜 폴더 쓰기·`run-current`)
 - `worker/io.ts`·`worker/node-io.ts` — 폴더 읽기·`orca` CLI 실행(시험은 가짜 io), `worker/node.d.ts` — 쓰는 Node API만 적은 타입

@@ -249,3 +249,46 @@ test('앞선 보내기가 실제로는 갔을 수 있으면 경고하고 「다�
   assert.ok(p.find({ type: 'Callout', text: /실제로는 갔을 수 있습니다/ }))
   await p.unmount()
 })
+
+test('「기타」를 고르면 글 상자가 열리고, 글이 있어야 보내며 글을 함께 보낸다(0.4.4)', async () => {
+  const got: unknown[] = []
+  const host = mockHost({
+    storage: { batches: [BATCH] },
+    requests: {
+      'qp.answer': input => {
+        got.push(input)
+
+        return { ok: true, reason: '' }
+      },
+    },
+  })
+  const p = await mount(panel, { host })
+  const button = { type: 'Button', text: '답 보내기' }
+  assert.equal(p.find({ type: 'Textarea' }), null)
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '-1')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  assert.equal(p.findAll({ type: 'Textarea' }).length, 1)
+  assert.equal(p.find(button)?.props.disabled, true, '기타 글이 비면 보내지 않는다')
+  await p.type({ type: 'Textarea', label: '1번 기타 답' }, '둘 다\n섞어 쓰기')
+  assert.equal(p.find(button)?.props.disabled, false)
+  // 여러 개 선택 질문은 기타와 선택지를 함께 고를 수 있다.
+  await p.toggle({ type: 'Checkbox', label: '기타 — 직접 입력' })
+  assert.equal(p.find(button)?.props.disabled, true)
+  await p.type({ type: 'Textarea', label: '2번 기타 답' }, '감사 로그')
+  await p.press(button)
+  assert.deepEqual(got, [
+    { id: 'q2', terminalId: 'term_1', picks: [[-1], [0, -1]], texts: ['둘 다\n섞어 쓰기', '감사 로그'] },
+  ])
+  assert.deepEqual(p.errors, [])
+  await p.unmount()
+})
+
+test('「기타」 글이 2000자를 넘으면 보내기가 꺼지고 이유가 보인다(0.4.4)', async () => {
+  const single = { ...BATCH, questions: [BATCH.questions[0]] }
+  const p = await mount(panel, { host: mockHost({ storage: { batches: [single] } }) })
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '-1')
+  await p.type({ type: 'Textarea', label: '1번 기타 답' }, 'x'.repeat(2001))
+  assert.equal(p.find({ type: 'Button', text: '답 보내기' })?.props.disabled, true)
+  assert.ok(p.find({ type: 'Text', text: /2000자까지/ }) !== null)
+  await p.unmount()
+})

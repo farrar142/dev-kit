@@ -23,6 +23,13 @@ import {
   routeLabel,
   whereOf,
   workspaceNameFrom,
+  closedIdsOf,
+  closeFromInbox,
+  closeInChat,
+  OTHER,
+  OTHER_MAX,
+  otherProblem,
+  sortPicks,
   type ToolEvent,
 } from './questions.ts'
 
@@ -254,4 +261,67 @@ test('withDefaults: 하나만 선택은 빈 선택을 첫 항목으로 채우고
   assert.deepEqual(withDefaults(q, [[1], [0]]), [[1], [0]])
   assert.equal(complete(q, withDefaults(q, [])), false)
   assert.equal(complete(q, withDefaults(q, [[], [0]])), true)
+})
+
+// ── 기타(직접 입력)·대화창에서 닫힘(0.4.4) ──────────────────────────────────
+
+const TWO = {
+  id: 'q4',
+  terminalId: 't',
+  workspaceId: null,
+  createdAt: 5,
+  status: 'pending' as const,
+  questions: [
+    { question: 'A?', header: '', multiSelect: false, options: [{ label: '가', description: '' }, { label: '나', description: '' }] },
+    { question: 'B?', header: '', multiSelect: true, options: [{ label: '다', description: '' }, { label: '라', description: '' }] },
+  ],
+}
+
+test('「기타」: 글이 있어야 완성, 2000자까지, 하나만 선택이면 기타와 선택지를 같이 못 고른다', () => {
+  assert.equal(complete(TWO, [[OTHER], [0]], []), false)
+  assert.equal(complete(TWO, [[OTHER], [0]], [' \n ']), false)
+  assert.equal(complete(TWO, [[OTHER], [0]], ['직접']), true)
+  assert.equal(complete(TWO, [[OTHER], [0]], ['x'.repeat(OTHER_MAX)]), true)
+  assert.equal(complete(TWO, [[OTHER], [0]], ['x'.repeat(OTHER_MAX + 1)]), false)
+  assert.match(otherProblem([[OTHER]], ['x'.repeat(OTHER_MAX + 1)], 0) ?? '', /2000자까지/)
+  assert.equal(complete(TWO, [[0, OTHER], [0]], ['직접']), false)
+  assert.equal(complete(TWO, [[1], [OTHER, 0]], ['', '여럿']), true)
+  // 「기타」를 안 고른 질문의 글은 보지 않는다.
+  assert.equal(complete(TWO, [[1], [0]], ['', 'x'.repeat(OTHER_MAX + 1)]), true)
+  assert.deepEqual(withDefaults(TWO, [[OTHER], []]), [[OTHER], []])
+  assert.deepEqual(sortPicks([OTHER, 1, 0]), [0, 1, OTHER])
+})
+
+test('「기타」 답 줄·메일 본문: 번호 자리에 기타, 값은 「기타: 글」, 줄바꿈은 ↵', () => {
+  const picks = [[OTHER], [OTHER, 1]]
+  const texts = ['첫 줄\r\n둘째 줄', '셋']
+  assert.equal(answerLine(TWO, picks, texts), '[질문 패널 답 q4] 1) A? = 기타: 첫 줄 ↵ 둘째 줄 [기타] / 2) B? = 라, 기타: 셋 [2,기타]')
+  assert.equal(mailBody(TWO, picks, texts), 'q4 1-기타, 2-2, 2-기타 / [질문 패널 답] A? = 기타: 첫 줄 ↵ 둘째 줄 / [질문 패널 답] B? = 라, 기타: 셋')
+  const one = { ...TWO, questions: [TWO.questions[0]] }
+  assert.equal(mailBody(one, [[OTHER]], ['직접 쓴 답']), 'q4 기타 / [질문 패널 답] A? = 기타: 직접 쓴 답')
+})
+
+test('대화창에서 닫힘: 도구 입력의 id·panel_closed, 닫힘 파일, 그 세션의 대기 묶음만 닫는다', () => {
+  assert.deepEqual(closedIdsOf({ id: 'Q3', panel_closed: ['q1', 'q3', 'x', 4] }), ['q3', 'q1'])
+  assert.deepEqual(closedIdsOf({ questions: [] }), [])
+  assert.deepEqual(closedIdsOf('q3'), [])
+  assert.deepEqual(closeFromInbox({ v: 1, kind: 'closed', ids: ['q3'], session: { id: 'sess_1' }, at: 9 }), {
+    terminalId: 'orca_session_id:sess_1',
+    ids: ['q3'],
+    at: 9,
+  })
+  assert.equal(closeFromInbox({ v: 1, kind: 'closed', ids: [], session: { id: 'sess_1' }, at: 9 }), null)
+  assert.equal(closeFromInbox({ v: 1, id: 'q3', session: { id: 'sess_1' } }), null)
+  const list = [TWO, { ...TWO, id: 'q5' }, { ...TWO, terminalId: 'other' }, { ...TWO, id: 'q6', createdAt: 99 }]
+  const r = closeInChat(list, 't', ['q4', 'q6'], 10)
+  assert.deepEqual(r.closed, ['q4'])
+  assert.deepEqual(
+    r.list.map(b => [b.id, b.terminalId, b.status, b.via ?? '']),
+    [
+      ['q4', 't', 'sent', '대화창에서 답함'],
+      ['q5', 't', 'pending', ''],
+      ['q4', 'other', 'pending', ''],
+      ['q6', 't', 'pending', ''],
+    ],
+  )
 })

@@ -129,12 +129,43 @@ export const addBatch = (list: readonly Batch[], b: Batch): Batch[] => [
   b,
 ]
 
-/** 질문마다 고른 선택지 번호(0부터). 빈 배열이면 그 질문은 안 고른 것. */
+/**
+ * 질문마다 고른 선택지 번호(0부터). 빈 배열이면 그 질문은 안 고른 것.
+ * OTHER(-1)는 「기타 — 직접 입력」을 고른 것이다(0.4.4). 그 글은 Texts 의 같은 자리에 있다.
+ */
 export type Picks = number[][]
+/** 질문마다 「기타」 글(0.4.4). 기타를 안 골랐으면 무시한다. */
+export type Texts = string[]
+
+/** picks 안에서 「기타」를 뜻하는 번호(0.4.4). */
+export const OTHER = -1
+export const OTHER_LABEL = '기타'
+/** 「기타」 글 길이 상한(글자 수). 넘으면 보내기를 막는다. */
+export const OTHER_MAX = 2000
+
+/** 선택지 번호 순, 「기타」는 맨 뒤. */
+export const sortPicks = (p: readonly number[]): number[] =>
+  [...p].sort((a, b) => (a === OTHER ? Infinity : a) - (b === OTHER ? Infinity : b))
+
+const textAt = (texts: Texts | undefined, i: number) => (texts?.[i] ?? '').trim()
+
+/**
+ * 「기타」 글의 문제(없으면 null). 패널은 이 글을 그 질문 아래에 보인다.
+ * 기타를 골랐는데 글이 비었거나 OTHER_MAX 를 넘으면 그 질문은 답하지 않은 것으로 본다.
+ */
+export const otherProblem = (picks: Picks, texts: Texts | undefined, i: number): string | null => {
+  if (!(picks[i] ?? []).includes(OTHER)) return null
+  const t = textAt(texts, i)
+  if (t === '') return '「기타」를 골랐으면 글을 써 주세요.'
+  if (t.length > OTHER_MAX) return `「기타」 글은 ${OTHER_MAX}자까지입니다(지금 ${t.length}자).`
+
+  return null
+}
 
 /**
  * 화면에 보이는 선택을 그대로 답으로 잡는다(0.4.2). 하나만 선택 질문은 라디오가 처음부터 첫 항목이
  * 선택된 모양이라, 아직 안 눌렀어도 첫 선택지를 고른 것으로 본다. 여러 개 선택은 체크 상태 그대로(기본 없음).
+ * 「기타」를 고른 하나만 선택 질문은 [OTHER] 라 그대로 둔다(0.4.4).
  */
 export const withDefaults = (b: Batch, picks: Picks): Picks =>
   b.questions.map((q, i) => {
@@ -143,23 +174,36 @@ export const withDefaults = (b: Batch, picks: Picks): Picks =>
     return !q.multiSelect && p.length === 0 && q.options.length > 0 ? [0] : p
   })
 
-export const complete = (b: Batch, picks: Picks) =>
+export const complete = (b: Batch, picks: Picks, texts?: Texts) =>
   b.questions.every((q, i) => {
-    const p = picks[i] ?? []
+    const p = (picks[i] ?? []).filter(n => n === OTHER || q.options[n] !== undefined)
+    const count = q.multiSelect ? p.length > 0 : p.length === 1
 
-    return q.multiSelect ? p.length > 0 : p.length === 1
+    return count && otherProblem(picks, texts, i) === null
   })
+
+/** 줄바꿈은 한 줄로(터미널은 줄바꿈에서 먼저 제출하고, Windows .cmd 는 줄바꿈 인자를 못 넘긴다). */
+const oneLine = (t: string) => t.replace(/\s*[\r\n]+\s*/g, ' ↵ ')
+
+/** 고른 것의 이름들: 선택지 label, 「기타」는 `기타: <글>`. */
+const labelsOf = (q: Question, p: readonly number[], text: string) =>
+  sortPicks(p).flatMap(n =>
+    n === OTHER ? [`${OTHER_LABEL}: ${oneLine(text)}`] : q.options[n] === undefined ? [] : [q.options[n].label],
+  )
+
+/** 고른 번호들: 1부터, 「기타」는 그 이름 그대로. */
+const numsOf = (p: readonly number[]) => sortPicks(p).map(n => (n === OTHER ? OTHER_LABEL : String(n + 1)))
 
 /**
  * 터미널에 넣을 한 줄. 줄바꿈은 터미널에서 먼저 제출될 수 있어 쓰지 않는다.
  * 「q3」을 담아 Claude Code 쪽 question-panel의 prompt.submit 이 그 묶음을 닫게 한다.
+ * 「기타」는 `= 기타: <글> [기타]`(0.4.4).
  */
-export const answerLine = (b: Batch, picks: Picks): string => {
+export const answerLine = (b: Batch, picks: Picks, texts?: Texts): string => {
   const parts = b.questions.map((q, i) => {
-    const labels = (picks[i] ?? []).flatMap(n => (q.options[n] === undefined ? [] : [q.options[n].label]))
-    const nums = (picks[i] ?? []).map(n => n + 1).join(',')
+    const p = picks[i] ?? []
 
-    return `${i + 1}) ${q.question} = ${labels.join(', ')} [${nums}]`
+    return `${i + 1}) ${q.question} = ${labelsOf(q, p, textAt(texts, i)).join(', ')} [${numsOf(p).join(',')}]`
   })
 
   return `[질문 패널 답 ${b.id}] ${parts.join(' / ')}`.replace(/[\r\n]+/g, ' ')
@@ -173,6 +217,56 @@ export const markSent = (list: readonly Batch[], id: string, terminalId: string,
 
     return { ...rest, status: 'sent', sent: line, via }
   })
+
+// ── 대화창에서 답해 닫힌 묶음(0.4.4) ──────────────────────────────────────────
+
+/**
+ * 「대화창에서 답함」으로 닫는 도구. Claude Code question-panel 0.6.3부터 MCP 서버(qp)가 낸다.
+ * 그 전에는 mod 도구(mcp__question-panel__resolve)라 Claude Code가 훅을 돌리지 않아 Orca가 몰랐고,
+ * 채팅 세션은 질문 폴더에도 아무것도 남지 않았다. 그래서 닫힌 묶음이 패널에 남아 또 답이 갔다.
+ */
+export const RESOLVE_TOOL = 'mcp__plugin_question-panel_qp__resolve'
+export const CHAT_VIA = '대화창에서 답함'
+
+const BATCH_ID_RE = /^q\d{1,6}$/
+
+/** 묶음 ID 목록만 골라낸다(소문자, 중복 없음). */
+const idsFrom = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : [v]).flatMap(x => {
+    const id = typeof x === 'string' ? x.trim().toLowerCase() : ''
+
+    return BATCH_ID_RE.test(id) ? [id] : []
+  })
+
+/**
+ * 질문 패널 도구 입력에서 닫을 묶음 ID. resolve 의 `id`, 그리고 mod 가 질문·resolve 호출에 붙이는
+ * `panel_closed`(그 세션에서 대화창 글로 답해 닫힌 묶음들).
+ */
+export const closedIdsOf = (input: JsonValue | undefined): string[] =>
+  isRecord(input) ? [...new Set([...idsFrom(input.id ?? []), ...idsFrom(input.panel_closed ?? [])])] : []
+
+/**
+ * 그 세션(terminalId)의 대기 묶음 중 ids 에 든 것을 「대화창에서 답함」으로 닫는다. 닫힘 신호보다 뒤에
+ * 만든 묶음(같은 q 번호로 다시 물은 것)은 닫지 않는다.
+ */
+export const closeInChat = (
+  list: readonly Batch[],
+  terminalId: string,
+  ids: readonly string[],
+  at: number,
+): { list: Batch[]; closed: string[] } => {
+  const want = new Set(ids)
+  const closed: string[] = []
+  const next = list.map(b => {
+    if (!(b.terminalId === terminalId && b.status === 'pending' && want.has(b.id) && b.createdAt <= at)) return b
+    closed.push(b.id)
+    const { error: _, maybeSent: __, ...rest } = b
+
+    return { ...rest, status: 'sent' as const, sent: `${b.id} ${CHAT_VIA}`, via: CHAT_VIA }
+  })
+
+  return { list: next, closed }
+}
 
 export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b.status === 'pending')
 
@@ -315,6 +409,19 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
   }
 }
 
+/**
+ * 채팅 세션의 닫힘 파일(question-panel 0.6.3+): `{v, kind:'closed', ids, session:{id}, at}`.
+ * 질문 파일과 같은 폴더에 남는다. 모양이 틀리면 null.
+ */
+export const closeFromInbox = (raw: unknown): { terminalId: string; ids: string[]; at: number } | null => {
+  if (!isRecord(raw) || raw.v !== INBOX_VERSION || raw.kind !== 'closed') return null
+  const sessionId = isRecord(raw.session) ? str(raw.session.id) : ''
+  const ids = idsFrom(raw.ids)
+  if (!SESSION_RE.test(sessionId) || ids.length === 0 || typeof raw.at !== 'number') return null
+
+  return { terminalId: `orca_session_id:${sessionId}`, ids, at: raw.at }
+}
+
 /** 메일 받는 곳: Run에 묶였으면 run:<id>(채팅 세션이 감시하는 메일함), 아니면 그 세션 주소. */
 export const mailTarget = (sessionId: string, runId: string | null) =>
   runId === null ? `orca_session_id:${sessionId}` : `run:${runId}`
@@ -329,18 +436,17 @@ export const mailSubject = (b: Batch) => `[질문 패널 답] ${b.id}`
  * 메일 본문 한 줄: 「q3 1-2, 2-1 / [질문 패널 답] 질문 = 고른 것 / …」.
  * 앞의 「q3 …」은 대화창 글 답(「q4 1-2」)과 같은 모양이라 Claude Code 쪽 question-panel이 묶음을 닫고,
  * 뒤는 패널 완료 메시지(「[질문 패널 답] 질문 = 고른 것」)와 같은 모양이다. Windows의 .cmd 실행 파일이
- * 줄바꿈을 인자로 넘기지 못해 한 줄로 쓴다.
+ * 줄바꿈을 인자로 넘기지 못해 한 줄로 쓴다. 「기타」는 번호 자리에 「기타」, 값은 `기타: <글>`(0.4.4):
+ * 「q4 기타 / [질문 패널 답] 질문 = 기타: 글」.
  */
-export const mailBody = (b: Batch, picks: Picks): string => {
+export const mailBody = (b: Batch, picks: Picks, texts?: Texts): string => {
   const nums =
     b.questions.length === 1
-      ? (picks[0] ?? []).map(n => n + 1).join(',')
-      : b.questions.flatMap((_, i) => (picks[i] ?? []).map(n => `${i + 1}-${n + 1}`)).join(', ')
-  const parts = b.questions.map((q, i) => {
-    const labels = (picks[i] ?? []).flatMap(n => (q.options[n] === undefined ? [] : [q.options[n].label]))
-
-    return `[질문 패널 답] ${q.question} = ${labels.join(', ')}`
-  })
+      ? numsOf(picks[0] ?? []).join(',')
+      : b.questions.flatMap((_, i) => numsOf(picks[i] ?? []).map(n => `${i + 1}-${n}`)).join(', ')
+  const parts = b.questions.map(
+    (q, i) => `[질문 패널 답] ${q.question} = ${labelsOf(q, picks[i] ?? [], textAt(texts, i)).join(', ')}`,
+  )
 
   return `${b.id} ${nums} / ${parts.join(' / ')}`.replace(/[\r\n]+/g, ' ')
 }

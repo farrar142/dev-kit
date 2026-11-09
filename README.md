@@ -47,10 +47,10 @@ plugins/
     hooks/block-heredoc.js         6,000자 넘는 heredoc 명령을 스크립트 파일로 옮겨 source로 실행
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)와 stdio MCP 서버(node)
-    .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask) 하나. 상태 없이 mod가 넘긴 결과 글을 돌려준다
-    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문을 Orca 질문 패널 폴더에)와 node --test 시험
+    .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask)와 닫기 도구 resolve(…_qp__resolve, 0.6.3). 상태 없이 mod가 넘긴 결과 글을 돌려준다
+    mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문·닫힘을 Orca 질문 패널 폴더에)와 node --test 시험
     mcp/orca.mjs                   Orca 채팅 세션용 진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
-    hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 도구 등록, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
+    hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 호출도 감싸 패널 묶음을 닫음, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
                                    답한 기록 지우기(하나·모두), 선택지 preview 펼치기
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
@@ -74,7 +74,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`(MCP 서버)·`mcp__question-panel__resolve`, 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만; 화면이 없는 Orca 채팅 세션은 질문이 대화창 블록으로 보이고 글로 답하거나(예: `q4 1-2`) Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일)) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -96,6 +96,11 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-09 — Orca 질문 패널 0.4.4·question-panel 0.6.3: 「기타(직접 입력)」 답, 닫힌 묶음에 또 답이 가던 것
+
+- Orca 질문 카드에 질문마다 「기타 — 직접 입력」이 생겼다. 고르면 여러 줄 글 상자가 열리고(2000자까지), 하나만 선택이면 다른 선택지와 배타, 여러 개 선택이면 함께 고른다. 글이 비면 보내지 않는다. 답 꼴은 번호 자리에 「기타」: 메일 본문 `q4 기타 / [질문 패널 답] 질문 = 기타: 글`, 터미널 줄 `[질문 패널 답 q4] 1) 질문 = 기타: 글 [기타]`.
+- `resolve`(대화창에서 답함)로 닫은 묶음이 Orca 카드에는 열린 채 남아 또 답이 갔다. resolve가 mod 도구라 Claude Code가 훅을 돌리지 않았고(Orca 터미널 세션의 `agent.tool.after`가 못 봄), 채팅 세션은 질문 폴더에 닫힘을 남기는 길이 없었다. resolve를 MCP 서버 도구(`mcp__plugin_question-panel_qp__resolve`)로 옮겨 터미널 세션은 훅으로, 채팅 세션은 서버가 남기는 닫힘 파일로 Orca 카드를 「대화창에서 답함」으로 닫는다. 대화창 글(`q4 1-2`)로 닫힌 묶음은 다음 질문·resolve 호출에 실려 간다. 근거는 `orca-plugins/question-panel/README.md` 「0.4.4」.
 
 ### 2026-11-08 — Orca 질문 패널 0.4.3: 「응답하지 않습니다」 조사, 지운 기록 줄이기
 
@@ -196,7 +201,7 @@ orca-plugins/
 ### 2026-11-02 — question-panel 0.4.0: 질문을 대화창에도
 
 - `ask`의 도구 결과에 질문 묶음의 마크다운 블록(묶음 ID, 질문, 번호 붙은 선택지와 설명, 선택 방식, 「`q4 1-2`처럼 번호로 답해도 된다」)을 넣고, 도구 설명으로 모델이 그 블록을 답변 글에 그대로 옮겨 적게 한다. Remote Control·폰처럼 플러그인 UI가 오지 않는 화면에서도 질문이 보인다. 터미널 패널은 그대로다.
-- 사용자 글(대화창, 패널 「보내기」)에 대기 중인 묶음 ID가 있으면 그 묶음을 「대화창에서 답함」으로 닫아 패널에서 또 답하지 못하게 한다. ID 없이 글로 답하면 모델이 새 도구 `mcp__question-panel__resolve`로 닫는다.
+- 사용자 글(대화창, 패널 「보내기」)에 대기 중인 묶음 ID가 있으면 그 묶음을 「대화창에서 답함」으로 닫아 패널에서 또 답하지 못하게 한다. ID 없이 글로 답하면 모델이 새 도구 `mcp__question-panel__resolve`로 닫는다(0.6.3부터 MCP 서버 도구 `mcp__plugin_question-panel_qp__resolve`).
 
 ### 2026-11-02 — question-panel 0.3.1: 데스크톱에서 긴 글이 잘리지 않게
 
