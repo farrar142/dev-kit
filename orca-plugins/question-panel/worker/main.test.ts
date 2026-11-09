@@ -545,3 +545,114 @@ test('쉬는 채팅 세션(session_caller_not_live)은 닫힘으로 보지 않�
   assert.equal(b.closed, undefined)
   await w.deactivate()
 })
+
+// ── 기타(직접 입력)·대화창에서 닫힌 묶음(0.4.4) ───────────────────────────────
+
+test('「기타」 답: 터미널에는 [기타] 한 줄로 넣고, 글이 비면 보내지 않는다', async () => {
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const empty = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[-1]], texts: ['  '] })) as {
+    ok: boolean
+    reason: string
+  }
+  assert.equal(empty.ok, false)
+  assert.match(empty.reason, /기타/)
+  const r = (await w.request('qp.answer', {
+    id: 'q2',
+    terminalId: 'term_1',
+    picks: [[-1]],
+    texts: ['둘 다 "섞어"\n쓰기'],
+  })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  assert.deepEqual(host.callsOf('terminal.sendText'), [
+    { terminalId: 'term_1', text: '[질문 패널 답 q2] 1) 어느 DB? = 기타: 둘 다 "섞어" ↵ 쓰기 [기타]', enter: true },
+  ])
+})
+
+test('「기타」 답: 메일 본문은 번호 자리에 기타, 글은 인자 하나로 셸을 거치지 않고 넘긴다', async () => {
+  const f = fakeIo([INBOX], args =>
+    args[1] === 'run-current' ? json({ ok: true, result: { runId: 'run_xxxx' } }) : json({ ok: true, result: { messageId: 'msg_1' } }),
+  )
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  const r = (await w.request('qp.answer', {
+    id: 'q4',
+    terminalId: 'orca_session_id:sess_1',
+    picks: [[-1], [1, -1]],
+    texts: ["'따옴표' & \"쌍\"", '감사 로그'],
+  })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  const send = f.runs.find(x => x.args[1] === 'send')
+  assert.ok(send !== undefined)
+  const body = send.args[send.args.indexOf('--body') + 1]
+  assert.equal(
+    body,
+    "q4 1-기타, 2-2, 2-기타 / [질문 패널 답] 어느 DB? = 기타: '따옴표' & \"쌍\" / [질문 패널 답] 켤 기능 = 로그, 기타: 감사 로그",
+  )
+})
+
+const RESOLVE = { ...ASK, tool: 'mcp__plugin_question-panel_qp__resolve', input: { id: 'q2' }, output: '묶음 q2을 닫았다.' }
+
+test('resolve 훅(터미널 세션)은 그 터미널의 묶음을 「대화창에서 답함」으로 닫아 또 보내지 않는다', async () => {
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  // 다른 터미널의 resolve 는 이 묶음을 닫지 않는다.
+  await w.hooks.fire('agent.tool.after', { ...RESOLVE, terminalId: 'term_9' })
+  await w.hooks.fire('agent.tool.after', RESOLVE)
+  const [b] = w.host.data().storage.batches as { status: string; via: string }[]
+  assert.equal(b.status, 'sent')
+  assert.equal(b.via, '대화창에서 답함')
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean; reason: string }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /대화창에서 이미 답해 닫혔/)
+  assert.equal(host.callsOf('terminal.sendText').length, 0)
+  assert.ok(w.logs.some(l => l.includes('resolve: term_1 의 q2 → q2 「대화창에서 답함」으로 닫음')))
+})
+
+// 2026-11-09 사례: q3 을 resolve 로 닫은 뒤 q4 를 올렸는데, Orca 패널에서 q3 에도 답할 수 있었고 메일이 갔다.
+test('채팅 세션: 닫힘 파일(question-panel 0.6.3)이 오면 그 묶음은 닫히고 메일을 보내지 않으며, 새 묶음은 그대로다', async () => {
+  const q3 = { name: 'q3-sess_1.json', text: INBOX.text.replace('"id":"q4"', '"id":"q3"').replace('"createdAt":5', '"createdAt":3') }
+  const files = [q3]
+  const f = fakeIo(files, args =>
+    args[1] === 'run-current' ? json({ ok: true, result: { runId: 'run_xxxx' } }) : json({ ok: true, result: { messageId: 'msg_1' } }),
+  )
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  await w.request('qp.refresh', {})
+  files.push(
+    {
+      name: 'closed-sess_1-4-q3.json',
+      text: JSON.stringify({ v: 1, kind: 'closed', ids: ['q3'], session: { id: 'sess_1' }, at: 4 }),
+    },
+    // 다른 세션의 같은 번호는 닫지 않는다.
+    {
+      name: 'closed-sess_2-4-q4.json',
+      text: JSON.stringify({ v: 1, kind: 'closed', ids: ['q4'], session: { id: 'sess_2' }, at: 9 }),
+    },
+    INBOX,
+  )
+  await w.request('qp.refresh', {})
+  assert.deepEqual(f.removed.sort(), ['closed-sess_1-4-q3.json', 'closed-sess_2-4-q4.json', 'q3-sess_1.json', 'q4-sess_1.json'])
+  const status = Object.fromEntries((w.host.data().storage.batches as { id: string; status: string }[]).map(b => [b.id, b.status]))
+  assert.deepEqual(status, { q3: 'sent', q4: 'pending' })
+  const before = f.runs.length
+  const r = (await w.request('qp.answer', { id: 'q3', terminalId: 'orca_session_id:sess_1', picks: [[0]] })) as { ok: boolean }
+  assert.equal(r.ok, false)
+  assert.equal(f.runs.length, before, 'CLI 를 띄우지 않는다')
+  const ok = (await w.request('qp.answer', { id: 'q4', terminalId: 'orca_session_id:sess_1', picks: [[0], [0]] })) as { ok: boolean }
+  assert.equal(ok.ok, true)
+})
+
+test('닫힘 신호보다 뒤에 같은 번호로 다시 물은 묶음은 닫지 않는다', async () => {
+  const files: InboxFile[] = []
+  const f = fakeIo(files)
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+  files.push(INBOX, {
+    name: 'closed-sess_1-1-q4.json',
+    text: JSON.stringify({ v: 1, kind: 'closed', ids: ['q4'], session: { id: 'sess_1' }, at: 1 }),
+  })
+  await w.request('qp.refresh', {})
+  const [b] = w.host.data().storage.batches as { status: string }[]
+  assert.equal(b.status, 'pending')
+})

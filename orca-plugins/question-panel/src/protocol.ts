@@ -1,5 +1,5 @@
 // 패널 ↔ 워커 계약. 양쪽이 이 파일을 포함해 이름과 모양이 맞물린다.
-import type { Picks } from './questions.ts'
+import type { Picks, Texts } from './questions.ts'
 
 export type Result = {
   ok: boolean
@@ -12,7 +12,8 @@ export type Result = {
 
 declare module 'orca' {
   interface PluginRequests {
-    'qp.answer': { input: { id: string; terminalId: string; picks: Picks }; output: Result }
+    /** texts: 질문마다 「기타」 글(0.4.4). picks 에 OTHER(-1)가 든 질문만 쓴다. */
+    'qp.answer': { input: { id: string; terminalId: string; picks: Picks; texts?: Texts }; output: Result }
     /** 답한 것·보낸 것을 모두 지운다. */
     'qp.clearSent': { input: Record<string, never>; output: Result }
     /** 대기 묶음마다 터미널이 살아 있는지·제목·workspace 이름을 다시 확인한다(패널을 열 때). */

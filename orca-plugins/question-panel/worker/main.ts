@@ -21,6 +21,11 @@ import {
   asBatches,
   batchFromInbox,
   batchFromTool,
+  CHAT_VIA,
+  closedIdsOf,
+  closeFromInbox,
+  closeInChat,
+  RESOLVE_TOOL,
   isMailbox,
   mailBody,
   mailSubject,
@@ -36,6 +41,7 @@ import {
   type JsonValue,
   type Picks,
   type Route,
+  type Texts,
 } from '../src/questions.ts'
 import type { WorkerIo } from './io.ts'
 import { nodeIo } from './node-io.ts'
@@ -149,7 +155,28 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   }
 
   // 관찰만 하는 훅이라 Claude를 붙잡지 않는다. 결과에 묶음 ID(q<N>)가 있어 before 대신 after를 쓴다.
+  /**
+   * 그 세션의 대기 묶음을 「대화창에서 답함」으로 닫는다(0.4.4). 닫힌 카드는 보내기가 막힌다(qp.answer 는
+   * 대기 묶음만 보낸다). resolve 가 Orca 에 닿지 않아 닫힌 묶음에 또 답이 가던 것을 막는다.
+   */
+  const closeChat = async (terminalId: string, ids: readonly string[], at: number, why: string) => {
+    if (ids.length === 0) return
+    await ingest()
+    const r = closeInChat(await load(), terminalId, ids, at)
+    if (r.closed.length > 0) await save(r.list)
+    log(`${why}: ${terminalId} 의 ${ids.join(',')} → ${r.closed.length > 0 ? `${r.closed.join(',')} 「${CHAT_VIA}」으로 닫음` : '닫을 대기 묶음 없음'}`)
+  }
+
   orca.hooks.on('agent.tool.after', async event => {
+    if (event.tool === RESOLVE_TOOL) {
+      const ids = closedIdsOf(event.input)
+      log(`hook ${event.tool} terminalId=${event.terminalId ?? '(없음)'} ids=${ids.join(',') || '(없음)'}`)
+      if (event.terminalId !== undefined && event.terminalId !== '') {
+        await closeChat(event.terminalId, ids, Date.now(), 'resolve')
+      }
+
+      return
+    }
     if (event.tool !== ASK_TOOL) {
       // 이름이 바뀐 질문 도구(옛 mod 도구 등)가 오면 왜 무시하는지 남긴다. 다른 도구는 조용히 넘긴다.
       if (event.tool.includes('question-panel')) log(`hook ${event.tool}: 질문 도구 이름이 아니라 무시(기대: ${ASK_TOOL})`)
@@ -160,6 +187,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         event.output === undefined ? '(없음)' : JSON.stringify(event.output).slice(0, 120)
       }`,
     )
+    // mod 가 질문 호출에 붙인 panel_closed: 그새 대화창 글로 답해 닫힌 묶음들(0.4.4).
+    if (event.terminalId !== undefined && event.terminalId !== '') {
+      await closeChat(event.terminalId, closedIdsOf(event.input), Date.now(), 'hook panel_closed')
+    }
     // 폴더 읽기(ingest)도 저장소를 고친다. 끝나기를 기다리고, 저장 직전에 다시 읽어 덮어쓰지 않는다.
     await ingest()
     const list = await load()
@@ -246,7 +277,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
    * 신원 없는 프로세스는 send 가 no_active_sender_terminal 로 거부된다(1.4.237 실측). 보내기 직전에
    * run-current 로 묶인 Run 을 다시 보고(질문 뒤 Run 에 묶였을 수 있다), 읽지 못하면 질문할 때 값을 쓴다.
    */
-  const sendMail = async (b: Batch, picks: Picks): Promise<Sent> => {
+  const sendMail = async (b: Batch, picks: Picks, texts: Texts): Promise<Sent> => {
     if (!isMailbox(b)) return { ok: false, reason: '채팅 묶음이 아닙니다.' }
     const r = b.route
     const program = r.cli ?? 'orca'
@@ -259,7 +290,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     } else log(`run-current(세션 ${r.sessionId}) → ${now ?? 'Run 없음'}`)
     const to = mailTarget(r.sessionId, now === undefined ? r.runId : now)
     const subject = mailSubject(b)
-    const body = mailBody(b, picks)
+    const body = mailBody(b, picks, texts)
     log(`orchestration send --to ${to} --subject ${JSON.stringify(subject)} (${program})`)
     const res = await io.runCli(
       program,
@@ -296,6 +327,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       const have = new Set((await load()).map(dismissKey))
       const gone = new Set((await loadDismissed()).map(d => d.key))
       const added: Batch[] = []
+      const closes: { terminalId: string; ids: string[]; at: number; name: string }[] = []
       for (const f of files) {
         let raw: unknown = null
         try {
@@ -303,8 +335,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         } catch {
           raw = null
         }
-        const b = batchFromInbox(raw, Date.now())
-        if (b === null) log(`inbox ${f.name}: 모양이 틀려 버림`)
+        const close = closeFromInbox(raw)
+        const b = close === null ? batchFromInbox(raw, Date.now()) : null
+        if (close !== null) closes.push({ ...close, name: f.name })
+        else if (b === null) log(`inbox ${f.name}: 모양이 틀려 버림`)
         else if (gone.has(dismissKey(b))) log(`inbox ${f.name}: 지운 묶음 ${b.id}이라 다시 띄우지 않고 버림`)
         else if (have.has(dismissKey(b))) {
           // 이미 받은 묶음 — 파일만 다시 지운다.
@@ -315,9 +349,16 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         }
         await io.removeInbox(f.name).catch(err => log(`inbox ${f.name} 지우기 실패: ${describeError(err)}`))
       }
-      if (added.length === 0) return
-      // 저장 직전에 다시 읽는다(그사이 훅이 저장했을 수 있다).
-      await save(added.reduce(addBatch, await load()))
+      if (added.length === 0 && closes.length === 0) return
+      // 저장 직전에 다시 읽는다(그사이 훅이 저장했을 수 있다). 닫힘은 새 묶음을 넣은 뒤에 건다
+      // (닫힘 시각보다 뒤에 만든 묶음은 closeInChat 이 닫지 않는다).
+      let list = added.reduce(addBatch, await load())
+      for (const c of closes) {
+        const r = closeInChat(list, c.terminalId, c.ids, c.at)
+        list = r.list
+        log(`inbox ${c.name}: ${c.terminalId} 의 ${c.ids.join(',')} → ${r.closed.length > 0 ? `${r.closed.join(',')} 「${CHAT_VIA}」으로 닫음` : '닫을 대기 묶음 없음'}`)
+      }
+      await save(list)
       for (const b of added) {
         void orca.host
           .call('notifications.show', { title: '질문 패널', body: `${b.id}: ${b.questions[0].question}` })
@@ -328,13 +369,26 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     }
   }
 
-  orca.panels.handle('qp.answer', async ({ id, terminalId, picks }) => {
-    log(`qp.answer 받음 id=${id} terminal=${terminalId} picks=${JSON.stringify(picks)}`)
+  orca.panels.handle('qp.answer', async ({ id, terminalId, picks, texts = [] }) => {
+    log(
+      `qp.answer 받음 id=${id} terminal=${terminalId} picks=${JSON.stringify(picks)}${
+        texts.some(t => t.trim() !== '') ? ` 기타 글 ${texts.map(t => t.trim().length).join('/')}자` : ''
+      }`,
+    )
     try {
       const list = await load()
       const b = list.find(x => x.id === id && x.terminalId === terminalId && x.status === 'pending')
-      if (b === undefined) return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
-      if (!complete(b, picks)) return { ok: false, reason: '모든 질문에 답을 골라 주세요.' }
+      if (b === undefined) {
+        const done = list.find(x => x.id === id && x.terminalId === terminalId)
+        if (done?.via === CHAT_VIA) {
+          log(`묶음 ${id}: 이미 「${CHAT_VIA}」으로 닫힘 — 보내지 않음`)
+
+          return { ok: false, reason: `${id}은(는) 대화창에서 이미 답해 닫혔습니다.` }
+        }
+
+        return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
+      }
+      if (!complete(b, picks, texts)) return { ok: false, reason: '모든 질문에 답을 골라 주세요. 「기타」를 골랐으면 글을 2000자 안으로 써 주세요.' }
       if (isMailbox(b) && b.closed === true) {
         log(`묶음 ${id}: 채팅 세션 ${b.route.sessionId}이 Orca에 없음 — 보내지 않음`)
 
@@ -349,7 +403,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       inflight.add(k)
       try {
         if (isMailbox(b)) {
-          const r = await sendMail(b, picks)
+          const r = await sendMail(b, picks, texts)
           await save(
             r.ok
               ? markSent(await load(), id, terminalId, r.line ?? '', r.via)
@@ -363,7 +417,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
           return r
         }
 
-        return await answerTerminal(b, id, terminalId, picks)
+        return await answerTerminal(b, id, terminalId, picks, texts)
       } finally {
         inflight.delete(k)
       }
@@ -376,7 +430,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   })
 
   /** 터미널 묶음의 답: 그 터미널에 한 줄로 넣는다. */
-  const answerTerminal = async (b: Batch, id: string, terminalId: string, picks: Picks): Promise<Result> => {
+  const answerTerminal = async (b: Batch, id: string, terminalId: string, picks: Picks, texts: Texts): Promise<Result> => {
     if (b.closed === true || (await isClosed(terminalId))) {
       if (b.closed !== true) await save(patchBatch(await load(), id, terminalId, { closed: true }))
       log(`묶음 ${id}: 터미널 ${terminalId}이 닫힘 — 보내지 않음`)
@@ -389,7 +443,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         ctx === null ? '-' : ctx.terminals.map(t => t.id).join(',')
       } 대상 포함=${ctx?.terminals.some(t => t.id === terminalId) ?? false}`,
     )
-    const line = answerLine(b, picks)
+    const line = answerLine(b, picks, texts)
     const r = await send(b, line)
     if (r.ok) {
       await save(markSent(await load(), id, terminalId, line, '터미널'))

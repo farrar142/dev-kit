@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { callAsk } from '../mcp/ask.mjs'
+import { callAsk, callResolve } from '../mcp/ask.mjs'
 
 const PANE = {
   plugin: 'question-panel',
@@ -42,6 +42,10 @@ const INPUT = {
   ],
 }
 
+const RESOLVE = 'mcp__plugin_question-panel_qp__resolve'
+// MCP 서버로 이어진 resolve 호출(입력)들. setup 마다 비운다.
+const resolved: any[] = []
+
 // MCP 결과(content 블록)의 글.
 const textOf = (ran: any) =>
   Array.isArray(ran.result) ? ran.result.map((b: any) => b.text).join('\n') : JSON.stringify(ran)
@@ -54,6 +58,7 @@ async function setup(
 ) {
   mock.clock(on)
   const submitted: string[] = []
+  resolved.length = 0
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
   on('session.surfaces', () => ({ value: surfaces }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
@@ -61,6 +66,11 @@ async function setup(
   on('ui.open', () => ({ value: { isPlaced: true } }))
   // MCP 서버(mcp/ask.mjs) 자리: mod가 넘긴 panel_result를 그대로 돌려준다.
   on('tool.call', { tool: TOOL }, (_: any, e: any) => server(e))
+  on('tool.call', { tool: RESOLVE }, (_: any, e: any) => {
+    resolved.push(e)
+
+    return { result: callResolve(e).content }
+  })
   on('prompt.submit', (_: any, e: any) => {
     submitted.push(e.text)
 
@@ -315,7 +325,7 @@ test('도구 결과에 대화창에 옮겨 적을 마크다운 블록(묶음 ID�
   expect(ran).toContain('- 2) SQLite — 파일형')
   expect(ran).toContain('2. 〔기능〕 넣을 기능은?** (여러 개 선택 가능)')
   expect(ran).toContain('q1 1-2, 2-1')
-  expect(ran).toContain('mcp__question-panel__resolve')
+  expect(ran).toContain(RESOLVE)
 })
 
 test('대화창 글에 묶음 ID가 있으면 그 묶음을 「대화창에서 답함」으로 닫아 패널에서 또 답할 수 없다', async ($, on) => {
@@ -350,11 +360,31 @@ test('resolve 도구로 ID 없이 글로 답한 묶음을 닫는다', async ($, 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ key: 'o:q1:0:0' })).toBeDefined()
 
-  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q1' } as any))).toContain('닫았다')
+  expect(JSON.stringify(await $.tool.call({ tool: RESOLVE, id: 'Q1' } as any))).toContain('닫았다')
   expect(await ui.find({ type: 'Text', text: /대화창에서 답함 · q1/ })).toBeDefined()
-  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q1' } as any))).toContain('이미 닫혀')
-  expect(JSON.stringify(await $.tool.call({ tool: 'mcp__question-panel__resolve', id: 'q9' } as any))).toContain('없다')
+  expect(JSON.stringify(await $.tool.call({ tool: RESOLVE, id: 'q1' } as any))).toContain('이미 닫혀')
+  expect(JSON.stringify(await $.tool.call({ tool: RESOLVE, id: 'q9' } as any))).toContain('없다')
   await ui.unmount()
+})
+
+// 0.6.3: resolve 가 mod 도구였을 때는 훅을 타지 않아 Orca 질문 패널이 닫힌 줄 몰랐다.
+test('resolve 는 MCP 서버로 이어지고, 대화창에서 닫힌 묶음을 panel_closed 로 서버에 알린다', async ($, on) => {
+  const seen: any[] = []
+  await setup($, on, ['terminal'], (e: any) => {
+    seen.push(e)
+
+    return { result: callAsk(e).content }
+  })
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await $.tool.call({ tool: RESOLVE, id: 'q1' } as any)
+  expect(resolved).toHaveLength(1)
+  expect(resolved[0].id).toBe('q1')
+  expect(resolved[0].panel_closed).toEqual(['q1'])
+  // 대화창 글(ID 포함)로 닫은 것도 다음 질문 호출에 실린다.
+  await $.prompt.submit({ text: 'q2 1-1, 2-2' } as any)
+  await $.tool.call(INPUT as any)
+  expect(seen.map(e => e.panel_closed)).toEqual([[], [], ['q1', 'q2']])
 })
 
 // 플러그인 아래에서 엔진 대신 기본 줄을 그린다(플러그인이 next(e)로 넘긴 줄).

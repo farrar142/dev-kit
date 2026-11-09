@@ -23,7 +23,7 @@
 export const ASK = {
   name: 'ask',
   description:
-    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
+    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 오른쪽 「질문」 패널에 쌓이고, 도구 결과로 같은 질문을 담은 마크다운 블록이 돌아온다. 그 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라(사용자가 Remote Control·폰으로 보면 패널이 보이지 않는다). 답은 패널의 완료(「[질문 패널 답] 질문 = 고른 것」 메시지)나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 목록에 없는 답은 패널의 「기타」로 글이 올 수 있다(「q4 기타 / [질문 패널 답] 질문 = 기타: 글」). 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -64,7 +64,26 @@ export const ASK = {
   },
 }
 
+// 「대화창에서 답함」으로 닫는 도구(0.6.3). 예전에는 mod 도구(mcp__question-panel__resolve)였는데,
+// Claude Code가 mod 도구에는 훅을 돌리지 않아 Orca 질문 패널이 닫힌 줄 몰랐다(닫힌 묶음에 또 답이 갔다).
+// MCP 서버 도구라 Orca 터미널 세션은 agent.tool.after 훅으로 보고, 채팅 세션은 이 서버가 폴더에 닫힘을 남긴다.
+export const RESOLVE = {
+  name: 'resolve',
+  description:
+    '질문 패널의 대기 중인 묶음을 「대화창에서 답함」으로 닫는다. 사용자가 패널 대신 대화창에 글로 답했는데 그 글에 묶음 ID(q4 등)가 없을 때 그 묶음 ID로 부른다. Claude Code 패널과 Orca 사이드바 질문 패널 둘 다에서 같은 질문에 또 답하는 일을 막는다.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: '닫을 묶음 ID(예: q4)' },
+    },
+    required: ['id'],
+  },
+}
+
 const str = v => (typeof v === 'string' ? v : '')
+const BATCH_ID = /^q\d{1,6}$/
+/** 묶음 ID 목록(소문자, 모양이 맞는 것만, 중복 없음). */
+const batchIds = v => [...new Set((Array.isArray(v) ? v : [v]).map(x => str(x).trim().toLowerCase()).filter(x => BATCH_ID.test(x)))]
 
 // mod가 없을 때의 대화창 블록. 묶음 ID가 없으니 번호로만 답하게 한다.
 const plainBlock = questions => {
@@ -90,7 +109,7 @@ const plainBlock = questions => {
 export const ORCA_INBOX_PARTS = ['.question-panel', 'orca-inbox']
 export const ORCA_INBOX_VERSION = 1
 export const ORCA_NOTE =
-  'Orca 사이드바 「질문」 패널로도 답할 수 있습니다(패널에서 고른 답은 「[질문 패널 답] 묶음 ID」 오케스트레이션 메일로 옵니다).'
+  'Orca 사이드바 「질문」 패널로도 답할 수 있습니다(패널에서 고른 답은 「[질문 패널 답] 묶음 ID」 오케스트레이션 메일로 옵니다). 목록에 없는 답은 패널의 「기타」로 글을 써서 보낼 수 있습니다.'
 
 /** Orca 채팅 세션(stream-json)이면 세션 정보, 아니면 null. 터미널 세션은 Orca 훅이 질문을 가져간다. */
 export const orcaChat = env => {
@@ -160,9 +179,40 @@ export const toOrca = (questions, text, ctx) => {
   }
 }
 
+/** 닫힘 파일 하나(Orca 질문 패널 closeFromInbox 가 읽는 모양, 0.6.3). */
+export const closedEntry = ({ ids, chat, now }) => ({
+  v: ORCA_INBOX_VERSION,
+  kind: 'closed',
+  ids,
+  session: { id: chat.sessionId },
+  at: now,
+})
+
+/**
+ * 채팅 세션이면 「대화창에서 답함」으로 닫힌 묶음을 Orca 질문 패널 폴더에 남긴다(0.6.3). 남겼으면 true.
+ * 채팅 세션에는 Orca 훅이 오지 않아, 이것이 없으면 Orca 카드가 열린 채 남아 또 답이 간다.
+ */
+export const closedToOrca = (ids, ctx) => {
+  const chat = orcaChat(ctx?.env)
+  const list = batchIds(ids)
+  if (chat === null || list.length === 0) return false
+  try {
+    const name = `closed-${chat.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${ctx.now}-${list.join('_')}.json`
+    ctx.write(ctx.inboxDir, name, JSON.stringify(closedEntry({ ids: list, chat, now: ctx.now })))
+
+    return true
+  } catch (err) {
+    ctx.warn?.(`Orca 질문 패널 폴더에 닫힘을 남기지 못함: ${err instanceof Error ? err.message : String(err)}`)
+
+    return false
+  }
+}
+
 // tools/call 하나에 대한 MCP 결과. ctx(orca.mjs 의 orcaCtx)가 있으면 Orca 채팅 세션 질문을 폴더에 남긴다.
 export const callAsk = (args, ctx) => {
   const prepared = args?.panel_result
+  // mod 가 붙인 panel_closed: 그새 대화창 글로 답해 닫힌 묶음들. Orca 카드도 닫는다.
+  if (ctx !== undefined) closedToOrca(args?.panel_closed, ctx)
   if (typeof prepared === 'string' && prepared !== '') {
     const sent = ctx !== undefined && toOrca(args?.questions, prepared, ctx)
 
@@ -181,6 +231,27 @@ export const callAsk = (args, ctx) => {
   }
 }
 
+// resolve 호출 하나. 결과 글은 mod 가 panel_result 로 넘긴다(mod 가 자기 패널의 묶음을 닫는다).
+export const callResolve = (args, ctx) => {
+  const ids = batchIds([args?.id, ...(Array.isArray(args?.panel_closed) ? args.panel_closed : [])])
+  const id = batchIds(args?.id)[0]
+  const toOrca = ctx !== undefined && closedToOrca(ids, ctx)
+  const prepared = args?.panel_result
+  if (typeof prepared === 'string' && prepared !== '') return { content: [{ type: 'text', text: prepared }] }
+  if (id === undefined) return { isError: true, content: [{ type: 'text', text: `묶음 ID가 아니다: ${str(args?.id)}` }] }
+
+  return {
+    content: [
+      {
+        type: 'text',
+        text: `질문 패널 mod가 없어 이 세션의 패널은 고치지 못했다.${toOrca ? ` 묶음 ${id}을 닫으라고 Orca 질문 패널에 알렸다.` : ''}`,
+      },
+    ],
+  }
+}
+
+const TOOLS = { [ASK.name]: callAsk, [RESOLVE.name]: callResolve }
+
 // JSON-RPC 요청 하나에 대한 응답(알림이면 undefined).
 export const handle = (msg, ctx) => {
   if (msg === null || typeof msg !== 'object' || msg.id === undefined) return undefined
@@ -190,15 +261,18 @@ export const handle = (msg, ctx) => {
       return ok({
         protocolVersion: str(msg.params?.protocolVersion) || '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'question-panel', version: '0.6.1' },
+        serverInfo: { name: 'question-panel', version: '0.6.3' },
       })
     case 'tools/list':
-      return ok({ tools: [ASK] })
-    case 'tools/call':
-      if (msg.params?.name !== ASK.name) {
+      return ok({ tools: [ASK, RESOLVE] })
+    case 'tools/call': {
+      const name = str(msg.params?.name)
+      const call = Object.hasOwn(TOOLS, name) ? TOOLS[name] : undefined
+      if (call === undefined) {
         return { jsonrpc: '2.0', id: msg.id, error: { code: -32602, message: `없는 도구: ${msg.params?.name}` } }
       }
-      return ok(callAsk(msg.params?.arguments, ctx))
+      return ok(call(msg.params?.arguments, ctx))
+    }
     case 'ping':
       return ok({})
     default:

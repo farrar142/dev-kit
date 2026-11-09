@@ -8,7 +8,9 @@ const TITLE = '질문'
 // 질문 도구는 이 플러그인의 stdio MCP 서버(.mcp.json의 qp, mcp/server.mjs)가 낸다. mod 도구로 내면
 // Claude Code가 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca 등 바깥 도구가 질문을 못 받는다(0.6.0).
 const TOOL = 'mcp__plugin_question-panel_qp__ask'
-const RESOLVE_TOOL = 'mcp__question-panel__resolve'
+// 「대화창에서 답함」으로 닫는 도구도 MCP 서버가 낸다(0.6.3). mod 도구였을 때는 훅을 타지 않아
+// Orca 질문 패널이 닫힌 줄 몰라 같은 질문에 또 답이 갔다.
+const RESOLVE_TOOL = 'mcp__plugin_question-panel_qp__resolve'
 
 // 필드가 바뀌면 태그를 올린다: 이전 버전이 저장한 값은 비어 있는 것으로 읽힌다.
 const queue = atom({ plugin: 'question-panel', key: 'queue' } as const, [], {
@@ -94,6 +96,10 @@ const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
       ? { ...b, status: 'sent' as const, via: 'chat' as const, confirmingDelete: false }
       : b,
   )
+
+// 대화창 글로 답해 닫힌 묶음 ID들. 질문·resolve 호출에 panel_closed 로 붙여 Orca 질문 패널 카드도 닫는다
+// (prompt.submit 훅에는 바깥으로 알릴 길이 없어 다음 도구 호출에 실어 보낸다, 0.6.3).
+const chatClosed = (list: readonly QuestionPanelBatch[]) => list.filter(b => b.via === 'chat').map(b => b.id)
 
 // 답한 묶음(패널에서 보냄·대화창에서 답함)만 지운다. 대기 중인 묶음은 남긴다.
 const clearSent = (list: QuestionPanelBatch[]) => list.filter(b => b.status !== 'sent')
@@ -442,19 +448,6 @@ function kit($: RenderSelf, e: RenderEvent) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.tool.register({
-      name: 'resolve',
-      description:
-        '질문 패널의 대기 중인 묶음을 「대화창에서 답함」으로 닫는다. 사용자가 패널 대신 대화창에 글로 답했는데 그 글에 묶음 ID(q4 등)가 없을 때 그 묶음 ID로 부른다. 패널에서 같은 질문에 또 답하는 일을 막는다.',
-      isDeferred: false,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: '닫을 묶음 ID(예: q4)' },
-        },
-        required: ['id'],
-      },
-    })
     await $.command.register({
       name: 'questions',
       description: '질문 패널을 연다',
@@ -470,6 +463,7 @@ export const register: Register = on => {
   // MCP 서버의 도구는 기본으로 ToolSearch 뒤에 숨는다. 예전 mod 도구(isDeferred: false)처럼
   // 처음부터 도구 목록에 두어, 모델이 AskUserQuestion 대신 이것을 바로 고르게 한다.
   on('tool.describe', { tool: TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
+  on('tool.describe', { tool: RESOLVE_TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
 
   // 질문 도구 호출을 감싼다: 묶음을 쌓고 모델이 읽을 결과 글을 만들어 입력의 panel_result로
   // MCP 서버에 넘긴다(서버는 그 글을 그대로 돌려준다). next를 거쳐야 MCP 호출과 함께
@@ -508,25 +502,33 @@ export const register: Register = on => {
       })
     }
 
-    const ran = await next({ ...e, panel_result: panelResult })
+    const ran = await next({ ...e, panel_result: panelResult, panel_closed: chatClosed(list) })
     // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
     if (ran.deny !== undefined || ran.isError === true) await update($, queue, l => l.filter(b => b.id !== id))
 
     return ran
   })
 
-  on('tool.call', { tool: RESOLVE_TOOL }, async ($, e) => {
+  // 이 세션의 패널 묶음을 닫고, MCP 서버로 이어 보낸다(next). 서버 호출이라 Orca 터미널 세션은
+  // agent.tool.after 훅으로 닫힘을 보고, 채팅 세션은 서버가 Orca 질문 패널 폴더에 닫힘을 남긴다.
+  on('tool.call', { tool: RESOLVE_TOOL }, async ($, e, next) => {
     const id = typeof e.id === 'string' ? e.id.trim().toLowerCase() : ''
     let found = undefined as QuestionPanelBatch | undefined
+    let after: QuestionPanelBatch[] = []
     await update($, queue, l => {
       found = l.find(b => b.id === id)
+      after = closeInChat(l, new Set([id]))
 
-      return closeInChat(l, new Set([id]))
+      return after
     })
-    if (found === undefined) return { result: `묶음 ${id}이 없다.` }
-    if (found.status !== 'pending') return { result: `묶음 ${id}은 이미 닫혀 있다.` }
+    const text =
+      found === undefined
+        ? `묶음 ${id}이 없다.`
+        : found.status !== 'pending'
+          ? `묶음 ${id}은 이미 닫혀 있다.`
+          : `묶음 ${id}을 「대화창에서 답함」으로 닫았다.`
 
-    return { result: `묶음 ${id}을 「대화창에서 답함」으로 닫았다.` }
+    return next({ ...e, id, panel_result: text, panel_closed: chatClosed(after) })
   })
 
   // 사용자가 대화창에 묶음 ID를 넣어 답하면(「q4 2번」) 패널의 그 묶음을 닫는다.

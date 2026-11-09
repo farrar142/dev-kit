@@ -21,6 +21,7 @@ import {
   set,
   Stack,
   Text,
+  Textarea,
   Toolbar,
   update,
 } from 'orca'
@@ -29,12 +30,17 @@ import {
   asBatches,
   complete,
   isMailbox,
+  OTHER,
+  OTHER_MAX,
+  otherProblem,
+  sortPicks,
   routeLabel,
   STORE_KEY,
   whereOf,
   type Batch,
   type JsonValue,
   type Picks,
+  type Texts,
   withDefaults,
 } from './questions.ts'
 
@@ -42,6 +48,8 @@ import {
 const stored = atom<JsonValue>(STORE_KEY, [], { persist: 'storage' })
 /** 묶음별 고른 번호. 키는 `${terminalId}/${id}`. */
 const picks = atom<Record<string, Picks>>('picks', {}, { persist: 'plugin' })
+/** 묶음별 「기타」 글(0.4.4). 키는 picks 와 같다. */
+const texts = atom<Record<string, Texts>>('texts', {}, { persist: 'plugin' })
 const notice = atom<{ key: string; ok: boolean; text: string } | null>(null)
 const busy = atom<string | null>(null)
 /** 방금 지운 카드(되돌리기). */
@@ -63,10 +71,24 @@ const toggle = (k: string, qi: number, n: number, on: boolean) =>
     const set_ = new Set(cur[qi] ?? [])
     if (on) set_.add(n)
     else set_.delete(n)
-    cur[qi] = [...set_].sort((a, b) => a - b)
+    cur[qi] = sortPicks([...set_])
 
     return { ...all, [k]: cur }
   })
+
+const setText = (k: string, qi: number, text: string) =>
+  update(texts, all => {
+    const cur = [...(all[k] ?? [])]
+    cur[qi] = text
+
+    return { ...all, [k]: cur }
+  })
+
+/** 보낸 카드·지운 카드의 고른 것과 글을 지운다. */
+const forget = (k: string) => {
+  update(picks, ({ [k]: _, ...rest }) => rest)
+  update(texts, ({ [k]: _, ...rest }) => rest)
+}
 
 // 패널의 console.warn 은 `orca plugin logs` 에 [frame] 줄로 남는다.
 const trace = (msg: string) => {
@@ -93,7 +115,7 @@ async function removeOne(b: Batch) {
   const r = await plugin.request('qp.remove', { id: b.id, terminalId: b.terminalId }).catch(() => null)
   if (r?.ok === true) {
     set(removed, { id: b.id, terminalId: b.terminalId })
-    update(picks, ({ [keyOf(b)]: _, ...rest }) => rest)
+    forget(keyOf(b))
   }
 }
 
@@ -114,13 +136,15 @@ const clearAll = (what: 'qp.clearSent' | 'qp.clearClosed') => {
 async function send(b: Batch) {
   const k = keyOf(b)
   const chosen = withDefaults(b, read(picks)[k] ?? [])
+  const written = b.questions.map((_, i) => (chosen[i] ?? []).includes(OTHER) ? (read(texts)[k]?.[i] ?? '') : '')
   trace(`답 보내기 누름 ${b.id} terminal=${b.terminalId} picks=${JSON.stringify(chosen)}`)
   set(busy, k)
   set(notice, null)
   try {
     const r = await plugin.request(
       'qp.answer',
-      { id: b.id, terminalId: b.terminalId, picks: chosen },
+      // 「기타」를 고른 질문이 있을 때만 글을 싣는다(그 밖의 요청 모양은 0.4.3과 같다).
+      { id: b.id, terminalId: b.terminalId, picks: chosen, ...(written.some(t => t !== '') ? { texts: written } : {}) },
       { timeoutMs: 20000 },
     )
     trace(`워커 답 ok=${r.ok} reason=${r.reason}`)
@@ -134,7 +158,7 @@ async function send(b: Batch) {
             text: r.maybeSent === true ? `${r.reason} (실제로는 갔을 수 있습니다 — 채팅을 먼저 확인하세요)` : r.reason,
           },
     )
-    if (r.ok) update(picks, ({ [k]: _, ...rest }) => rest)
+    if (r.ok) forget(k)
   } catch (err) {
     const code = err instanceof Error ? (err as Error & { code?: unknown }).code : undefined // HostError
     const text = `워커에 닿지 못했습니다${typeof code === 'string' ? ` (${code})` : ''}: ${
@@ -147,9 +171,35 @@ async function send(b: Batch) {
   }
 }
 
+const OTHER_TEXT = '기타 — 직접 입력'
+
+/** 「기타」를 고르면 열리는 여러 줄 글 상자와 글자 수(0.4.4). 비었거나 OTHER_MAX 를 넘으면 보내기가 꺼진다. */
+function OtherBox({ k, qi, text, problem }: { k: string; qi: number; text: string; problem: string | null }) {
+  const len = text.trim().length
+  const bad = problem !== null && len > 0
+
+  return (
+    <Stack gap="xs">
+      <Textarea
+        label={`${qi + 1}번 기타 답`}
+        labelHidden
+        rows={3}
+        placeholder="목록에 없는 답을 글로 쓰세요"
+        invalid={bad}
+        value={text}
+        onChange={v => setText(k, qi, v)}
+      />
+      <Text size="xs" tone={bad ? 'danger' : 'neutral'} muted={!bad}>
+        {bad ? problem : `${len}/${OTHER_MAX}자${len === 0 ? ' · 글을 써야 보낼 수 있습니다' : ''}`}
+      </Text>
+    </Stack>
+  )
+}
+
 function BatchCard({ b }: { b: Batch }) {
   const k = keyOf(b)
   const mine = withDefaults(b, read(picks)[k] ?? [])
+  const myTexts = read(texts)[k] ?? []
   const n = read(notice)
   // 지금 막 실패한 이유가 있으면 그것을, 없으면 저장된 마지막 실패 이유를 보인다.
   const failure = n !== null && n.key === k ? (n.ok ? null : n.text) : (b.error ?? null)
@@ -201,20 +251,32 @@ function BatchCard({ b }: { b: Batch }) {
                   checked={(mine[qi] ?? []).includes(oi)}
                   onChange={on => toggle(k, qi, oi, on)}
                 />
-              ))
+              )).concat(
+                <Checkbox
+                  label={OTHER_TEXT}
+                  checked={(mine[qi] ?? []).includes(OTHER)}
+                  onChange={on => toggle(k, qi, OTHER, on)}
+                />,
+              )
             ) : (
               <RadioGroup
                 label={q.question}
                 labelHidden
                 {...(mine[qi]?.[0] === undefined ? {} : { value: String(mine[qi][0]) })}
-                options={q.options.map((o, oi) => ({
-                  value: String(oi),
-                  label: o.label,
-                  ...(o.description === '' ? {} : { description: o.description }),
-                }))}
+                options={[
+                  ...q.options.map((o, oi) => ({
+                    value: String(oi),
+                    label: o.label,
+                    ...(o.description === '' ? {} : { description: o.description }),
+                  })),
+                  { value: String(OTHER), label: OTHER_TEXT },
+                ]}
                 onChange={v => pickOne(k, qi, Number(v))}
               />
             )}
+            {(mine[qi] ?? []).includes(OTHER) ? (
+              <OtherBox k={k} qi={qi} text={myTexts[qi] ?? ''} problem={otherProblem(mine, myTexts, qi)} />
+            ) : null}
           </Stack>
         ))}
         {failure === null ? null : <Callout tone="danger" title="보내지 못함">{failure}</Callout>}
@@ -229,7 +291,7 @@ function BatchCard({ b }: { b: Batch }) {
             variant="solid"
             tone="accent"
             icon="check"
-            disabled={b.closed === true || !complete(b, mine) || read(busy) !== null}
+            disabled={b.closed === true || !complete(b, mine, myTexts) || read(busy) !== null}
             onPress={() => send(b)}
           >
             {b.error === undefined ? '답 보내기' : '다시 보내기'}
