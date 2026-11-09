@@ -316,15 +316,30 @@ test('데스크톱에서는 긴 선택지 글을 버튼 밖 Text로 빼 줄바�
   await term.unmount()
 })
 
-test('도구 결과에 대화창에 옮겨 적을 마크다운 블록(묶음 ID·번호·선택 방식·글로 답하는 법)이 있다', async ($, on) => {
-  await setup($, on)
-  const ran = JSON.stringify(await $.tool.call(INPUT as any))
-  expect(ran).toContain('그대로 옮겨 적고 턴을 마쳐라')
-  expect(ran).toContain('[질문 묶음 q1]')
-  expect(ran).toContain('1. 〔DB〕 어느 DB를 쓸까요?** (하나만 선택)')
-  expect(ran).toContain('- 2) SQLite — 파일형')
-  expect(ran).toContain('2. 〔기능〕 넣을 기능은?** (여러 개 선택 가능)')
-  expect(ran).toContain('q1 1-2, 2-1')
+test('도구 결과는 짧다: 질문을 대화창에 다시 쓰지 말라 하고 블록은 panel_echo(옛 동작)로만 넘긴다', async ($, on) => {
+  const seen: any[] = []
+  await setup($, on, ['desktop'], (e: any) => {
+    seen.push(e)
+
+    return { result: callAsk(e).content }
+  })
+  const ran = textOf(await $.tool.call(INPUT as any))
+  expect(ran).toContain('질문 묶음 q1을 패널에 올렸다')
+  expect(ran).toContain('대화창에 다시 쓰지 말고')
+  expect(ran).toContain('질문 패널에 올렸습니다(q1)')
+  expect(ran).toContain('q1 1-2')
+  expect(ran).not.toContain('옮겨 적')
+  expect(ran).not.toContain('[질문 묶음 q1]')
+  expect(ran).not.toContain('어느 DB를 쓸까요?')
+  // 옛 동작용 블록: QUESTION_PANEL_ECHO=1이면 서버가 이것을 돌려준다
+  const ran2 = JSON.stringify(seen[0].panel_echo)
+  expect(ran2).toContain('그대로 옮겨 적고 턴을 마쳐라')
+  expect(ran2).toContain('[질문 묶음 q1]')
+  expect(ran2).toContain('1. 〔DB〕 어느 DB를 쓸까요?** (하나만 선택)')
+  expect(ran2).toContain('- 2) SQLite — 파일형')
+  expect(ran2).toContain('2. 〔기능〕 넣을 기능은?** (여러 개 선택 가능)')
+  expect(ran2).toContain('q1 1-2, 2-1')
+  expect(ran2).toContain(RESOLVE)
   expect(ran).toContain(RESOLVE)
 })
 
@@ -511,10 +526,15 @@ test('preview가 있는 선택지는 고르거나 「미리보기」를 누르�
   await term.unmount()
 })
 
-test('도구 결과 블록에 preview를 선택지 아래 코드 블록으로 넣는다', async ($, on) => {
-  await setup($, on)
-  const ran = (await $.tool.call(PREVIEW_INPUT as any)) as any
-  const text = textOf(ran)
+test('옛 동작 블록(panel_echo)에 preview를 선택지 아래 코드 블록으로 넣는다', async ($, on) => {
+  const seen: any[] = []
+  await setup($, on, ['desktop'], (e: any) => {
+    seen.push(e)
+
+    return { result: callAsk(e).content }
+  })
+  await $.tool.call(PREVIEW_INPUT as any)
+  const text = String(seen[0].panel_echo)
   expect(text).toContain('- 1) 두 칸 — 왼쪽 목록\n  ```\n  +------+------+\n  | 목록 | 본문 |\n  +------+------+\n  ```')
   // 본문에 ``` 가 있으면 더 긴 울타리로 감싼다.
   expect(text).toContain('- 2) 한 칸\n  ````\n  ```ts\n  const a = 1\n  ```\n  ````')
@@ -544,12 +564,12 @@ test('preview가 문자열이 아니거나 비었으면 버린다', async ($, on
   await ui.unmount()
 })
 
-test('surface가 없는 세션(Orca 채팅 등)에서도 ask는 막지 않고 큐에 쌓아 대화창 블록을 돌려준다', async ($, on) => {
+test('surface가 없는 세션(Orca 채팅 등)에서도 ask는 막지 않고 큐에 쌓아 짧은 결과를 돌려준다', async ($, on) => {
   await setup($, on, [])
   const ran = JSON.stringify(await $.tool.call(INPUT as any))
   expect(ran).not.toContain('deny')
-  expect(ran).toContain('질문 묶음 q1을 쌓았다')
-  expect(ran).toContain('[질문 묶음 q1]')
+  expect(ran).toContain('질문 묶음 q1을 패널에 올렸다')
+  expect(ran).toContain('AskUserQuestion으로 다시 묻지 마라')
   const cmd = JSON.stringify(await $.command.run({ command: 'questions' } as any))
   expect(cmd).toContain('패널 화면이 없습니다')
   expect(cmd).toContain('q4 1-2')

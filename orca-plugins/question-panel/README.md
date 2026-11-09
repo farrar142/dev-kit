@@ -36,11 +36,11 @@ Claude(Orca 터미널) ── mcp__plugin_question-panel_qp__ask ──▶ Claud
 ### 채팅 세션(0.4.0) — 왜 이렇게 했나 (Orca 소스·1.4.237 실측)
 
 ```
-Claude(Orca 채팅, stream-json) ── qp ask ──▶ question-panel mod: 묶음 q3 + 대화창 블록
+Claude(Orca 채팅, stream-json) ── qp ask ──▶ question-panel mod: 묶음 q3 + 짧은 결과 글(0.7.0+, 질문을 대화창에 다시 쓰지 않음)
         │                                        MCP 서버(0.6.1): 채팅 세션이면
         │                                          ① orca orchestration run-current --json  (그 세션 신원으로)
         │                                          ② ~/.question-panel/orca-inbox/q3-<세션>.json 에 질문·세션 ID·Run·CLI 경로
-        │                                          ③ 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」
+        │                                          ③ 결과 글 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」
         └─ (턴을 끝냄)
 워커: 1.5초마다(그리고 패널을 열 때) 폴더를 읽어 묶음으로 저장하고 파일을 지운다 → 카드 「메일함 run:run_xxxx」
       「답 보내기」 → orca orchestration run-current(다시 확인) → orca orchestration send

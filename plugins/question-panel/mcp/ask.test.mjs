@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
-import { ASK, callAsk, callResolve, handle, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
+import { ASK, callAsk, callResolve, echoOn, handle, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
 
 const Q = [
   { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres', description: '관계형' }, { label: 'SQLite', description: '' }] },
@@ -15,6 +15,24 @@ test('mod가 준 panel_result를 그대로 돌려준다', () => {
   assert.deepEqual(callAsk({ questions: Q, panel_result: '질문 묶음 q3을 패널에 올렸다.' }), {
     content: [{ type: 'text', text: '질문 묶음 q3을 패널에 올렸다.' }],
   })
+})
+
+test('기본은 짧은 panel_result를 돌려주고, QUESTION_PANEL_ECHO=1일 때만 블록을 옮겨 적게 하는 panel_echo를 돌려준다', () => {
+  const args = { questions: Q, panel_result: '질문 묶음 q3을 패널에 올렸다. 짧게', panel_echo: '질문 묶음 q3 … 그대로 옮겨 적고' }
+  const ctx = env => ({ env, home: '/h', inboxDir: '/h/i', cwd: '/h', now: 1, runCurrent: () => null, write: () => {} })
+  assert.equal(callAsk(args).content[0].text, args.panel_result)
+  assert.equal(callAsk(args, ctx({})).content[0].text, args.panel_result)
+  assert.equal(callAsk(args, ctx({ QUESTION_PANEL_ECHO: '0' })).content[0].text, args.panel_result)
+  assert.equal(callAsk(args, ctx({ QUESTION_PANEL_ECHO: '1' })).content[0].text, args.panel_echo)
+  // 옛 mod(panel_echo 없음)면 켜도 panel_result
+  assert.equal(callAsk({ ...args, panel_echo: undefined }, ctx({ QUESTION_PANEL_ECHO: '1' })).content[0].text, args.panel_result)
+  assert.deepEqual(['1', 'true', 'ON', ' yes ', '', '0', 'no', undefined].map(v => echoOn({ QUESTION_PANEL_ECHO: v })), [true, true, true, true, false, false, false, false])
+  assert.equal(echoOn(undefined), false)
+})
+
+test('도구 설명은 질문을 대화창에 다시 쓰지 말라고 한다', () => {
+  assert.match(ASK.description, /대화창에 다시 쓰지 말고/)
+  assert.doesNotMatch(ASK.description, /옮겨 적/)
 })
 
 test('mod가 없으면(panel_result 없음) 묶음 없이 대화창 블록을 돌려준다', () => {

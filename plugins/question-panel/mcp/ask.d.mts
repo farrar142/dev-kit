@@ -21,13 +21,15 @@ export type AskCtx = {
 export declare const ORCA_INBOX_PARTS: string[]
 export declare const ORCA_INBOX_VERSION: 1
 export declare const ORCA_NOTE: string
+/** QUESTION_PANEL_ECHO=1 등으로 옛 동작(질문 블록을 대화창에 옮겨 적게 하는 결과)을 켰는가(0.7.0). */
+export declare const echoOn: (env: Record<string, string | undefined> | undefined) => boolean
 export declare const orcaChat: (env: Record<string, string | undefined>) => OrcaChat | null
 export declare const batchIdOf: (text: string) => string | null
 export declare const parseRunId: (stdout: string) => string | null
 export declare const toOrca: (questions: unknown, text: string, ctx: AskCtx) => boolean
-/** mod가 넣은 panel_result가 있으면 그 글을(Orca 채팅 세션이면 Orca 질문 패널에도 남기고 안내 한 줄을 붙여), 없으면 묶음 없는 대화창 블록을 돌려준다. */
+/** mod가 넣은 panel_result가 있으면 그 글을(QUESTION_PANEL_ECHO=1이고 panel_echo가 있으면 그 옛 블록 글을, Orca 채팅 세션이면 Orca 질문 패널에도 남기고 안내 한 줄을 붙여), 없으면 묶음 없는 대화창 블록을 돌려준다. */
 export declare const callAsk: (
-  args: { questions?: unknown; panel_result?: unknown; panel_closed?: unknown } | undefined,
+  args: { questions?: unknown; panel_result?: unknown; panel_echo?: unknown; panel_closed?: unknown } | undefined,
   ctx?: AskCtx,
 ) => McpToolResult
 export type ClosedEntry = { v: 1; kind: 'closed'; ids: string[]; session: { id: string }; at: number }
