@@ -30,8 +30,8 @@ export type QuestionPanelBatch = {
   confirmingDelete?: boolean
   /** 이 묶음을 올린 도구 호출의 tool_use_id(0.3.0부터; 그 전 묶음은 없음) */
   toolUseId?: string
-  /** 어떻게 닫혔나: chat이면 사용자가 대화창에 글로 답함(0.4.0부터; 없으면 패널에서 보냄) */
-  via?: 'chat'
+  /** 어떻게 닫혔나: chat이면 사용자가 대화창에 글로 답함(0.4.0부터), dismissed면 답 없이 닫음(0.8.0부터); 없으면 패널에서 보냄 */
+  via?: 'chat' | 'dismissed'
 }
 
 declare module 'claude-code' {

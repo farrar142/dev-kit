@@ -99,7 +99,7 @@ const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
 
 // 대화창 글로 답해 닫힌 묶음 ID들. 질문·resolve 호출에 panel_closed 로 붙여 Orca 질문 패널 카드도 닫는다
 // (prompt.submit 훅에는 바깥으로 알릴 길이 없어 다음 도구 호출에 실어 보낸다, 0.6.3).
-const chatClosed = (list: readonly QuestionPanelBatch[]) => list.filter(b => b.via === 'chat').map(b => b.id)
+const chatClosed = (list: readonly QuestionPanelBatch[]) => list.filter(b => b.via !== undefined).map(b => b.id)
 
 // 답한 묶음(패널에서 보냄·대화창에서 답함)만 지운다. 대기 중인 묶음은 남긴다.
 const clearSent = (list: QuestionPanelBatch[]) => list.filter(b => b.status !== 'sent')
@@ -249,16 +249,32 @@ function kit($: RenderSelf, e: RenderEvent) {
   // 답한(보낸·대화창에서 답한) 묶음은 확인 없이 지운다. 대기 중인 묶음은 아래 remove의 확인을 거친다.
   const removeSent = (id: string) => update($, queue, l => l.filter(b => !(b.id === id && b.status === 'sent')))
 
-  // 답 메시지를 보내지 않고 대기열에서만 뺀다.
-  const remove = (id: string) =>
-    update($, queue, l => l.filter(b => !(b.id === id && b.status === 'pending' && b.confirmingDelete === true)))
+  // 답 없이 닫는다(0.8.0): 묶음은 「답 없이 닫음」 기록으로 남기고(Orca 질문 패널 카드도 다음 도구 호출에
+  // panel_closed 로 닫힌다), 세션에는 「qN 답 없이 닫음」을 한 줄 보내 모델이 기다리지 않게 한다.
+  const remove = async (id: string) => {
+    let closed = false
+    await update($, queue, l => {
+      closed = false
+
+      return l.map(b => {
+        if (b.id !== id || b.status !== 'pending' || b.confirmingDelete !== true) return b
+        closed = true
+
+        return { ...b, status: 'sent' as const, via: 'dismissed' as const, confirmingDelete: false }
+      })
+    })
+    if (!closed) return
+    $.prompt.submit({ text: `[질문 패널 답] ${id} 답 없이 닫음`, asUser: true }).catch(() => {
+      $.ui.toast('세션에 닫음을 알리지 못했습니다.')
+    })
+  }
 
   const card = (batch: QuestionPanelBatch) => {
     if (batch.status === 'sent') {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
           <Text dimColor wrap="wrap">
-            {batch.via === 'chat' ? '대화창에서 답함' : '보냄'} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
+            {batch.via === 'chat' ? '대화창에서 답함' : batch.via === 'dismissed' ? '답 없이 닫음' : '보냄'} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
             {batch.questions.length}개
           </Text>
           <Button key={`delsent:${batch.id}`} label="기록 지우기" onPress={() => removeSent(batch.id)} />
@@ -272,10 +288,10 @@ function kit($: RenderSelf, e: RenderEvent) {
           <Text weight="bold" wrap="wrap">
             묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
           </Text>
-          <Text wrap="wrap">이 질문을 지울까요?</Text>
+          <Text wrap="wrap">이 질문을 답 없이 닫을까요?</Text>
           <Button
             key={`delok:${batch.id}`}
-            label="삭제 확인"
+            label="닫기 확인"
             variant="primary"
             onPress={() => remove(batch.id)}
           />
@@ -396,10 +412,13 @@ function kit($: RenderSelf, e: RenderEvent) {
             {batch.questions.length})
           </Text>
         )}
-        <Button key={`del:${batch.id}`} label="삭제" onPress={() => askDelete(batch.id, true)} />
+        <Button key={`del:${batch.id}`} label="답 없이 닫기" onPress={() => askDelete(batch.id, true)} />
       </Box>
     )
   }
+
+  // 패널만 닫는다: 질문·답 상태는 그대로이고, 새 질문이 오면 다시 열린다.
+  const closePane = () => $.ui.close({ id: PANE })
 
   const composer = (text: string) =>
     Input ? (
@@ -428,6 +447,7 @@ function kit($: RenderSelf, e: RenderEvent) {
 
     return (
       <Box flexDirection="column">
+        <Button key="close" role="dismiss" label="패널 닫기" onPress={() => closePane()} />
         {list.length === 0 ? <Text dimColor wrap="wrap">
             쌓인 질문이 없습니다.
           </Text> : list.map(card)}
@@ -450,7 +470,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'questions',
-      description: '질문 패널을 연다',
+      description: '질문 패널을 연다(열려 있으면 닫는다). /questions close 는 늘 닫는다',
     })
     await $.command.register({
       name: 'questions-clear',
@@ -543,7 +563,14 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'questions' }, async $ => {
+  on('command.run', { command: 'questions' }, async ($, e) => {
+    const arg = typeof e.args === 'string' ? e.args.trim().toLowerCase() : ''
+    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
+    if (arg === 'close' || arg === '닫기' || (arg === '' && isUp)) {
+      await $.ui.close({ id: PANE })
+
+      return { text: '질문 패널을 닫았습니다. 쌓인 질문은 그대로 있고, 새 질문이 오면 다시 열립니다.' }
+    }
     if (panelMode(await $.session.surfaces()) === 'no-surface') {
       const pending = (await read($, queue)).filter(b => b.status === 'pending')
 
