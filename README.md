@@ -52,7 +52,7 @@ plugins/
     mcp/orca.mjs                   Orca 채팅 세션용 진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
     hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 호출도 감싸 패널 묶음을 닫음, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
-                                   답한 기록 지우기(하나·모두), 선택지 preview 펼치기
+                                   답한 기록 지우기(하나·모두), 패널 닫기(X), 답 없이 닫기, 선택지 preview 펼치기
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
@@ -74,7 +74,7 @@ orca-plugins/
 | | `mock-stack-shots` | 화면 작업의 확인·스크린샷 |
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
-| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
+| question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`(열려 있으면 닫는 토글; `/questions close`는 늘 닫음, 0.8.0+)·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -96,6 +96,12 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-13 — question-panel 0.8.0: 패널 닫기, 답 없이 닫기
+
+- 패널을 닫는 길이 없었다. 패널 맨 위에 「패널 닫기」(`role="dismiss"`), `/questions`는 열려 있으면 닫는 토글, `/questions close`(`닫기`)는 늘 닫는다. 닫아도 질문·답 상태는 그대로이고 새 질문이 오면 다시 열린다.
+- 대기 중 묶음의 「삭제」는 모델에 아무 말도 하지 않고 묶음을 지워 모델이 답을 기다렸고 Orca 카드는 남았다. 이제 「답 없이 닫기」(확인을 거침)가 묶음을 「답 없이 닫음」 기록(`via: 'dismissed'`)으로 남기고 세션에 `[질문 패널 답] qN 답 없이 닫음` 한 줄을 보낸다. 기록은 다음 질문·`resolve` 호출의 `panel_closed`에 실려 Orca 카드도 닫힌다(기존 길). Orca 질문 패널은 이미 카드 ×(지우기)가 있어 바꾸지 않았다.
+- 시험: mod 24건(`claude plugin test plugins/question-panel`).
 
 ### 2026-11-09 — question-panel 0.7.0: 질문을 대화창에 다시 옮겨 적지 않기
 

@@ -45,6 +45,9 @@ const INPUT = {
 const RESOLVE = 'mcp__plugin_question-panel_qp__resolve'
 // MCP 서버로 이어진 resolve 호출(입력)들. setup 마다 비운다.
 const resolved: any[] = []
+// 패널이 열려 있나, 닫기 호출 기록(setup 마다 비운다).
+const paneUp = { value: false }
+const closes: string[] = []
 
 // MCP 결과(content 블록)의 글.
 const textOf = (ran: any) =>
@@ -63,7 +66,20 @@ async function setup(
   on('session.surfaces', () => ({ value: surfaces }))
   on('tool.register', () => ({ value: { tool: TOOL } }))
   on('command.register', () => ({ value: { command: 'x' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  paneUp.value = false
+  closes.length = 0
+  on('ui.open', () => {
+    paneUp.value = true
+
+    return { value: { isPlaced: true } }
+  })
+  on('ui.panes', () => ({ value: paneUp.value ? [{ id: 'questions', title: '질문', isPlaced: true }] : [] }))
+  on('ui.close', (_: any, e: any) => {
+    closes.push(e.id)
+    paneUp.value = false
+
+    return { value: undefined }
+  })
   // MCP 서버(mcp/ask.mjs) 자리: mod가 넘긴 panel_result를 그대로 돌려준다.
   on('tool.call', { tool: TOOL }, (_: any, e: any) => server(e))
   on('tool.call', { tool: RESOLVE }, (_: any, e: any) => {
@@ -156,25 +172,28 @@ test('기타 직접 입력으로도 답하고, 모바일에는 입력 칸이 없
   await ui.unmount()
 })
 
-test('삭제는 확인을 거치고, 취소하면 남고, 확인하면 답 없이 사라진다', async ($, on) => {
+test('답 없이 닫기는 확인을 거치고, 취소하면 남고, 확인하면 「답 없이 닫음」 기록과 세션 알림이 남는다', async ($, on) => {
   const submitted = await setup($, on)
   await $.tool.call(INPUT as any)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
 
   // 답을 하나도 고르지 않아도 삭제를 누를 수 있다.
   await ui.press({ key: 'del:q1' })
-  expect(await ui.find({ type: 'Text', text: /이 질문을 지울까요/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /이 질문을 답 없이 닫을까요/ })).toBeDefined()
   expect(await ui.find({ key: 'delok:q1' })).toBeDefined()
 
   await ui.press({ key: 'delno:q1' })
-  expect(await ui.find({ type: 'Text', text: /이 질문을 지울까요/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /이 질문을 답 없이 닫을까요/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeDefined()
 
   await ui.press({ key: 'del:q1' })
   await ui.press({ key: 'delok:q1' })
   expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /쌓인 질문이 없습니다/ })).toBeDefined()
-  expect(submitted).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /답 없이 닫음 · q1/ })).toBeDefined()
+  expect(submitted).toEqual(['[질문 패널 답] q1 답 없이 닫음'])
+  // 닫은 묶음은 다음 질문 호출에 panel_closed 로 실려 Orca 카드도 닫힌다.
+  await $.tool.call(INPUT as any)
+  expect(resolved.length + submitted.length).toBeGreaterThan(0)
   await ui.unmount()
 })
 
@@ -604,4 +623,24 @@ test('질문 도구가 막히면(훅 거절·서버 오류) 쌓았던 묶음을 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ key: 'o:q1:0:0' })).toBeUndefined()
   await ui.unmount()
+})
+
+test('패널 안 「패널 닫기」와 /questions(열려 있으면 토글)·/questions close 는 패널만 닫고 질문은 남긴다', async ($, on) => {
+  await setup($, on)
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'close' })
+  expect(closes).toEqual(['questions'])
+  await ui.unmount()
+
+  // 닫혀 있으면 /questions 는 연다. 열려 있으면 닫는다.
+  expect(JSON.stringify(await $.command.run({ command: 'questions', args: '' } as any))).toContain('열었습니다')
+  expect(JSON.stringify(await $.command.run({ command: 'questions', args: '' } as any))).toContain('닫았습니다')
+  expect(closes).toEqual(['questions', 'questions'])
+  // close 는 열려 있든 아니든 닫고, 닫은 뒤에도 질문은 그대로다.
+  await $.command.run({ command: 'questions', args: 'close' } as any)
+  expect(closes).toHaveLength(3)
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await again.find({ key: 'o:q1:0:0' })).toBeDefined()
+  await again.unmount()
 })
