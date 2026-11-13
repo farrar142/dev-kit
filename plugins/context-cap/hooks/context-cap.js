@@ -64,6 +64,7 @@ const BASH_ALLOW = [
   /^gh\s+run\s+(view|list)(\s|$)/,
   /^(python3?|py)\s+\S*wait-(ci|deploy)\.py(\s|$)/,
   /^orca\s+orchestration\s+(send|reply)(\s|$)/,
+  /^(AGENT_MAIL_PROFILE=\S+\s+)?(\S*\/)?agent-mail\s+(send|reply|complete|ack)(\s|$)/,
   /^(kill|fuser\s+-k)(\s|$)/,
 ];
 if (process.env.CONTEXT_CAP_ALLOW_BASH) {

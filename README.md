@@ -30,6 +30,7 @@ plugins/
     skills/issue-track/            조율자: 큐·모델 고르기·지시서·확인·토큰 측정·최적화 반영
       scripts/wait-ci.py           PR head 커밋의 상태·check-runs를 배경에서 기다렸다가 한 번만 알린다(종료 코드로 결과: 0 성공 / 1 실패 / 2 병합·닫힘 / 3 시간 초과 / 4 PR 없음 / 5 검사 없음)
       scripts/wait-deploy.py       병합 뒤 Jenkins 배포 빌드(병합 시각 뒤 첫 빌드)가 끝날 때까지 기다렸다가 한 번만 알린다(0 성공 / 1 실패 / 3 시간 초과 / 4 조회 불가 / 5 빌드 안 생김)
+      reference/agent-mail.md      다른 터미널 작업자의 보고 경로: Agent Mail 역할 주소, `AGENT_MAIL_PROFILE` 환경변수, 대기 스크립트(2026-11-13에 Orca orchestration 메일함에서 바뀜)
       scripts/ci_common.py         두 스크립트가 함께 쓰는 Jenkins 자격·기본 URL 찾기·콘솔 발췌
       tests/                       스크립트 단위 시험(`python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests`)
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
@@ -90,12 +91,19 @@ orca-plugins/
 - **끄기**: `CONTEXT_CAP_SOFT=0`(HARD를 주지 않으면 둘 다 0이 되어 issue-worker 본 세션도 꺼진다).
 - **재기**: `transcript_path`를 끝에서부터 1MB씩 읽어, 사이드체인이 아닌 마지막 assistant 응답의 `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. 그보다 compact 경계가 뒤에 있으면 0으로 본다.
 - **SOFT 넘음**: `UserPromptSubmit`이 새 지시를 거절한다(「컨텍스트 N k — 상한 넘음. 새 세션에서 받으라」). 프롬프트에 「넘김」·`handoff`·`handover`가 있으면 통과(`CONTEXT_CAP_HANDOFF_PATTERN`으로 바꾼다). 하네스가 넣는 자동 알림(`prompt`가 `<task-notification>`으로 시작 — claude 2.1.318에서 배경 Bash 완료·Monitor 이벤트가 이 꼴이었고, 훅 입력에 출처 필드는 없다)은 사람 지시가 아니라서 통과한다. 그래서 배경으로 건 CI·배포 대기의 완료 알림은 상한을 넘어도 작업자를 깨운다. 진행 중인 티켓은 끊지 않고, 다음 `PostToolUse`에서 한 번 「지금 티켓을 마치고 보고에 『새 세션 필요(컨텍스트 N k)』를 넣고 더 일을 받지 마라」를 알린다.
-- **HARD 넘음**: `PreToolUse`가 다음만 남기고 막는다 — 이름에 `handoff`·`hand-off`·`넘김`이 든 파일의 Write/Edit/Read, 배경 작업 출력 읽기(`TaskOutput`, `…/tasks/<id>.output` Read), `SendMessage`·`ToolSearch`·`TaskStop`·`KillShell`, 그리고 조각마다 보고·마무리용인 Bash(`cd`, `echo`, `tail`·`head`, `git status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch|pull|rebase|worktree|switch|checkout`, `gh issue|pr comment|view|list|checks|status|merge|close`, `gh run view|list`, `wait-ci.py`·`wait-deploy.py` 실행, `orca orchestration send|reply`, `kill`, `fuser -k`). 하던 티켓의 CI·배포 대기, 병합, 정리는 끝낼 수 있게 둔다. 저장소 몫 정리 명령은 `CONTEXT_CAP_ALLOW_BASH`(정규식 하나)로 더한다. 따옴표 밖 명령 치환(`$(…)`·백틱)은 막는다.
+- **HARD 넘음**: `PreToolUse`가 다음만 남기고 막는다 — 이름에 `handoff`·`hand-off`·`넘김`이 든 파일의 Write/Edit/Read, 배경 작업 출력 읽기(`TaskOutput`, `…/tasks/<id>.output` Read), `SendMessage`·`ToolSearch`·`TaskStop`·`KillShell`, 그리고 조각마다 보고·마무리용인 Bash(`agent-mail send|reply|complete|ack`(0.2.2+), `cd`, `echo`, `tail`·`head`, `git status|add|commit|push|log|diff|show|rev-parse|branch|stash|fetch|pull|rebase|worktree|switch|checkout`, `gh issue|pr comment|view|list|checks|status|merge|close`, `gh run view|list`, `wait-ci.py`·`wait-deploy.py` 실행, `orca orchestration send|reply`, `kill`, `fuser -k`). 하던 티켓의 CI·배포 대기, 병합, 정리는 끝낼 수 있게 둔다. 저장소 몫 정리 명령은 `CONTEXT_CAP_ALLOW_BASH`(정규식 하나)로 더한다. 따옴표 밖 명령 치환(`$(…)`·백틱)은 막는다.
 - **알림 명령(선택)**: `CONTEXT_CAP_NOTIFY_CMD`가 있으면 SOFT를 처음 넘을 때 한 번 셸로 띄운다. 환경에 `CONTEXT_CAP_TOKENS`·`CONTEXT_CAP_SESSION_ID`. 기다리지 않고, 실패해도 훅은 성공.
 - **중복 막기**: 세션별 상태 파일 `$TMPDIR/context-cap/<session_id>.json`(`CONTEXT_CAP_STATE_DIR`로 바꾼다).
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-13 — issue-track 0.6.0·context-cap 0.2.2: Agent Mail로 보고
+
+- 회사 세션 메일함이 Orca orchestration 메일함(`orca orchestration send`, `run:<run_id>` 주소)에서 Agent Mail(역할 주소, CLI `agent-mail`)로 바뀌었다. `issue-worker`·`issue-track` 스킬이 새 길을 가르친다: 프로필은 `AGENT_MAIL_PROFILE=<프로필>` 환경변수로(v0.2.1은 명령 앞 `--profile`을 무시한다), 보고는 `send --to <받는 역할> --task … --subject … --body …`, 답은 `reply <ID>`, 끝나면 `complete <ID>`. 메일은 세션을 깨우지 않아 받는 쪽이 대기 스크립트로 기다린다. `reference/orca-mailbox.md`는 `reference/agent-mail.md`로 바꿔 다시 썼고 참조를 고쳤다.
+- context-cap의 HARD 허용 Bash에 `agent-mail send|reply|complete|ack`을 더했다(작업자가 한도 넘은 뒤에도 보고·넘김 메일은 보낼 수 있게). `orca orchestration send|reply`도 옛 세션용으로 그대로 둔다.
+- 질문 패널 코드(`orca-plugins/question-panel`, `mcp/ask.mjs`)는 Orca 기능 자체라 그대로 둔다. 이 저장소에 실제 서버 주소·Run id·토큰은 없었다(문서는 예시 꼴 역할 이름만 쓴다).
+- 지금 `~/.claude`의 issue-track 스킬·에이전트 판과 diff 하니 dev-kit과 같았다(작업 기계의 해당 파일은 아직 Agent Mail 이전 판).
 
 ### 2026-11-13 — question-panel 0.8.0: 패널 닫기, 답 없이 닫기
 
