@@ -1,6 +1,6 @@
 {
   "name": "context-cap",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "세션 컨텍스트 상한 훅 — claude --agent issue-worker 본 세션은 기본으로(250k/300k), 그 밖에는 환경변수 CONTEXT_CAP_SOFT·CONTEXT_CAP_HARD가 있을 때만, SOFT를 넘으면 새 지시를 거절하고 한 번 알리며 HARD를 넘으면 넘김·보고 말고는 도구를 막는다",
   "author": { "name": "farrar142" },
   "repository": "https://github.com/farrar142/dev-kit"

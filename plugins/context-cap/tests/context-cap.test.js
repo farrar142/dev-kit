@@ -123,6 +123,7 @@ test('HARD 위면 일반 도구는 막고 넘김·보고는 남긴다', () => {
     null
   );
   assert.strictEqual(deny('Bash', { command: 'orca orchestration send --to run:x "새 세션 필요; 넘김"' }), null);
+  assert.strictEqual(deny('Bash', { command: 'AGENT_MAIL_PROFILE=x-worker-1 ~/.local/bin/agent-mail send --to x/coordinator --subject 넘김 --body 넘김' }), null);
   assert.strictEqual(deny('Bash', { command: 'gh issue comment 3 --body-file /tmp/handoff.md' }), null);
 });
 
