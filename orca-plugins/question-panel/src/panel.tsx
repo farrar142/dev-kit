@@ -186,7 +186,8 @@ function OtherBox({ k, qi, text, problem }: { k: string; qi: number; text: strin
         rows={3}
         placeholder="목록에 없는 답을 글로 쓰세요"
         invalid={bad}
-        value={text}
+        // 비제어(0.5.1): 제어(value)면 한글 조합 중 호스트가 값을 되돌려 써 음절이 한 번 더 들어갔다(오늘→오느늘).
+        defaultValue={text}
         onChange={v => setText(k, qi, v)}
       />
       <Text size="xs" tone={bad ? 'danger' : 'neutral'} muted={!bad}>

@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.5.0 — Claude Code question-panel 0.9.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
+# 질문 패널 (Orca 플러그인, 시제품 0.5.1 — Claude Code question-panel 0.9.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -170,7 +170,7 @@ mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5�
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 60건(0.5.0)
+orca plugin test orca-plugins/question-panel --json    # 시험 61건(0.5.1)
 node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·장부 sync·stdio 포함) 17건
 # orca CLI 가 orcad-artifacts 의 orca-test-register.mjs 를 못 찾으면(리눅스 설치에서 봄) node 로 바로:
 # node --import <Orca 설치>/resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test src/*.test.ts* worker/*.test.ts
