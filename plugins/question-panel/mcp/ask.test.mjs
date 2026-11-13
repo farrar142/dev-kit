@@ -5,7 +5,12 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
-import { ASK, callAsk, callResolve, echoOn, handle, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
+import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { ASK, callAsk, callResolve, callSync, echoOn, handle, inboxEntry, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
+import { claimFile, pruneLedger, readTextFile } from './orca.mjs'
 
 const Q = [
   { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres', description: '관계형' }, { label: 'SQLite', description: '' }] },
@@ -49,7 +54,7 @@ test('질문이 없으면 오류', () => {
 })
 
 test('tools/list는 ask·resolve를 낸다, 모르는 도구·메서드는 오류, 알림에는 답하지 않는다', () => {
-  assert.deepEqual(handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }).result.tools.map(t => t.name), ['ask', 'resolve'])
+  assert.deepEqual(handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }).result.tools.map(t => t.name), ['ask', 'resolve', 'sync'])
   assert.equal(RESOLVE.inputSchema.properties.panel_result, undefined)
   assert.equal(handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'toString' } }).error.code, -32602)
   assert.equal(ASK.inputSchema.properties.panel_result, undefined)
@@ -215,4 +220,60 @@ test('ask: mod 가 붙인 panel_closed 도 채팅 세션이면 닫힘 파일로 
   const empty = fakeCtx(CHAT_ENV)
   callAsk({ questions: Q, panel_result: '질문 묶음 q4를 쌓았다.', panel_closed: [] }, empty.ctx)
   assert.deepEqual(empty.writes.map(w => w.name), ['q4-sess_1.json'])
+})
+
+// ── 닫힘 장부(0.9.0) ──
+const KEY = 'sess-1~q3~1700000000000'
+const ledgerCtx = now => {
+  const dir = mkdtempSync(join(tmpdir(), 'qp-ledger-'))
+
+  return { env: {}, inboxDir: '/x', cwd: '/', now, runCurrent: () => null, write: () => {}, ledgerDir: dir, claim: claimFile, readText: readTextFile }
+}
+const syncOut = r => JSON.parse(r.content[0].text)
+
+test('sync: 먼저 닫은 쪽만 이기고, 진 쪽은 먼저 닫은 기록을 받는다(중복 답 거부)', () => {
+  const ctx = ledgerCtx(10)
+  const first = syncOut(callSync({ close: { key: KEY, state: 'answered', by: 'claude' } }, ctx))
+  assert.equal(first.claimed, true)
+  const second = syncOut(callSync({ close: { key: KEY, state: 'answered', by: 'chat' } }, { ...ctx, now: 20 }))
+  assert.equal(second.claimed, false)
+  assert.deepEqual(second.holder, { v: 1, key: KEY, id: 'q3', state: 'answered', by: 'claude', at: 10 })
+  // 같은 파일을 Orca 워커도 읽는다: 이름·모양 고정
+  assert.deepEqual(JSON.parse(readTextFile(ctx.ledgerDir, `${KEY}.json`)).by, 'claude')
+})
+
+test('sync: keys 중 닫힌 것만 돌려주고, 모양이 틀린 key·close 는 받지 않는다', () => {
+  const ctx = ledgerCtx(5)
+  const other = 'sess-2~q3~1700000000001'
+  callSync({ close: { key: other, state: 'dismissed', by: 'claude' } }, ctx)
+  writeFileSync(join(ctx.ledgerDir, 'sess-3~q1~1.json'), '{반쯤')
+  const out = syncOut(callSync({ keys: [KEY, other, 'sess-3~q1~1', '../x', 3] }, ctx))
+  assert.deepEqual(Object.keys(out.closed), [other])
+  assert.equal(out.closed[other].state, 'dismissed')
+  assert.equal(callSync({ close: { key: '../../etc', state: 'answered', by: 'claude' } }, ctx).isError, true)
+  assert.equal(callSync({ close: { key: KEY, state: 'eaten', by: 'claude' } }, ctx).isError, true)
+  assert.equal(callSync({ keys: [KEY] }).isError, true)
+  // tools/call 로도 닿는다
+  const r = handle({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'sync', arguments: { keys: [other] } } }, ctx)
+  assert.equal(JSON.parse(r.result.content[0].text).closed[other].by, 'claude')
+})
+
+test('채팅 세션 질문 파일에 mod가 준 key가 실린다(모양이 틀리면 뺀다)', () => {
+  const chat = { sessionId: 's', cli: null, userData: null }
+  assert.equal(inboxEntry({ id: 'q3', questions: Q, chat, runId: null, cwd: '/', now: 1, key: KEY }).key, KEY)
+  assert.equal('key' in inboxEntry({ id: 'q3', questions: Q, chat, runId: null, cwd: '/', now: 1, key: 'a/b' }), false)
+  const written = []
+  const ctx = { env: { ORCA_AGENT_SESSION_ID: 's', ORCA_STRUCTURED_SESSION: '1' }, inboxDir: '/i', cwd: '/', now: 1, runCurrent: () => null, write: (d, n, t) => written.push(JSON.parse(t)) }
+  callAsk({ questions: Q, panel_result: '질문 묶음 q3을 패널에 올렸다.', panel_key: KEY }, ctx)
+  assert.equal(written[0].key, KEY)
+})
+
+test('pruneLedger: 오래된 기록만 지운다', () => {
+  const ctx = ledgerCtx(1)
+  claimFile(ctx.ledgerDir, 'old~q1~1.json', '{}')
+  claimFile(ctx.ledgerDir, 'new~q1~1.json', '{}')
+  utimesSync(join(ctx.ledgerDir, 'old~q1~1.json'), new Date(0), new Date(0))
+  assert.equal(pruneLedger(ctx.ledgerDir, Date.now(), 1000 * 3600), 1)
+  assert.equal(readTextFile(ctx.ledgerDir, 'old~q1~1.json'), null)
+  assert.equal(readTextFile(ctx.ledgerDir, 'new~q1~1.json'), '{}')
 })

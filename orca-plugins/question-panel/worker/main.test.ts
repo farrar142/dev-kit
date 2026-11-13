@@ -15,8 +15,16 @@ const fakeIo = (
 ) => {
   const runs: { program: string; args: string[]; env: Record<string, string> }[] = []
   const removed: string[] = []
+  // 닫힘 장부(0.5.0): 배타 생성 그대로 흉내 낸다. key → 파일 글.
+  const ledger = new Map<string, string>()
   const io: WorkerIo = {
     inboxDir: '/home/me/.question-panel/orca-inbox',
+    ledgerDir: '/home/me/.question-panel/ledger',
+    claimLedger: async (key, text) => (ledger.has(key) ? false : (ledger.set(key, text), true)),
+    readLedger: async key => ledger.get(key) ?? null,
+    releaseLedger: async key => {
+      ledger.delete(key)
+    },
     listInbox: async () => files.filter(f => !removed.includes(f.name)),
     removeInbox: async name => {
       removed.push(name)
@@ -29,7 +37,7 @@ const fakeIo = (
     pollMs: null,
   }
 
-  return { io, runs, removed }
+  return { io, runs, removed, ledger }
 }
 
 const worker = { default: createWorker(fakeIo().io), deactivate, FOCUS_WAIT_MS }
@@ -655,4 +663,79 @@ test('닫힘 신호보다 뒤에 같은 번호로 다시 물은 묶음은 닫지
   await w.request('qp.refresh', {})
   const [b] = w.host.data().storage.batches as { status: string }[]
   assert.equal(b.status, 'pending')
+})
+
+// ── 닫힘 장부(0.5.0) ──
+const KEY = 'sess-A~q2~1700000000000'
+const KEYED = { ...ASK, input: { ...ASK.input, panel_key: KEY } }
+const rec = (by: string, state = 'answered') => JSON.stringify({ v: 1, key: KEY, id: 'q2', state, by, at: 5 })
+type Saved = { id: string; status: string; via?: string; key?: string }
+const stored = async (w: { host: { data: () => { storage: Record<string, unknown> } } }) =>
+  (w.host.data().storage.batches ?? []) as Saved[]
+
+test('장부: Claude Code 패널이 먼저 답한 묶음은 보내지 않고 카드를 그 사유로 닫는다(중복 답 거부)', async () => {
+  const f = fakeIo()
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.hooks.fire('agent.tool.after', KEYED)
+  f.ledger.set(KEY, rec('claude'))
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean; reason: string }
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /Claude Code 패널에서 답함/)
+  assert.deepEqual(host.callsOf('terminal.sendText'), [])
+  const again = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { reason: string }
+  assert.match(again.reason, /Claude Code 패널에서 답함/)
+})
+
+test('장부: 이 패널이 답하면 장부를 차지하고(Claude Code 패널은 못 닫는다), 터미널이 안 받으면 거둔다', async () => {
+  const f = fakeIo()
+  let accepted = false
+  const host = mockHost({ results: { 'terminal.sendText': () => ({ accepted }), 'terminal.read': { lines: ['x'], truncated: false } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.hooks.fire('agent.tool.after', KEYED)
+  const failed = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean }
+  assert.equal(failed.ok, false)
+  assert.equal(f.ledger.has(KEY), false, '보내지 못했으면 장부를 거둔다')
+  accepted = true
+  const ok = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean }
+  assert.equal(ok.ok, true)
+  assert.deepEqual(JSON.parse(f.ledger.get(KEY) ?? 'null'), { v: 1, key: KEY, id: 'q2', state: 'answered', by: 'orca', at: JSON.parse(f.ledger.get(KEY) ?? '{}').at })
+  assert.equal(await f.io.claimLedger(KEY, rec('claude')), false, 'Claude Code 패널의 차지는 진다')
+})
+
+test('장부: 대기 중에 Claude Code 패널·대화창에서 닫히면 다음 동기화에 카드가 닫힌다(채팅 세션 포함)', async () => {
+  const chatKey = 'sess-B~q4~1700000000002'
+  const f = fakeIo([{ name: 'q4-s.json', text: JSON.stringify({ ...JSON.parse(INBOX.text), key: chatKey }) }])
+  const host = mockHost({ results: { 'terminal.read': { lines: ['x'], truncated: false } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.hooks.fire('agent.tool.after', KEYED)
+  await w.request('qp.refresh', {})
+  const byId = (l: Saved[]) => [...l].sort((a, b) => a.id.localeCompare(b.id))
+  assert.deepEqual(byId(await stored(w)).map(b => [b.id, b.status, b.key]), [['q2', 'pending', KEY], ['q4', 'pending', chatKey]])
+  f.ledger.set(KEY, rec('chat'))
+  f.ledger.set(chatKey, JSON.stringify({ v: 1, key: chatKey, id: 'q4', state: 'dismissed', by: 'claude', at: 6 }))
+  await w.request('qp.refresh', {})
+  assert.deepEqual(byId(await stored(w)).map(b => [b.id, b.status, b.via]), [
+    ['q2', 'sent', '대화창에서 답함'],
+    ['q4', 'sent', 'Claude Code 패널에서 답 없이 닫음'],
+  ])
+})
+
+test('장부: 대기 카드 지우기는 「답 없이 닫음」으로 장부에 남기고, 보낸 카드·key 없는 카드는 장부를 안 쓴다', async () => {
+  const f = fakeIo()
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true }, 'terminal.read': { lines: ['x'], truncated: false } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.hooks.fire('agent.tool.after', KEYED)
+  await w.request('qp.remove', { id: 'q2', terminalId: 'term_1' })
+  assert.equal(JSON.parse(f.ledger.get(KEY) ?? 'null').state, 'dismissed')
+  // 되살려도 장부가 닫혀 있어 다음 동기화에 닫힘으로 남는다(또 답이 가지 않는다).
+  await w.request('qp.undoRemove', { id: 'q2', terminalId: 'term_1' })
+  await w.request('qp.refresh', {})
+  assert.deepEqual((await stored(w)).map(b => [b.id, b.status, b.via]), [['q2', 'sent', '답 없이 닫음']])
+  // 옛 mod(panel_key 없음): 예전처럼 장부 없이 보낸다.
+  const g = fakeIo()
+  const w2 = await mountWorker({ default: createWorker(g.io), deactivate }, { host })
+  await w2.hooks.fire('agent.tool.after', ASK)
+  assert.equal(((await w2.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean }).ok, true)
+  assert.equal(g.ledger.size, 0)
 })

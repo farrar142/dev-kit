@@ -2,6 +2,10 @@
 // 0.4.0: Orca 채팅 세션(stream-json)의 질문은 훅이 오지 않아, Claude Code question-panel MCP 서버가 남긴
 // 폴더(~/.question-panel/orca-inbox)에서 읽고, 답은 그 세션의 오케스트레이션 메일함으로 보낸다.
 //
+// 0.5.0: 질문 상태의 정본은 닫힘 장부(~/.question-panel/ledger, question-panel 0.9.0 과 같은 계약)다.
+// 보내기 전에 장부를 배타 생성으로 차지하고(Claude Code 패널이 먼저 답했으면 보내지 않는다), 폴더를 볼 때
+// 장부도 읽어 다른 곳에서 닫힌 카드를 닫는다. 대기 카드 「지우기」는 장부에 「답 없이 닫음」을 남긴다.
+//
 // 단계마다 orca.log 를 남긴다(`orca plugin logs local.question-panel`). 0.1.0은 로그가 없어
 // 답이 어디서 끊겼는지 보이지 않았다.
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -25,6 +29,12 @@ import {
   closedIdsOf,
   closeFromInbox,
   closeInChat,
+  closeByLedger,
+  isOwnAnswer,
+  ledgerRecord,
+  ledgerVia,
+  parseLedger,
+  type LedgerRecord,
   RESOLVE_TOOL,
   isMailbox,
   mailBody,
@@ -107,6 +117,68 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   const inflight = new Set<string>()
 
   log('worker 시작')
+
+  /** 장부를 읽어 다른 곳(Claude Code 패널·대화창)에서 닫힌 대기 카드를 닫는다. */
+  const syncLedger = async () => {
+    try {
+      const keyed = (await load()).filter(b => b.status === 'pending' && b.key !== undefined)
+      if (keyed.length === 0) return
+      const records: Record<string, LedgerRecord> = {}
+      for (const b of keyed) {
+        const key = b.key as string
+        const r = parseLedger(await io.readLedger(key), key)
+        if (r !== null) records[key] = r
+      }
+      if (Object.keys(records).length === 0) return
+      // 저장 직전에 다시 읽는다(그사이 훅·폴더 읽기가 저장했을 수 있다).
+      const r = closeByLedger(await load(), records)
+      if (r.closed.length === 0) return
+      await save(r.list)
+      log(`장부: ${r.closed.map(c => `${c.id}(${c.terminalId}) 「${c.via}」`).join(', ')}으로 닫음`)
+    } catch (err) {
+      log(`장부(${io.ledgerDir}) 읽기 실패: ${describeError(err)}`)
+    }
+  }
+
+  /**
+   * 보내기 전에 장부를 차지한다. 이미 다른 곳이 닫았으면 카드를 그 사유로 닫고 막는 결과를 돌려준다.
+   * 장부를 쓸 수 없으면(폴더 권한 등) 로그만 남기고 막지 않는다(혼자서도 돈다).
+   */
+  const claim = async (b: Batch, state: LedgerRecord['state']): Promise<Result | null> => {
+    if (b.key === undefined) return null
+    try {
+      if (await io.claimLedger(b.key, JSON.stringify(ledgerRecord(b.key, state, Date.now())))) {
+        log(`장부: ${b.id}(${b.key}) 차지`)
+
+        return null
+      }
+      const held = parseLedger(await io.readLedger(b.key), b.key)
+      // 이 패널 자신의 답 기록(앞선 보내기가 「갔을 수 있음」으로 끝남)이면 막지 않는다.
+      if (held !== null && isOwnAnswer(held) && state === 'answered') return null
+      const via = held === null ? '다른 곳에서 닫힘' : ledgerVia(held)
+      await save(
+        (await load()).map(x => {
+          if (!(x.id === b.id && x.terminalId === b.terminalId && x.status === 'pending')) return x
+          const { error: _, ...rest } = x
+
+          return { ...rest, status: 'sent' as const, via }
+        }),
+      )
+      log(`장부: ${b.id}(${b.key}) 이미 「${via}」 — 보내지 않음`)
+
+      return { ok: false, reason: `${b.id}은(는) 이미 「${via}」 상태라 보내지 않았습니다.` }
+    } catch (err) {
+      log(`장부 차지 실패(막지 않고 보냄): ${describeError(err)}`)
+
+      return null
+    }
+  }
+
+  /** 보내기에 실패했으면(갔을 수 있는 경우는 빼고) 차지한 장부 기록을 거둔다. 다시 누를 수 있게. */
+  const release = async (b: Batch) => {
+    if (b.key === undefined) return
+    await io.releaseLedger(b.key).catch(err => log(`장부 거두기 실패: ${describeError(err)}`))
+  }
 
   /** 터미널 제목(포커스된 workspace에 있을 때만 보인다)과 workspace 이름. 모르면 비운다. */
   const whereInfo = async (
@@ -386,6 +458,11 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
           return { ok: false, reason: `${id}은(는) 대화창에서 이미 답해 닫혔습니다.` }
         }
 
+        // 장부에서 닫힌 카드(0.5.0): 「Claude Code 패널에서 답함」 등
+        if (done?.status === 'sent' && done.via !== undefined && done.via !== '터미널' && !done.via.startsWith('메일함')) {
+          return { ok: false, reason: `${id}은(는) 이미 「${done.via}」 상태라 보내지 않았습니다.` }
+        }
+
         return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
       }
       if (!complete(b, picks, texts)) return { ok: false, reason: '모든 질문에 답을 골라 주세요. 「기타」를 골랐으면 글을 2000자 안으로 써 주세요.' }
@@ -402,8 +479,11 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       }
       inflight.add(k)
       try {
+        const blocked = await claim(b, 'answered')
+        if (blocked !== null) return blocked
         if (isMailbox(b)) {
           const r = await sendMail(b, picks, texts)
+          if (!r.ok && r.maybeSent !== true) await release(b)
           await save(
             r.ok
               ? markSent(await load(), id, terminalId, r.line ?? '', r.via)
@@ -417,7 +497,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
           return r
         }
 
-        return await answerTerminal(b, id, terminalId, picks, texts)
+        const r = await answerTerminal(b, id, terminalId, picks, texts)
+        if (!r.ok) await release(b)
+
+        return r
       } finally {
         inflight.delete(k)
       }
@@ -495,6 +578,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   orca.panels.handle('qp.refresh', async () => {
     const start = Date.now()
     await ingest()
+    await syncLedger()
     await refresh()
     log(`qp.refresh 끝(${Date.now() - start}ms)`)
 
@@ -504,6 +588,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   // 정리(0.4.1). 지운 묶음은 지운 기록(DISMISSED_KEY)에 남겨 되돌릴 수 있고, 질문 폴더에 같은 파일이
   // 남아 있어도 다시 띄우지 않는다(ingest).
   orca.panels.handle('qp.remove', async ({ id, terminalId }) => {
+    // 살아 있는 세션의 대기 카드를 지우면 「답 없이 닫음」이다: 장부에 남겨 Claude Code 패널도 닫히게 한다
+    // (그 mod 가 세션에 「qN 답 없이 닫음(Orca)」을 알린다). 이미 다른 곳이 닫았으면 그대로 지우기만.
+    const b = (await load()).find(x => x.id === id && x.terminalId === terminalId)
+    if (b !== undefined && b.status === 'pending' && b.closed !== true) await claim(b, 'dismissed')
     const n = await dismiss(b => b.id === id && b.terminalId === terminalId, '카드 지우기', true)
 
     return n === 0 ? { ok: false, reason: '이미 지웠거나 없는 묶음입니다.' } : { ok: true, reason: '' }
@@ -535,10 +623,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   })
 
   // 채팅 세션 질문 폴더를 본다. 훅이 있어 워커는 늘 떠 있다(pluginNeedsResidentWorker).
-  void ingest()
+  void ingest().then(syncLedger)
   if (io.pollMs !== null) {
     stopPolling?.()
-    const timer = setInterval(() => void ingest(), io.pollMs)
+    const timer = setInterval(() => void ingest().then(syncLedger), io.pollMs)
     // 워커는 host 연결이 붙잡고 있다. 타이머가 프로세스를 붙잡지 않게 한다(시험이 끝나도록).
     ;(timer as unknown as { unref?: () => void }).unref?.()
     stopPolling = () => clearInterval(timer)

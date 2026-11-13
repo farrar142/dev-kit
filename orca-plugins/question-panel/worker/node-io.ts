@@ -2,10 +2,10 @@
 // node: 모듈을 그대로 쓴다. 플러그인 host API 에는 오케스트레이션 메일을 보내는 메서드가 없어서
 // (워커 메서드는 terminal.*·workspace.*·agent.launch 등) orca CLI 를 직접 띄운다.
 import { spawn } from 'node:child_process'
-import { readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { INBOX_DIR_PARTS, type CliRun } from '../src/questions.ts'
+import { INBOX_DIR_PARTS, LEDGER_DIR_PARTS, type CliRun } from '../src/questions.ts'
 import type { InboxFile, WorkerIo } from './io.ts'
 
 const CLI_TIMEOUT_MS = 20000
@@ -91,8 +91,37 @@ const listInbox = async (): Promise<InboxFile[]> => {
   return Promise.all(files.map(async name => ({ name, text: await readFile(join(inboxDir, name), 'utf8') })))
 }
 
+const ledgerDir = join(homedir(), ...LEDGER_DIR_PARTS)
+const codeOf = (err: unknown) => (err as { code?: unknown }).code
+
+/** 배타 생성(flag 'wx' = O_EXCL): 두 패널이 같은 묶음을 닫으려 하면 먼저 만든 쪽만 이긴다. */
+const claimLedger = async (key: string, text: string): Promise<boolean> => {
+  await mkdir(ledgerDir, { recursive: true })
+  try {
+    await writeFile(join(ledgerDir, `${key}.json`), text, { encoding: 'utf8', flag: 'wx' })
+
+    return true
+  } catch (err) {
+    if (codeOf(err) === 'EEXIST') return false
+    throw err
+  }
+}
+
+const readLedger = async (key: string): Promise<string | null> => {
+  try {
+    return await readFile(join(ledgerDir, `${key}.json`), 'utf8')
+  } catch (err) {
+    if (codeOf(err) === 'ENOENT') return null
+    throw err
+  }
+}
+
 export const nodeIo: WorkerIo = {
   inboxDir,
+  ledgerDir,
+  claimLedger,
+  readLedger,
+  releaseLedger: key => rm(join(ledgerDir, `${key}.json`), { force: true }),
   listInbox,
   removeInbox: name => rm(join(inboxDir, name), { force: true }),
   runCli,

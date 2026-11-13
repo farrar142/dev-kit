@@ -26,7 +26,7 @@
     {
       "name": "question-panel",
       "source": "./plugins/question-panel",
-      "description": "질문 패널 mod: 모델의 객관식 질문(MCP 서버 도구 mcp__plugin_question-panel_qp__ask, node 필요)을 오른쪽 「질문」 패널에 쌓아 두고 사용자가 원할 때 답하면 「[질문 패널 답] 질문 = 답」 메시지로 돌려준다. AskUserQuestion처럼 턴을 막지 않는다. 선택지 preview, 답한 기록 지우기(/questions·/questions-clear)"
+      "description": "질문 패널 mod: 모델의 객관식 질문(MCP 서버 도구 mcp__plugin_question-panel_qp__ask, node 필요)을 오른쪽 「질문」 패널에 쌓아 두고 사용자가 원할 때 답하면 「[질문 패널 답] 질문 = 답」 메시지로 돌려준다. AskUserQuestion처럼 턴을 막지 않는다. 선택지 preview, 답한 기록 지우기(/questions·/questions-clear). Orca 사이드바 질문 패널과 닫힘 장부를 같이 써 한쪽에서 답하면 다른 쪽도 닫힌다(0.9.0)"
     },
     {
       "name": "security-recon",
