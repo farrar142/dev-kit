@@ -16,6 +16,8 @@ declare module 'node:fs/promises' {
   export function readdir(path: string): Promise<string[]>
   export function readFile(path: string, encoding: 'utf8'): Promise<string>
   export function rm(path: string, options?: { force?: boolean }): Promise<void>
+  export function writeFile(path: string, data: string, options: { encoding: 'utf8'; flag: string }): Promise<void>
+  export function mkdir(path: string, options: { recursive: true }): Promise<string | undefined>
 }
 
 declare module 'node:child_process' {

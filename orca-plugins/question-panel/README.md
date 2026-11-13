@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.4.4 — Claude Code question-panel 0.6.3 이상과 함께)
+# 질문 패널 (Orca 플러그인, 시제품 0.5.0 — Claude Code question-panel 0.9.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
 
 > **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
@@ -77,6 +77,30 @@ orca plugin open local.question-panel --panel questions --json
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
 
+## 0.5.0 — 닫힘 장부: 한쪽에서 답하면 다른 패널도 닫힌다 (#64)
+
+**증상.** 같은 질문이 Claude Code 패널과 이 패널에 같이 뜨는데, Claude Code 패널에서 답해도 이 카드가 남아 또 답할 수 있었다.
+
+**원인.** 상태가 두 벌(mod 저장 값·이 워커의 storage)이었고, Claude Code 패널의 「완료」는 묶음 ID 없는 `[질문 패널 답] 질문 = 답` 줄을 세션에 넣을 뿐이라(도구 호출이 아니어서 `agent.tool.after`가 안 오고, MCP 서버도 거치지 않아 질문 폴더에도 안 남음) 이 패널이 알 길이 없었다. 0.4.4의 `panel_closed`는 「대화창에서 답함」·「답 없이 닫음」만 다음 도구 호출 때 실었다.
+
+**정본 = 닫힘 장부** `~/.question-panel/ledger/<key>.json`(question-panel 0.9.0과 같은 계약):
+
+```
+key = <Claude 세션 ID>~q<N>~<만든 시각 ms>   (mod 가 질문 때 만든다 → 훅 입력 panel_key / 질문 파일 key)
+파일 = {v:1, key, id:"q3", state:"answered"|"dismissed", by:"claude"|"orca"|"chat", at}
+없으면 대기, 있으면 닫힘. 만들기는 배타 생성(writeFile flag 'wx' = O_EXCL)만 — 먼저 만든 쪽이 이긴다.
+
+Claude Code 패널 「완료」 ─ sync(close, by claude) ─▶ 장부 ◀─ claimLedger(by orca) ─ 이 패널 「답 보내기」
+          이긴 쪽만 세션에 보낸다. 진 쪽은 카드를 그 사유로 닫는다.
+mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5초마다 readLedger ─ 워커(폴더 읽기 다음)
+```
+
+- **답 보내기**: 보내기 직전에 장부를 차지한다. 이미 있으면(Claude Code 패널·대화창·resolve가 먼저 닫음) 보내지 않고 카드를 「Claude Code 패널에서 답함」·「대화창에서 답함」·「Claude Code 패널에서 답 없이 닫음」으로 닫는다. 터미널이 안 받았거나 메일을 못 보냈으면(갔을 수 있는 경우 빼고) 차지를 거둬 다시 누를 수 있다. 장부가 이 패널 자신의 답 기록이면(앞 보내기가 「갔을 수 있음」) 막지 않는다.
+- **카드 닫기**: 폴더 읽기(1.5초)·`qp.refresh` 뒤 key가 있는 대기 카드의 장부를 읽어 닫는다. 로그: `장부: q3(term_1) 「Claude Code 패널에서 답함」으로 닫음`.
+- **지우기**: 살아 있는 세션의 대기 카드 「지우기」는 장부에 `dismissed by orca`를 남긴다. Claude Code mod가 2초 안에 그 묶음을 「Orca에서 답 없이 닫음」으로 닫고 세션에 `[질문 패널 답] q3 답 없이 닫음(Orca)`를 보낸다. 되돌리기로 카드를 되살려도 장부가 닫혀 있어 다음 동기화에 「답 없이 닫음」으로 남는다(또 답이 가지 않는다).
+- **혼자일 때**: key 없는 묶음(question-panel 0.8.0 이하)은 장부를 안 쓰고 예전대로. 장부 폴더를 못 쓰면 로그만 남기고 막지 않는다. 옛 길(`panel_closed`·닫힘 파일)은 그대로 둔다.
+- **같은 호스트만**: 장부는 질문 폴더처럼 집 폴더라 MCP 서버와 Orca가 같은 사용자·같은 기계여야 한다.
+
 ## 0.4.4 — 「기타(직접 입력)」 답, 대화창에서 닫힌 묶음
 
 - **기타.** 질문마다 선택지 아래 「기타 — 직접 입력」. 하나만 선택이면 라디오의 한 항목이라 다른 선택지와 배타, 여러 개 선택이면 체크박스라 함께 고른다. 고르면 여러 줄 글 상자(`Textarea`, 3줄)가 열리고 글자 수(`N/2000자`)가 보인다. 글이 비었거나 2000자를 넘으면 그 질문은 답하지 않은 것으로 보고 「답 보내기」를 끈다(워커도 같은 `complete`로 다시 막는다). 0.4.2의 기본 선택 규칙(하나만 선택의 빈 선택 = 첫 항목)은 그대로이고, 기타를 고른 질문은 `[OTHER]`라 기본값이 덮지 않는다.
@@ -146,8 +170,10 @@ orca plugin open local.question-panel --panel questions --json
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 56건(로직 18·워커 27·패널 11)
-node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·stdio 포함) 11건
+orca plugin test orca-plugins/question-panel --json    # 시험 60건(0.5.0)
+node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·장부 sync·stdio 포함) 17건
+# orca CLI 가 orcad-artifacts 의 orca-test-register.mjs 를 못 찾으면(리눅스 설치에서 봄) node 로 바로:
+# node --import <Orca 설치>/resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test src/*.test.ts* worker/*.test.ts
 orca plugin check orca-plugins/question-panel --json
 npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin types 로 .orca/types 를 만든다
 ```
@@ -160,4 +186,4 @@ npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin type
 - `src/panel.tsx` — 질문 카드(하나만: RadioGroup, 여럿: Checkbox, 둘 다 「기타」+Textarea)
 - `worker/main.ts` — 훅·폴더로 저장, 답을 터미널에 넣거나 메일함으로 보내기
 - Claude Code 쪽: `plugins/question-panel/mcp/ask.mjs`(`toOrca`: 채팅 세션 판정·질문 파일 모양·안내 한 줄)·`mcp/orca.mjs`(진짜 폴더 쓰기·`run-current`)
-- `worker/io.ts`·`worker/node-io.ts` — 폴더 읽기·`orca` CLI 실행(시험은 가짜 io), `worker/node.d.ts` — 쓰는 Node API만 적은 타입
+- `worker/io.ts`·`worker/node-io.ts` — 폴더 읽기·닫힘 장부(배타 생성·읽기·거두기, 0.5.0)·`orca` CLI 실행(시험은 가짜 io), `worker/node.d.ts` — 쓰는 Node API만 적은 타입

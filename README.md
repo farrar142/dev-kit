@@ -48,12 +48,13 @@ plugins/
     hooks/block-heredoc.js         6,000자 넘는 heredoc 명령을 스크립트 파일로 옮겨 source로 실행
     skills/token-diet/             작업자 토큰 규율: 부분 읽기, 출력 끝만, 심부름꾼, 모델 고르기, 120턴 넘김, 배경 대기, CLAUDE.md 짧게
   question-panel/                  질문 패널 mod(hooks 모듈, Claude Code 2.1.312+)와 stdio MCP 서버(node)
-    .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask)와 닫기 도구 resolve(…_qp__resolve, 0.6.3). 상태 없이 mod가 넘긴 결과 글을 돌려준다
+    .mcp.json, mcp/server.mjs      MCP 서버 qp: 질문 도구 ask(mcp__plugin_question-panel_qp__ask)와 닫기 도구 resolve(…_qp__resolve, 0.6.3). mod가 넘긴 결과 글을 돌려주고, 내부 도구 sync(0.9.0)로 닫힘 장부를 배타 생성으로 쓰고 읽는다
     mcp/ask.mjs, ask.test.mjs      서버 본체(도구 정의·JSON-RPC 처리, `QUESTION_PANEL_ECHO`일 때·mod가 없을 때의 대화창 블록, Orca 채팅 세션 질문·닫힘을 Orca 질문 패널 폴더에)와 node --test 시험
-    mcp/orca.mjs                   Orca 채팅 세션용 진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
+    mcp/orca.mjs                   진짜 환경(집 폴더 ~/.question-panel/orca-inbox 쓰기, 닫힘 장부 ~/.question-panel/ledger 배타 생성·읽기·14일 지난 기록 정리, orca run-current). server.mjs만 쓴다(mod 시험은 node: 모듈을 못 불러온다)
     hooks/register.tsx             질문 도구 호출을 감싸 묶음을 쌓고 결과 글을 서버에 넘김, resolve 호출도 감싸 패널 묶음을 닫음, 오른쪽 「질문」 패널(Pane) 그리기, 완료 때 「[질문 패널 답] …」로 제출,
                                    패널의 「보내기」 칸으로 자유 글 제출, 원격 표면(데스크톱 등)에서는 도구 줄·/questions 출력 줄에도 그림,
-                                   답한 기록 지우기(하나·모두), 패널 닫기(X), 답 없이 닫기, 선택지 preview 펼치기
+                                   답한 기록 지우기(하나·모두), 패널 닫기(X), 답 없이 닫기, 선택지 preview 펼치기,
+                                   보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
@@ -62,7 +63,7 @@ plugins/
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
 orca-plugins/
-  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤(0.5.0)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -97,6 +98,15 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-13 — question-panel 0.9.0·Orca 질문 패널 0.5.0: 질문 상태의 정본을 하나로 (#64)
+
+- 증상: 같은 질문이 Claude Code 패널과 Orca 사이드바 패널에 같이 뜨는데, Claude Code 패널에서 답해도 Orca 카드가 닫히지 않아 또 답할 수 있었다. 원인: 상태가 두 벌(mod 저장 값, Orca 워커 storage)이고 Claude Code → Orca 길이 없었다. mod 「완료」는 묶음 ID 없는 `[질문 패널 답] 질문 = 답` 줄만 세션에 보내고(도구 호출이 아니라 Orca 훅도, MCP 서버도 거치지 않음), 0.6.3의 `panel_closed`는 `via`가 있는 묶음(대화창 답·답 없이 닫음)만 다음 도구 호출 때 실어서 패널에서 보낸 묶음은 영영 안 실렸다. 반대로 Orca 카드 「지우기」는 Orca 안에서만 지워 Claude Code 패널이 대기로 남았다.
+- 고침: 질문 묶음 상태의 정본을 집 폴더의 **닫힘 장부** `~/.question-panel/ledger/<key>.json`으로 모았다. 닫힌 묶음마다 파일 하나를 배타 생성(`O_EXCL`)으로 만들고, 두 패널 모두 세션에 보내기 **전에** 먼저 만들어 이긴 쪽만 보낸다(세션에는 한 번만 간다). key는 `<Claude 세션 ID>~q<N>~<만든 시각>`이라 여러 세션이 동시에 물어도 섞이지 않는다. mod가 질문 입력에 `panel_key`로 붙이고, Orca는 훅 입력(터미널 세션)·질문 파일의 `key`(채팅 세션)로 받는다.
+  - Claude Code 쪽: mod는 파일을 직접 못 다뤄 MCP 서버 `qp`의 내부 도구 `sync`를 `$.mcp.call`로 부른다(모델이 부르면 mod가 막는다). 대기 묶음이 있을 때만 2초마다 장부를 읽어 「Orca에서 답함」·「Orca에서 답 없이 닫음」으로 닫는다. Orca에서 답 없이 닫았으면 세션에 `[질문 패널 답] qN 답 없이 닫음(Orca)` 한 줄을 보낸다. 대화창 글(`q4 1-2`)·`resolve`·「답 없이 닫기」도 장부에 남긴다.
+  - Orca 쪽: 1.5초마다 도는 폴더 읽기에 장부 읽기를 더해 「Claude Code 패널에서 답함」 등으로 카드를 닫는다. 「답 보내기」는 장부를 먼저 차지하고, 졌으면 보내지 않는다. 터미널·메일함으로 못 보냈으면(갔을 수 있는 경우 빼고) 차지를 거둔다. 대기 카드 「지우기」는 장부에 「답 없이 닫음」을 남긴다.
+  - 혼자일 때: Orca가 없으면 장부를 아무도 안 읽을 뿐이다. MCP 서버가 안 닿으면 mod는 예전처럼 바로 보낸다. key 없는 묶음(옛 mod)은 Orca가 예전처럼 다룬다. 옛 길(`panel_closed`, 닫힘 파일)도 버전이 섞인 기계를 위해 남겼다. 도구 이름·답 꼴은 그대로.
+- 시험: mod 30건(`claude plugin test plugins/question-panel`), 서버 17건(`node --test plugins/question-panel/mcp`), Orca 60건(`orca-plugins/question-panel/README.md` 「시험」).
 
 ### 2026-11-13 — issue-track 0.6.0·context-cap 0.2.2: Agent Mail로 보고
 

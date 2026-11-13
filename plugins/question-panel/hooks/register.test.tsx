@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { callAsk, callResolve } from '../mcp/ask.mjs'
+import { callAsk, callResolve, callSync, ledgerRecord } from '../mcp/ask.mjs'
 
 const PANE = {
   plugin: 'question-panel',
@@ -48,6 +48,8 @@ const resolved: any[] = []
 // 패널이 열려 있나, 닫기 호출 기록(setup 마다 비운다).
 const paneUp = { value: false }
 const closes: string[] = []
+// setup 의 가짜 시계(장부 동기화 타이머를 움직인다).
+const clockRef: { value: any } = { value: undefined }
 
 // MCP 결과(content 블록)의 글.
 const textOf = (ran: any) =>
@@ -59,7 +61,7 @@ async function setup(
   surfaces: string[] = ['desktop'],
   server: (e: any) => any = (e: any) => ({ result: callAsk(e).content }),
 ) {
-  mock.clock(on)
+  clockRef.value = mock.clock(on)
   const submitted: string[] = []
   resolved.length = 0
   on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
@@ -643,4 +645,138 @@ test('패널 안 「패널 닫기」와 /questions(열려 있으면 토글)·/qu
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await again.find({ key: 'o:q1:0:0' })).toBeDefined()
   await again.unmount()
+})
+
+// ── 닫힘 장부(0.9.0) ── Orca 질문 패널과 같이 보는 장부를 메모리로 흉내 낸다(배타 생성 그대로).
+async function setupLedger($: any, on: any, server?: (e: any) => any) {
+  const files = new Map<string, string>()
+  const calls: any[] = []
+  on('session.id', () => ({ value: 'sess-A' }))
+  on('mcp.connect', (_: any, e: any) => ({ value: { isConnected: true, server: `plugin:question-panel:${e.server}` } }))
+  on('mcp.call', (_: any, e: any) => {
+    calls.push(e)
+    const ctx = {
+      env: {},
+      inboxDir: '/i',
+      cwd: '/',
+      now: clockRef.value.now(),
+      runCurrent: () => null,
+      write: () => {},
+      ledgerDir: '/l',
+      claim: (_d: string, n: string, t: string) => (files.has(n) ? false : (files.set(n, t), true)),
+      readText: (_d: string, n: string) => files.get(n) ?? null,
+    }
+
+    return { value: callSync(e.args, ctx) }
+  })
+  const submitted = await setup($, on, ['desktop'], server)
+  // Orca 질문 패널(워커)이 장부에 닫힘을 남긴다.
+  const orcaCloses = (key: string, state: 'answered' | 'dismissed') => {
+    const name = `${key}.json`
+    if (files.has(name)) return false
+    files.set(name, JSON.stringify(ledgerRecord({ key, state, by: 'orca', now: 7 })))
+
+    return true
+  }
+  const record = (key: string) => JSON.parse(files.get(`${key}.json`) ?? 'null')
+
+  return { submitted, files, calls, orcaCloses, record }
+}
+
+const keyOf = (calls: any[]) => calls.find(c => c.args?.close !== undefined)?.args.close.key as string
+
+test('장부: 질문 호출에 panel_key 가 실리고, 패널에서 답하면 장부를 먼저 차지해 Orca 는 또 답할 수 없다', async ($, on) => {
+  let input: any
+  const { submitted, calls, orcaCloses, record } = await setupLedger($, on, (e: any) => {
+    input = e
+
+    return { result: callAsk(e).content }
+  })
+  await $.tool.call(INPUT as any)
+  expect(input.panel_key).toMatch(/^sess-A~q1~\d+$/)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'o:q1:0:1' })
+  await ui.press({ key: 'o:q1:1:0' })
+  await ui.press({ key: 'done:q1' })
+  expect(submitted.length).toBe(1)
+  expect(keyOf(calls)).toBe(input.panel_key)
+  expect(record(input.panel_key)).toMatchObject({ id: 'q1', state: 'answered', by: 'claude' })
+  // Orca 워커의 차지는 진다(세션에 두 번 가지 않는다).
+  expect(orcaCloses(input.panel_key, 'answered')).toBe(false)
+  await ui.unmount()
+})
+
+test('장부: Orca 가 먼저 답했으면 패널의 완료는 세션에 보내지 않고 「Orca에서 답함」으로 닫는다', async ($, on) => {
+  const { submitted, orcaCloses } = await setupLedger($, on)
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'o:q1:0:1' })
+  await ui.press({ key: 'o:q1:1:0' })
+  // 패널을 누르기 직전에 Orca 에서 답했다(아직 동기화 전).
+  expect(orcaCloses(`sess-A~q1~${clockRef.value.now()}`, 'answered')).toBe(true)
+  await ui.press({ key: 'done:q1' })
+  expect(submitted).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /Orca에서 답함 · q1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('장부: 대기 중에 Orca 에서 답하거나 답 없이 닫으면 2초 안에 패널도 닫힌다', async ($, on) => {
+  const { submitted, orcaCloses } = await setupLedger($, on)
+  const t0 = clockRef.value.now()
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  orcaCloses(`sess-A~q1~${t0}`, 'answered')
+  orcaCloses(`sess-A~q2~${t0}`, 'dismissed')
+  expect(await ui.find({ key: 'o:q1:0:0' })).toBeDefined()
+  await clockRef.value.advance(2100)
+  expect(await ui.find({ type: 'Text', text: /Orca에서 답함 · q1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Orca에서 답 없이 닫음 · q2/ })).toBeDefined()
+  expect(await ui.find({ key: 'o:q1:0:0' })).toBeUndefined()
+  // Orca 답은 Orca 가 보낸 줄로 따로 온다. 답 없이 닫음만 세션에 한 줄 알린다.
+  expect(submitted).toEqual(['[질문 패널 답] q2 답 없이 닫음(Orca)'])
+  // 다음 주기에 또 알리지 않는다.
+  await clockRef.value.advance(2100)
+  expect(submitted.length).toBe(1)
+  await ui.unmount()
+})
+
+test('장부: 답 없이 닫기·대화창 글·resolve 도 장부에 남아 Orca 카드가 닫힌다', async ($, on) => {
+  const { submitted, orcaCloses, record } = await setupLedger($, on)
+  const t0 = clockRef.value.now()
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'del:q1' })
+  await ui.press({ key: 'delok:q1' })
+  expect(record(`sess-A~q1~${t0}`)).toMatchObject({ state: 'dismissed', by: 'claude' })
+  expect(submitted).toEqual(['[질문 패널 답] q1 답 없이 닫음'])
+  await $.prompt.submit({ text: 'q2 1-1, 2-2' } as any)
+  expect(record(`sess-A~q2~${t0}`)).toMatchObject({ state: 'answered', by: 'chat' })
+  await $.tool.call({ tool: RESOLVE, id: 'q3' } as any)
+  expect(record(`sess-A~q3~${t0}`)).toMatchObject({ state: 'answered', by: 'chat' })
+  // 이미 닫혔으니 Orca 는 못 닫는다.
+  expect(orcaCloses(`sess-A~q2~${t0}`, 'answered')).toBe(false)
+  await ui.unmount()
+})
+
+test('장부: Orca 가 먼저 닫은 묶음은 답 없이 닫기도 세션에 보내지 않는다', async ($, on) => {
+  const { submitted, orcaCloses } = await setupLedger($, on)
+  const t0 = clockRef.value.now()
+  await $.tool.call(INPUT as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'del:q1' })
+  orcaCloses(`sess-A~q1~${t0}`, 'answered')
+  await ui.press({ key: 'delok:q1' })
+  expect(submitted).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /Orca에서 답함 · q1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('장부: 모델이 sync 도구를 부르면 막는다', async ($, on) => {
+  await setupLedger($, on)
+  const ran = await $.tool.call({ tool: 'mcp__plugin_question-panel_qp__sync', keys: [] } as any)
+  expect(JSON.stringify(ran)).toContain('내부용')
 })

@@ -11,6 +11,11 @@ const TOOL = 'mcp__plugin_question-panel_qp__ask'
 // 「대화창에서 답함」으로 닫는 도구도 MCP 서버가 낸다(0.6.3). mod 도구였을 때는 훅을 타지 않아
 // Orca 질문 패널이 닫힌 줄 몰라 같은 질문에 또 답이 갔다.
 const RESOLVE_TOOL = 'mcp__plugin_question-panel_qp__resolve'
+// 닫힘 장부(0.9.0)를 다루는 MCP 서버 내부 도구. mod가 $.mcp.call 로만 부르고, 모델이 부르면 막는다.
+const SYNC_TOOL = 'mcp__plugin_question-panel_qp__sync'
+const SERVER = 'qp'
+// 대기 묶음이 있을 때 장부를 볼 간격. Orca 워커는 1.5초마다 본다.
+const SYNC_MS = 2000
 
 // 필드가 바뀌면 태그를 올린다: 이전 버전이 저장한 값은 비어 있는 것으로 읽힌다.
 const queue = atom({ plugin: 'question-panel', key: 'queue' } as const, [], {
@@ -100,6 +105,63 @@ const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
 // 대화창 글로 답해 닫힌 묶음 ID들. 질문·resolve 호출에 panel_closed 로 붙여 Orca 질문 패널 카드도 닫는다
 // (prompt.submit 훅에는 바깥으로 알릴 길이 없어 다음 도구 호출에 실어 보낸다, 0.6.3).
 const chatClosed = (list: readonly QuestionPanelBatch[]) => list.filter(b => b.via !== undefined).map(b => b.id)
+
+// ── 닫힘 장부(0.9.0) ─────────────────────────────────────────────────────────
+// 질문 묶음 상태의 정본은 집 폴더의 장부(~/.question-panel/ledger, mcp/ask.mjs)다. 닫힌 묶음마다 파일 하나를
+// 배타 생성으로 만들어, Claude Code 패널과 Orca 질문 패널 중 먼저 닫은 쪽만 세션에 답을 보낸다.
+type LedgerRecord = { key: string; id: string; state: 'answered' | 'dismissed'; by: 'claude' | 'orca' | 'chat'; at: number }
+type SyncOut = { claimed?: boolean; holder?: LedgerRecord | null; closed: Record<string, LedgerRecord> }
+type SyncArgs = { close?: { key: string; state: LedgerRecord['state']; by: 'claude' | 'chat' }; keys?: string[] }
+type McpSelf = { mcp: Pick<RenderSelf['mcp'], 'connect' | 'call'> }
+
+/** 장부 도구를 부른다. 서버가 없거나 실패하면 null(그때는 장부 없이 지금처럼 혼자 돈다). */
+const sync = async ($: McpSelf, args: SyncArgs): Promise<SyncOut | null> => {
+  try {
+    const c = await $.mcp.connect(SERVER)
+    if (!c.isConnected) return null
+    const r = await $.mcp.call(c.server, 'sync', args)
+    if (r.isError === true) return null
+    const block = r.content.find(b => b.type === 'text')
+    if (block === undefined || !('text' in block) || typeof block.text !== 'string') return null
+    const out: unknown = JSON.parse(block.text)
+    if (typeof out !== 'object' || out === null || !('closed' in out) || typeof out.closed !== 'object') return null
+
+    return out as SyncOut // 서버(mcp/ask.mjs callSync)가 만든 JSON 경계
+  } catch {
+    return null
+  }
+}
+
+/** 이 패널이 닫으려 했는데 장부에 다른 곳의 닫힘이 먼저 있다(그러면 세션에 보내지 않는다). */
+const lostTo = (r: SyncOut | null): LedgerRecord | null => {
+  if (r === null || r.claimed !== false) return null
+  // 먼저 닫은 것이 이 패널 자신(보내기 실패 뒤 다시 누름)이면 막지 않는다.
+  if (r.holder?.by === 'claude') return null
+
+  return r.holder ?? { key: '', id: '', state: 'answered', by: 'orca', at: 0 }
+}
+
+/** 장부 기록 → 이 패널의 닫힘 표시. */
+const viaOf = (rec: LedgerRecord): QuestionPanelBatch['via'] =>
+  rec.by === 'orca'
+    ? rec.state === 'dismissed'
+      ? 'orca-dismissed'
+      : 'orca'
+    : rec.state === 'dismissed'
+      ? 'dismissed'
+      : rec.by === 'chat'
+        ? 'chat'
+        : undefined
+
+const VIA_TEXT: Record<NonNullable<QuestionPanelBatch['via']>, string> = {
+  chat: '대화창에서 답함',
+  dismissed: '답 없이 닫음',
+  orca: 'Orca에서 답함',
+  'orca-dismissed': 'Orca에서 답 없이 닫음',
+}
+
+const sessionKey = (sid: string, id: string, now: number) =>
+  `${sid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80) || 'session'}~${id}~${Math.floor(now)}`
 
 // 답한 묶음(패널에서 보냄·대화창에서 답함)만 지운다. 대기 중인 묶음은 남긴다.
 const clearSent = (list: QuestionPanelBatch[]) => list.filter(b => b.status !== 'sent')
@@ -214,6 +276,17 @@ function kit($: RenderSelf, e: RenderEvent) {
       })
     })
     if (sent === undefined) return
+    // 장부에서 먼저 닫는다: Orca 질문 패널이 먼저 답했으면 보내지 않는다(세션에는 한 번만 간다).
+    const key = (sent as QuestionPanelBatch).key
+    if (key !== undefined) {
+      const lost = lostTo(await sync($, { close: { key, state: 'answered', by: 'claude' } }))
+      if (lost !== null) {
+        void update($, queue, l => l.map(b => (b.id === id ? { ...b, via: viaOf(lost) } : b)))
+        $.ui.toast(`${id}은(는) 이미 ${VIA_TEXT[viaOf(lost) ?? 'orca']} 상태라 보내지 않았습니다.`)
+
+        return
+      }
+    }
     // 큐에 들어가는 제출: 턴이 진행 중이어도 끼어들지 않고 턴이 끝나면 새 턴으로 간다.
     // 결과를 기다리지 않는다(턴이 시작될 때야 돌아온다). 실패하면 대기로 되돌린다.
     $.prompt.submit({ text: answerText(sent), asUser: true }).catch(() => {
@@ -234,7 +307,7 @@ function kit($: RenderSelf, e: RenderEvent) {
     })
     if (text === '') return
     const ids = mentionedIds(text)
-    if (ids.size > 0) void update($, queue, l => closeInChat(l, ids))
+    if (ids.size > 0) void closeByChat($, ids)
     $.prompt.submit({ text, asUser: true }).catch(() => {
       void update($, draft, d => (d === '' ? text : d))
       $.ui.toast('글을 보내지 못했습니다. 다시 보내기를 눌러 주세요.')
@@ -253,17 +326,28 @@ function kit($: RenderSelf, e: RenderEvent) {
   // panel_closed 로 닫힌다), 세션에는 「qN 답 없이 닫음」을 한 줄 보내 모델이 기다리지 않게 한다.
   const remove = async (id: string) => {
     let closed = false
+    let key = undefined as string | undefined
     await update($, queue, l => {
       closed = false
+      key = undefined
 
       return l.map(b => {
         if (b.id !== id || b.status !== 'pending' || b.confirmingDelete !== true) return b
         closed = true
+        key = b.key
 
         return { ...b, status: 'sent' as const, via: 'dismissed' as const, confirmingDelete: false }
       })
     })
     if (!closed) return
+    if (key !== undefined) {
+      const lost = lostTo(await sync($, { close: { key, state: 'dismissed', by: 'claude' } }))
+      if (lost !== null) {
+        void update($, queue, l => l.map(b => (b.id === id ? { ...b, via: viaOf(lost) } : b)))
+
+        return
+      }
+    }
     $.prompt.submit({ text: `[질문 패널 답] ${id} 답 없이 닫음`, asUser: true }).catch(() => {
       $.ui.toast('세션에 닫음을 알리지 못했습니다.')
     })
@@ -274,7 +358,7 @@ function kit($: RenderSelf, e: RenderEvent) {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
           <Text dimColor wrap="wrap">
-            {batch.via === 'chat' ? '대화창에서 답함' : batch.via === 'dismissed' ? '답 없이 닫음' : '보냄'} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
+            {batch.via === undefined ? '보냄' : VIA_TEXT[batch.via]} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
             {batch.questions.length}개
           </Text>
           <Button key={`delsent:${batch.id}`} label="기록 지우기" onPress={() => removeSent(batch.id)} />
@@ -466,6 +550,48 @@ function kit($: RenderSelf, e: RenderEvent) {
   return { card, panel }
 }
 
+// 대화창 글(「q4 1-2」·resolve)로 닫는다. 장부에도 「대화창에서 답함」을 남겨 Orca 카드가 곧 닫히게 한다.
+const closeByChat = async ($: RenderSelf, ids: Set<string>) => {
+  let keys: string[] = []
+  await update($, queue, l => {
+    keys = l.filter(b => ids.has(b.id) && b.status === 'pending' && b.key !== undefined).map(b => b.key as string)
+
+    return closeInChat(l, ids)
+  })
+  await Promise.all(keys.map(key => sync($, { close: { key, state: 'answered', by: 'chat' } })))
+}
+
+/**
+ * 장부를 읽어 다른 곳(Orca 질문 패널·다른 길)에서 닫힌 대기 묶음을 닫는다. 대기 묶음이 없으면 부르지 않는다.
+ * Orca에서 답 없이 닫았으면 세션에 「qN 답 없이 닫음(Orca)」 한 줄을 보낸다(모델이 기다리지 않게, mod의
+ * 「답 없이 닫기」와 같은 꼴). Orca에서 답했으면 답은 Orca가 보낸 줄·메일로 따로 온다.
+ */
+export const pollLedger = async ($: RenderSelf) => {
+  const keys = (await read($, queue)).filter(b => b.status === 'pending' && b.key !== undefined).map(b => b.key as string)
+  if (keys.length === 0) return
+  const r = await sync($, { keys })
+  if (r === null) return
+  let shut: QuestionPanelBatch[] = []
+  await update($, queue, l => {
+    shut = []
+
+    return l.map(b => {
+      const rec = b.status === 'pending' && b.key !== undefined ? r.closed[b.key] : undefined
+      // 이 패널 자신의 기록(보내기 실패로 대기로 되돌린 묶음)은 그대로 둔다.
+      if (rec === undefined || rec.by === 'claude') return b
+      const next = { ...b, status: 'sent' as const, via: viaOf(rec), confirmingDelete: false }
+      shut.push(next)
+
+      return next
+    })
+  })
+  for (const b of shut.filter(x => x.via === 'orca-dismissed')) {
+    $.prompt.submit({ text: `[질문 패널 답] ${b.id} 답 없이 닫음(Orca)`, asUser: true }).catch(() => {
+      $.ui.toast('세션에 닫음을 알리지 못했습니다.')
+    })
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -476,6 +602,8 @@ export const register: Register = on => {
       name: 'questions-clear',
       description: '질문 패널에서 답한 묶음(보냄·대화창에서 답함)을 모두 지운다. 대기 중인 묶음은 남긴다',
     })
+    // 닫힘 장부를 본다(0.9.0): Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
+    $.clock.every(SYNC_MS, () => void pollLedger($).catch(() => undefined))
 
     return next(e)
   })
@@ -484,6 +612,8 @@ export const register: Register = on => {
   // 처음부터 도구 목록에 두어, 모델이 AskUserQuestion 대신 이것을 바로 고르게 한다.
   on('tool.describe', { tool: TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
   on('tool.describe', { tool: RESOLVE_TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
+  // 장부 도구는 mod 내부용이다($.mcp.call 은 tool.call 을 거치지 않는다). 모델의 호출은 막는다.
+  on('tool.call', { tool: SYNC_TOOL }, async () => ({ deny: 'question-panel: sync 는 질문 패널 내부용 도구다. 부르지 마라.' }))
 
   // 질문 도구 호출을 감싼다: 묶음을 쌓고 모델이 읽을 결과 글을 만들어 입력의 panel_result로
   // MCP 서버에 넘긴다(서버는 그 글을 그대로 돌려준다). next를 거쳐야 MCP 호출과 함께
@@ -497,12 +627,15 @@ export const register: Register = on => {
     const list = await read($, queue)
     const top = Math.max(0, ...list.map(b => Number(b.id.slice(1)) || 0))
     const id = `q${top + 1}`
+    const sid = await $.session.id().catch(() => '')
+    const key = sessionKey(sid, id, now)
     const batch: QuestionPanelBatch = {
       id,
       createdAt: now,
       status: 'pending',
       questions,
       toolUseId: e.tool_use_id,
+      key,
     }
     await update($, queue, l => [...l, batch])
     // 결과 글은 짧게: 데스크톱 앱·CLI·Orca(터미널·채팅) 모두 질문 패널을 그리므로 질문을 대화창에
@@ -526,7 +659,7 @@ export const register: Register = on => {
       })
     }
 
-    const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(list) })
+    const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(list), panel_key: key })
     // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
     if (ran.deny !== undefined || ran.isError === true) await update($, queue, l => l.filter(b => b.id !== id))
 
@@ -537,14 +670,9 @@ export const register: Register = on => {
   // agent.tool.after 훅으로 닫힘을 보고, 채팅 세션은 서버가 Orca 질문 패널 폴더에 닫힘을 남긴다.
   on('tool.call', { tool: RESOLVE_TOOL }, async ($, e, next) => {
     const id = typeof e.id === 'string' ? e.id.trim().toLowerCase() : ''
-    let found = undefined as QuestionPanelBatch | undefined
-    let after: QuestionPanelBatch[] = []
-    await update($, queue, l => {
-      found = l.find(b => b.id === id)
-      after = closeInChat(l, new Set([id]))
-
-      return after
-    })
+    const found = (await read($, queue)).find(b => b.id === id)
+    await closeByChat($, new Set([id]))
+    const after = await read($, queue)
     const text =
       found === undefined
         ? `묶음 ${id}이 없다.`
@@ -558,7 +686,7 @@ export const register: Register = on => {
   // 사용자가 대화창에 묶음 ID를 넣어 답하면(「q4 2번」) 패널의 그 묶음을 닫는다.
   on('prompt.submit', async ($, e, next) => {
     const ids = mentionedIds(e.text)
-    if (ids.size > 0) await update($, queue, l => closeInChat(l, ids))
+    if (ids.size > 0) await closeByChat($, ids)
 
     return next(e)
   })

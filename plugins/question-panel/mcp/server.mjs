@@ -2,7 +2,9 @@
 import { createInterface } from 'node:readline'
 
 import { handle } from './ask.mjs'
-import { orcaCtx } from './orca.mjs'
+import { orcaCtx, pruneLedger } from './orca.mjs'
+
+pruneLedger()
 
 createInterface({ input: process.stdin }).on('line', line => {
   let msg

@@ -17,6 +17,11 @@
 // 세션 정보와 함께 남기고, Orca 질문 패널 플러그인(0.4.0+)이 읽어 카드로 띄운 뒤 답을 이 세션의
 // 오케스트레이션 메일함으로 보낸다. 이 서버는 Claude Code가 띄우므로 그 세션의 환경변수
 // (ORCA_AGENT_SESSION_ID 등)를 그대로 읽는다(mod 훅 환경에는 process가 없어 못 읽는다).
+//
+// 닫힘 장부(0.9.0): 질문 묶음 상태의 정본. 집 폴더 `.question-panel/ledger`에 닫힌 묶음마다 파일
+// `<key>.json` 하나를 배타 생성(O_EXCL)으로 만든다. 없으면 대기, 있으면 닫힘. Claude Code 패널(mod)과
+// Orca 질문 패널이 둘 다 보내기 전에 이 파일을 먼저 만들어 이긴 쪽만 세션에 답을 보낸다(한 번만 간다).
+// mod는 파일을 직접 못 다뤄 내부 도구 `sync`를 $.mcp.call로 부르고, Orca 워커는 같은 폴더를 직접 다룬다.
 // 이 파일은 Node 모듈을 import 하지 않는다(mod 시험이 이 파일을 가져다 쓰는데, hooks 모듈은 node:
 // 모듈을 못 불러온다). 환경·파일·CLI는 ctx 로 받고, 진짜 ctx 는 orca.mjs 가 만들어 server.mjs 가 넘긴다.
 
@@ -77,6 +82,19 @@ export const RESOLVE = {
       id: { type: 'string', description: '닫을 묶음 ID(예: q4)' },
     },
     required: ['id'],
+  },
+}
+
+// 닫힘 장부를 다루는 내부 도구(0.9.0). mod가 $.mcp.call 로만 부른다(모델이 부르면 mod가 막는다).
+export const SYNC = {
+  name: 'sync',
+  description: '질문 패널 mod 내부용(닫힘 장부 읽기·쓰기). 모델은 부르지 않는다.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      close: { type: 'object', description: '닫을 묶음 { key, state: answered|dismissed, by: claude|chat }' },
+      keys: { type: 'array', items: { type: 'string' }, description: '닫혔는지 볼 묶음 key들' },
+    },
   },
 }
 
@@ -155,9 +173,10 @@ export const parseRunId = stdout => {
 }
 
 /** 질문 파일 하나(Orca 질문 패널 batchFromInbox 가 읽는 모양). */
-export const inboxEntry = ({ id, questions, chat, runId, cwd, now }) => ({
+export const inboxEntry = ({ id, questions, chat, runId, cwd, now, key }) => ({
   v: ORCA_INBOX_VERSION,
   id,
+  ...(isKey(key) ? { key } : {}),
   createdAt: now,
   questions,
   session: { id: chat.sessionId, runId },
@@ -167,14 +186,14 @@ export const inboxEntry = ({ id, questions, chat, runId, cwd, now }) => ({
 })
 
 /** 채팅 세션이면 질문을 Orca 질문 패널 폴더에 남긴다. 남겼으면 true. 실패는 stderr 에 남기고 false. */
-export const toOrca = (questions, text, ctx) => {
+export const toOrca = (questions, text, ctx, key) => {
   const chat = orcaChat(ctx.env)
   const id = batchIdOf(text)
   if (chat === null || id === null || !Array.isArray(questions) || questions.length === 0) return false
   try {
     const runId = ctx.runCurrent(chat)
     const name = `${id}-${chat.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`
-    const entry = inboxEntry({ id, questions, chat, runId, cwd: ctx.cwd, now: ctx.now })
+    const entry = inboxEntry({ id, questions, chat, runId, cwd: ctx.cwd, now: ctx.now, key })
     ctx.write(ctx.inboxDir, name, JSON.stringify(entry))
 
     return true
@@ -220,7 +239,7 @@ export const callAsk = (args, ctx) => {
   // mod 가 붙인 panel_closed: 그새 대화창 글로 답해 닫힌 묶음들. Orca 카드도 닫는다.
   if (ctx !== undefined) closedToOrca(args?.panel_closed, ctx)
   if (typeof prepared === 'string' && prepared !== '') {
-    const sent = ctx !== undefined && toOrca(args?.questions, prepared, ctx)
+    const sent = ctx !== undefined && toOrca(args?.questions, prepared, ctx, args?.panel_key)
     // mod가 넘긴 옛 결과(블록을 옮겨 적게 하는 글). QUESTION_PANEL_ECHO=1일 때만 그것을 돌려준다.
     const echo = str(args?.panel_echo)
     const text = echo !== '' && echoOn(ctx?.env) ? echo : prepared
@@ -259,7 +278,66 @@ export const callResolve = (args, ctx) => {
   }
 }
 
-const TOOLS = { [ASK.name]: callAsk, [RESOLVE.name]: callResolve }
+// ── 닫힘 장부(0.9.0) ──────────────────────────────────────────────────────────
+
+/** Orca 질문 패널 플러그인(orca-plugins/question-panel)과 같은 폴더·모양이다. */
+export const LEDGER_PARTS = ['.question-panel', 'ledger']
+/** 묶음 key: `<세션 ID>~q<N>~<만든 시각 ms>`. mod가 질문 때 만든다. 파일 이름으로 그대로 쓴다. */
+const KEY = /^[A-Za-z0-9_-]{1,80}~q\d{1,6}~\d{1,16}$/
+export const isKey = k => typeof k === 'string' && KEY.test(k)
+const STATES = new Set(['answered', 'dismissed'])
+const BYS = new Set(['claude', 'orca', 'chat'])
+export const ledgerName = key => `${key}.json`
+
+/** 장부 기록 하나. state: 답함·답 없이 닫음, by: 어디서(claude = Claude Code 패널, orca = Orca 패널, chat = 대화창 글). */
+export const ledgerRecord = ({ key, state, by, now }) => ({ v: 1, key, id: key.split('~')[1], state, by, at: now })
+
+/** 장부 파일 글 → 기록(모양이 틀리거나 key가 다르면 null). */
+export const parseRecord = (text, key) => {
+  let j = null
+  try {
+    j = JSON.parse(str(text))
+  } catch {
+    return null
+  }
+  if (j === null || typeof j !== 'object' || j.v !== 1 || j.key !== key) return null
+  if (!STATES.has(j.state) || !BYS.has(j.by) || typeof j.at !== 'number') return null
+
+  return { v: 1, key, id: key.split('~')[1], state: j.state, by: j.by, at: j.at }
+}
+
+/**
+ * sync: close 가 있으면 그 묶음의 닫힘을 배타 생성으로 차지해 본다(claimed: 이겼나, 졌으면 holder: 먼저 닫은 기록).
+ * keys 가 있으면 그중 닫힌 것의 기록을 closed 에 담는다. 결과는 JSON 글 한 칸.
+ */
+export const callSync = (args, ctx) => {
+  if (ctx?.claim === undefined || ctx.readText === undefined) {
+    return { isError: true, content: [{ type: 'text', text: '닫힘 장부를 쓸 수 없다.' }] }
+  }
+  const out = { closed: {} }
+  const c = args?.close
+  try {
+    if (c !== undefined && c !== null) {
+      if (!isKey(c.key) || !STATES.has(c.state) || !BYS.has(c.by)) {
+        return { isError: true, content: [{ type: 'text', text: 'close 모양이 틀렸다.' }] }
+      }
+      const rec = ledgerRecord({ key: c.key, state: c.state, by: c.by, now: ctx.now })
+      out.claimed = ctx.claim(ctx.ledgerDir, ledgerName(c.key), JSON.stringify(rec))
+      if (!out.claimed) out.holder = parseRecord(ctx.readText(ctx.ledgerDir, ledgerName(c.key)), c.key)
+    }
+    const keys = [...new Set(Array.isArray(args?.keys) ? args.keys.filter(isKey) : [])].slice(0, 200)
+    for (const key of keys) {
+      const rec = parseRecord(ctx.readText(ctx.ledgerDir, ledgerName(key)), key)
+      if (rec !== null) out.closed[key] = rec
+    }
+  } catch (err) {
+    return { isError: true, content: [{ type: 'text', text: `닫힘 장부 오류: ${err instanceof Error ? err.message : String(err)}` }] }
+  }
+
+  return { content: [{ type: 'text', text: JSON.stringify(out) }] }
+}
+
+const TOOLS = { [ASK.name]: callAsk, [RESOLVE.name]: callResolve, [SYNC.name]: callSync }
 
 // JSON-RPC 요청 하나에 대한 응답(알림이면 undefined).
 export const handle = (msg, ctx) => {
@@ -270,10 +348,10 @@ export const handle = (msg, ctx) => {
       return ok({
         protocolVersion: str(msg.params?.protocolVersion) || '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'question-panel', version: '0.6.3' },
+        serverInfo: { name: 'question-panel', version: '0.9.0' },
       })
     case 'tools/list':
-      return ok({ tools: [ASK, RESOLVE] })
+      return ok({ tools: [ASK, RESOLVE, SYNC] })
     case 'tools/call': {
       const name = str(msg.params?.name)
       const call = Object.hasOwn(TOOLS, name) ? TOOLS[name] : undefined

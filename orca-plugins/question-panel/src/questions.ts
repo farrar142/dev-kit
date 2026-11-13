@@ -63,6 +63,11 @@ export type Batch = {
    * 카드에 「이미 보냈을 수 있음」을 보인다. 보내면 지운다.
    */
   maybeSent?: boolean
+  /**
+   * 닫힘 장부 key `<Claude 세션 ID>~q<N>~<만든 시각>`(question-panel 0.9.0+가 질문에 붙인다, 0.5.0부터).
+   * 있으면 보내기 전에 장부를 차지하고, 장부에서 다른 곳의 닫힘을 읽어 카드를 닫는다. 없으면(옛 mod) 예전대로.
+   */
+  key?: string
 }
 
 /** agent.tool.after 훅 이벤트에서 쓰는 부분. */
@@ -120,6 +125,7 @@ export const batchFromTool = (e: ToolEvent, now: number, fallbackId: string): Ba
     createdAt: now,
     questions,
     status: 'pending',
+    ...(isKey(e.input.panel_key) ? { key: e.input.panel_key } : {}),
   }
 }
 
@@ -406,6 +412,7 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
       userData: optStr(raw.userData),
     },
     ...(cwd === null ? {} : { cwd }),
+    ...(isKey(raw.key) ? { key: raw.key } : {}),
   }
 }
 
@@ -556,4 +563,85 @@ export const parseSendResult = (
     why: `orca 종료 코드 ${r.code ?? '없음'}${tail === '' ? '' : ` — ${tail.slice(0, 300)}`}`,
     maybeSent: ran,
   }
+}
+
+// ── 닫힘 장부(0.5.0, question-panel 0.9.0 과 같은 계약) ─────────────────────────
+// 집 폴더 `~/.question-panel/ledger/<key>.json`. 닫힌 묶음마다 파일 하나를 배타 생성(O_EXCL)으로 만든다.
+// 없으면 대기, 있으면 닫힘. Claude Code 패널(mod, MCP 서버 sync 도구)과 이 플러그인이 둘 다 보내기 전에
+// 먼저 만들어 보고, 이긴 쪽만 세션에 답을 보낸다. 모양은 plugins/question-panel/mcp/ask.mjs 의 ledgerRecord.
+
+/** 닫힘 장부 폴더(집 폴더 아래). */
+export const LEDGER_DIR_PARTS = ['.question-panel', 'ledger']
+
+const KEY_RE = /^[A-Za-z0-9_-]{1,80}~q\d{1,6}~\d{1,16}$/
+export const isKey = (k: unknown): k is string => typeof k === 'string' && KEY_RE.test(k)
+
+export type LedgerRecord = {
+  v: 1
+  key: string
+  id: string
+  state: 'answered' | 'dismissed'
+  /** claude: Claude Code 패널, orca: 이 패널, chat: 대화창 글·resolve. */
+  by: 'claude' | 'orca' | 'chat'
+  at: number
+}
+
+export const ledgerRecord = (key: string, state: LedgerRecord['state'], at: number): LedgerRecord => ({
+  v: 1,
+  key,
+  id: key.split('~')[1],
+  state,
+  by: 'orca',
+  at,
+})
+
+/** 장부 파일 글 → 기록. 모양이 틀리거나(반쯤 쓴 파일 등) key가 다르면 null. */
+export const parseLedger = (text: string | null, key: string): LedgerRecord | null => {
+  if (text === null) return null
+  let j: unknown = null
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!isRecord(j) || j.v !== 1 || j.key !== key || typeof j.at !== 'number') return null
+  const state = j.state === 'answered' || j.state === 'dismissed' ? j.state : null
+  const by = j.by === 'claude' || j.by === 'orca' || j.by === 'chat' ? j.by : null
+  if (state === null || by === null) return null
+
+  return { v: 1, key, id: key.split('~')[1], state, by, at: j.at }
+}
+
+/** 장부 기록이 이 패널 자신의 답(보내기 직전 차지)인가. 그때만 보내기를 막지 않는다. */
+export const isOwnAnswer = (r: LedgerRecord) => r.by === 'orca' && r.state === 'answered'
+
+/** 카드에 보일 닫힘 사유. */
+export const ledgerVia = (r: LedgerRecord): string =>
+  r.state === 'dismissed'
+    ? r.by === 'orca'
+      ? '답 없이 닫음'
+      : 'Claude Code 패널에서 답 없이 닫음'
+    : r.by === 'chat'
+      ? CHAT_VIA
+      : r.by === 'claude'
+        ? 'Claude Code 패널에서 답함'
+        : '보냄'
+
+/** 장부에 다른 곳의 닫힘이 있는 대기 묶음을 닫는다(이 패널 자신의 답 기록은 건드리지 않는다). */
+export const closeByLedger = (
+  list: readonly Batch[],
+  records: Readonly<Record<string, LedgerRecord>>,
+): { list: Batch[]; closed: { id: string; terminalId: string; via: string }[] } => {
+  const closed: { id: string; terminalId: string; via: string }[] = []
+  const next = list.map(b => {
+    const r = b.status === 'pending' && b.key !== undefined ? records[b.key] : undefined
+    if (r === undefined || isOwnAnswer(r)) return b
+    const via = ledgerVia(r)
+    closed.push({ id: b.id, terminalId: b.terminalId, via })
+    const { error: _, ...rest } = b
+
+    return { ...rest, status: 'sent' as const, via }
+  })
+
+  return { list: closed.length === 0 ? [...list] : next, closed }
 }
