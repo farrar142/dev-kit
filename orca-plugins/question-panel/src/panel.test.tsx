@@ -292,3 +292,27 @@ test('「기타」 글이 2000자를 넘으면 보내기가 꺼지고 이유가 
   assert.ok(p.find({ type: 'Text', text: /2000자까지/ }) !== null)
   await p.unmount()
 })
+
+// 한글 IME: 제어(value) 상자는 조합 중 입력마다 호스트가 값을 되돌려 써 음절이 겹쳤다(오늘→오느늘, 0.5.1).
+// 조합 이벤트는 호스트 몫이라 여기서는 상자가 비제어로(value 없이 defaultValue만) 그려지는지, 조합 중 입력을
+// 흉내 낸 change 여러 번과 다시 그리기에도 상자가 같은 요소로 남고 마지막 값만 보내지는지 본다.
+test('「기타」 글 상자는 비제어라 조합 중 다시 그려도 값을 덮어쓰지 않는다(0.5.1)', async () => {
+  const got: unknown[] = []
+  const host = mockHost({
+    storage: { batches: [BATCH] },
+    requests: { 'qp.answer': input => (got.push(input), { ok: true, reason: '' }) },
+  })
+  const p = await mount(panel, { host })
+  await p.select({ type: 'RadioGroup', label: '어느 DB?' }, '-1')
+  const box = { type: 'Textarea', label: '1번 기타 답' }
+  assert.equal('value' in (p.find(box)?.props ?? {}), false, 'value 를 넘기면 호스트가 입력칸을 덮어쓴다')
+  // 입력(type 은 덧붙인다) 뒤 다른 상태 변화로 다시 그려도 같은 값이 한 번만 들어 있다.
+  await p.type(box, '오')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  await p.type(box, '늘')
+  await p.toggle({ type: 'Checkbox', label: '캐시' })
+  assert.equal(p.find(box)?.props.defaultValue, '오늘')
+  assert.equal('value' in (p.find(box)?.props ?? {}), false)
+  assert.deepEqual(p.errors, [])
+  await p.unmount()
+})

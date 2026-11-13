@@ -63,7 +63,7 @@ plugins/
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
 orca-plugins/
-  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤(0.5.0)
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤(0.5.1)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -98,6 +98,13 @@ orca-plugins/
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
 ## 바뀐 것
+
+### 2026-11-13 — Orca 질문 패널 0.5.1: 「기타」 글 상자의 한글 겹침 (#66)
+
+- 증상: 「기타」 상자에 한글을 치면 마지막 음절이 한 번 더 들어갔다(오늘→오느늘, 안녕→안녀녕).
+- 원인(추정, 실기 확인 못 함): 상자를 제어(`value={text}`)로 그려, 조합 중 입력마다 `onChange`→상태→호스트가 값을 되돌려 쓰며 조합 중인 글자를 덮었다. 패널에는 조합 이벤트·폴링으로 상자를 갈아 끼우는 코드가 없고 Enter 보내기도 없다(`onSubmit` 안 씀).
+- 고침: 비제어(`defaultValue`)로 바꿨다. 값은 `onChange`로 상태에 모으기만 하고 상자에 다시 쓰지 않는다. 시험 61건(+1: `value` 없음·다시 그려도 값 한 번). 조합 이벤트 자체는 시험 도구가 못 흉내 낸다.
+- Claude Code 패널(`plugins/question-panel`)의 `Input`도 제어(`value`)지만 호스트가 그리는 컴포넌트라 비제어 속성이 있는지 알 수 없어 건드리지 않았다.
 
 ### 2026-11-13 — question-panel 0.9.0·Orca 질문 패널 0.5.0: 질문 상태의 정본을 하나로 (#64)
 
