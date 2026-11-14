@@ -97,6 +97,15 @@ orca-plugins/
 - **중복 막기**: 세션별 상태 파일 `$TMPDIR/context-cap/<session_id>.json`(`CONTEXT_CAP_STATE_DIR`로 바꾼다).
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
+## 소개 글
+
+왜 이렇게 만들었는지는 아래 글에 적었다.
+
+- [토큰 줄이기·작업자 운영](https://sandcorp.co.kr/blog/devkit-1-tokens-orchestration)
+- [시험 속도](https://sandcorp.co.kr/blog/devkit-2-test-speed)
+- [훅·질문 패널](https://sandcorp.co.kr/blog/devkit-3-hooks-panel)
+- [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
+
 ## 바뀐 것
 
 ### 2026-11-13 — Orca 질문 패널 0.5.1: 「기타」 글 상자의 한글 겹침 (#66)
