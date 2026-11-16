@@ -285,9 +285,12 @@ LATER = "d" * 40
 class WaitDeployGithub(unittest.TestCase):
     """Jenkins 자격이 없을 때: PR 병합 커밋(또는 뒤 커밋)의 배포 커밋 상태(기본 이름 deploy)를 기다린다."""
 
-    def run_gh(self, statuses, extra=(), compare=(), comments=(), auth=None, jenkins=None, argv=None, ctx="deploy", env=None):
-        """statuses: {sha: [조회마다 차례로 돌려줄 state 또는 None …]} (마지막 것 반복)."""
+    def run_gh(self, statuses, extra=(), compare=(), comments=(), auth=None, jenkins=None, argv=None, ctx="deploy", env=None, runs=None):
+        """statuses: {sha: [조회마다 차례로 돌려줄 state 또는 None …]} (마지막 것 반복).
+        runs: {sha: [조회마다 차례로 돌려줄 실행 목록 [(name, status, conclusion) …] …]} (마지막 것 반복). 없으면 실행 0개."""
         clock = Clock()
+        rseq = {k: iter(v) for k, v in (runs or {}).items()}
+        rcur = {}
         seq = {k: iter(v) for k, v in statuses.items()}
         cur = {}
         calls = []
@@ -299,7 +302,21 @@ class WaitDeployGithub(unittest.TestCase):
             if args[:2] == ("pr", "view"):
                 return json.dumps({"mergedAt": "2026-11-04T01:00:00Z", "state": "MERGED", "mergeCommit": {"oid": MERGE},
                                    "baseRefName": "main", "url": "https://github.com/o/r/pull/7", "statusCheckRollup": []})
+            if args[:2] == ("run", "view"):
+                return "line1\nERROR: build exploded"
             path = args[1]
+            if "/actions/runs/" in path and path.endswith(("/jobs?per_page=100",)):
+                return json.dumps({"jobs": [{"name": "image", "conclusion": "failure"}, {"name": "lint", "conclusion": "success"}]})
+            if "/actions/runs?" in path:
+                sha = path.split("head_sha=")[1].split("&")[0]
+                if sha in rseq:
+                    try:
+                        rcur[sha] = next(rseq[sha])
+                    except StopIteration:
+                        pass
+                return json.dumps({"workflow_runs": [{"id": 900 + i, "name": n, "status": stt, "conclusion": c,
+                                                      "html_url": f"https://github.com/o/r/actions/runs/{900 + i}"}
+                                                     for i, (n, stt, c) in enumerate(rcur.get(sha, []))]})
             if "/compare/" in path:
                 return json.dumps({"commits": [{"sha": s} for s in compare]})
             if path.endswith("/pulls"):
@@ -337,6 +354,47 @@ class WaitDeployGithub(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("SUCCESS o/r deploy #12 mmmmmmmmmmmm"), out)
         self.assertNotIn("뒤 커밋", out)
+
+    def test_running_workflow_pauses_start_clock(self):
+        # 시작 시한 1분인데 release가 120초 넘게 도는 동안은 NO_BUILD가 아니다. 끝난 뒤 배포 상태가 생기면 SUCCESS.
+        run = [("release", "in_progress", None)]
+        code, out = self.run_gh({MERGE: [None] * 8 + ["success"]}, ["--start-timeout", "1", "--interval", "20"],
+                                runs={MERGE: [run] * 8 + [[("release", "completed", "success")]]})
+        self.assertEqual(code, 0, out)
+
+    def test_after_workflow_ends_clock_restarts_then_no_build(self):
+        code, out = self.run_gh({MERGE: [None]}, ["--start-timeout", "1", "--interval", "20"],
+                                runs={MERGE: [[("release", "in_progress", None)]] * 5 + [[("release", "completed", "success")]]})
+        self.assertEqual(code, 5, out)
+
+    def test_max_wait_while_workflow_stays_running(self):
+        code, out = self.run_gh({MERGE: [None]}, ["--max-wait", "3", "--interval", "20"],
+                                runs={MERGE: [[("release", "queued", None)]]})
+        self.assertEqual(code, 3, out)
+        self.assertIn("release workflow가 아직 도는 중", out)
+
+    def test_failed_workflow_without_deploy_status_is_pre_deploy_failure(self):
+        code, out = self.run_gh({MERGE: [None]}, runs={MERGE: [[("release", "in_progress", None)], [("release", "completed", "failure")]]})
+        self.assertEqual(code, 1)
+        self.assertTrue(out.startswith("FAILURE_PRE_DEPLOY o/r deploy:"), out)
+        self.assertIn("'release'", out)
+        self.assertIn("잡: image", out)
+        self.assertIn("ERROR: build exploded", out)
+
+    def test_failed_workflow_on_later_commit_and_workflow_filter(self):
+        runs = {"d" * 40: [[("release", "completed", "failure"), ("docs", "completed", "failure")]]}
+        code, out = self.run_gh({MERGE: [None]}, ["--workflow", "release"], compare=["d" * 40], runs=runs)
+        self.assertEqual((code, "'release'" in out, "'docs'" in out), (1, True, False), out)
+        code, out = self.run_gh({MERGE: [None]}, ["--workflow", "other", "--start-timeout", "1"], compare=["d" * 40], runs=runs)
+        self.assertEqual(code, 5, out)
+
+    def test_deploy_status_wins_over_failed_unrelated_workflow(self):
+        code, out = self.run_gh({MERGE: ["success"]}, runs={MERGE: [[("docs", "completed", "failure")]]})
+        self.assertEqual(code, 0, out)
+
+    def test_no_runs_behaves_as_before(self):
+        code, out = self.run_gh({MERGE: [None]}, ["--start-timeout", "1"])
+        self.assertEqual(code, 5, out)
 
     def test_status_context_default_env_and_argument(self):
         code, out = self.run_gh({MERGE: ["success"]}, ["--start-timeout", "1"], ctx="team/deploy")
