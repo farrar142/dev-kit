@@ -124,6 +124,13 @@ orca-plugins/
   - 혼자일 때: Orca가 없으면 장부를 아무도 안 읽을 뿐이다. MCP 서버가 안 닿으면 mod는 예전처럼 바로 보낸다. key 없는 묶음(옛 mod)은 Orca가 예전처럼 다룬다. 옛 길(`panel_closed`, 닫힘 파일)도 버전이 섞인 기계를 위해 남겼다. 도구 이름·답 꼴은 그대로.
 - 시험: mod 30건(`claude plugin test plugins/question-panel`), 서버 17건(`node --test plugins/question-panel/mcp`), Orca 60건(`orca-plugins/question-panel/README.md` 「시험」).
 
+### 2026-11-17 — issue-track 0.7.0: wait-deploy가 병합과 배포 사이의 release workflow를 본다
+
+- 배포 흐름이 바뀌었다: PR → Actions PR 검사 → 병합 → Actions release workflow(검사·이미지 빌드, 끝에 배포용 브랜치를 fast-forward) → 배포 잡이 그 커밋에 커밋 상태를 단다. 옛 wait-deploy는 병합 뒤 10분 안에 배포 상태가 없으면 NO_BUILD로 끝나, release가 오래 걸리면(실행기 대기 10~40분) 거짓 NO_BUILD, release가 실패하면 원인을 가린 채 「웹훅 누락일 수 있다」로 끝났다.
+- `wait-deploy.py` GitHub 길: 배포 상태가 없을 때 병합 커밋(과 뒤 커밋)에 걸린 workflow 실행을 전부 본다(`--workflow 이름`으로 좁힘). 대기·진행 중이면 `--start-timeout` 시계를 세지 않고 끝난 뒤부터 센다. 전체 상한 `--max-wait`(기본 90분)은 TIMEOUT(3). 실행이 모두 끝났고 실패가 있는데 배포 상태가 없으면 **`FAILURE_PRE_DEPLOY`**(종료 1) — 실패 workflow·잡 이름·URL과 `--log-failed` 끝 30줄. 실행이 0개면(Actions 없음) 옛 동작 그대로. Jenkins 길은 바꾸지 않았다.
+- `actions_excerpt`를 `ci_common.py`로 옮겨 두 스크립트가 같이 쓴다(`commit_runs`·`failed_job_names` 추가). 두 스크립트 docstring, `issue-worker`·`issue-track` 스킬 문서는 Actions를 기본으로, Jenkins를 「그런 CI를 쓰는 저장소용」으로 다시 썼다.
+- 시험: 스크립트 단위 시험 47건(새 분기 7건: 진행 중 시계 멈춤, 끝난 뒤 NO_BUILD, 상한 TIMEOUT, FAILURE_PRE_DEPLOY, 뒤 커밋·`--workflow`, 배포 상태 우선, 실행 0개).
+
 ### 2026-11-13 — issue-track 0.6.0·context-cap 0.2.2: Agent Mail로 보고
 
 - 회사 세션 메일함이 Orca orchestration 메일함(`orca orchestration send`, `run:<run_id>` 주소)에서 Agent Mail(역할 주소, CLI `agent-mail`)로 바뀌었다. `issue-worker`·`issue-track` 스킬이 새 길을 가르친다: 프로필은 `AGENT_MAIL_PROFILE=<프로필>` 환경변수로(v0.2.1은 명령 앞 `--profile`을 무시한다), 보고는 `send --to <받는 역할> --task … --subject … --body …`, 답은 `reply <ID>`, 끝나면 `complete <ID>`. 메일은 세션을 깨우지 않아 받는 쪽이 대기 스크립트로 기다린다. `reference/orca-mailbox.md`는 `reference/agent-mail.md`로 바꿔 다시 썼고 참조를 고쳤다.

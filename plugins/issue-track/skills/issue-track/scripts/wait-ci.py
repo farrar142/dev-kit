@@ -3,9 +3,11 @@
 
     wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초] [--no-checks-wait 분]
 
+기본 CI는 GitHub Actions PR 검사다(병합 뒤 release workflow와 배포는 wait-deploy.py가 본다).
+
 - PR head 커밋 하나만 본다. push하면 head가 바뀌므로 그 커밋의 결과를 새로 기다린다.
   옛 커밋의 빨강을 새 결과로 읽지 않는다.
-- 상태(commit statuses: Jenkins 등)와 check-runs(GitHub Actions)를 함께 본다.
+- check-runs(GitHub Actions)와 상태(commit statuses: Jenkins 등 외부 CI)를 함께 본다.
 - 끝나는 경우와 종료 코드:
   - 0 SUCCESS: 모든 검사가 초록이다.
   - 1 FAILURE: 하나라도 빨강이다. 실패 줄을 덧붙인다.
@@ -13,20 +15,21 @@
   - 3 TIMEOUT: 제한 시간이 지났다.
   - 4 GONE: PR을 조회하지 못한다.
   - 5 NO_CHECKS: 검사가 하나도 없는 상태가 --no-checks-wait 분(기본 3) 이어졌다. PR에 CI가 붙지
-    않는 저장소(예: Jenkins가 main 병합 뒤에만 도는 곳)다. 병합 뒤 배포는 wait-deploy.py로 본다.
-- 빨강일 때 Jenkins면 실패 요지를 덧붙인다.
-  - Jenkins 자격이 있으면 콘솔에서 FAILED·Error·예산 줄만 뽑는다. 자격은 다음 차례로 찾는다.
-    1. 환경변수 JENKINS_USER와 JENKINS_TOKEN
-    2. 작업 폴더나 그 위 폴더의 .claude/settings.local.json에 있는 env
-    (찾는 코드는 ci_common.py, wait-deploy.py와 공유)
-  - 자격이 없으면 PR 댓글에서 읽는다. PR 검사 잡이 실패할 때 첫 줄이 `<표지><단계> · <head 12자> · …`인
-    댓글을 단다고 본다(표지 기본값 `PR 검사 실패 — `, 바꾸려면 --comment-prefix 또는 환경변수
-    ISSUE_TRACK_PR_COMMENT_PREFIX). 첫 줄에 그 head SHA 앞 12자가 있는 가장 최근 댓글 본문을 출력한다.
-    댓글은 빌드 끝에 붙으니 최대 60초(--comment-wait) 기다린다. 못 찾으면 그렇다고 적고 빌드 링크만 남긴다.
-    그런 댓글을 달지 않는 CI면 이 길은 「댓글 없음」으로 끝난다.
-  - 자격이 있어도 Jenkins가 401·403을 내거나 연결되지 않으면(토큰을 폐기한 뒤 환경에 남은 옛 값 등)
-    표준 오류에 경고 한 줄을 찍고 자격 없음과 같이 PR 댓글에서 읽는다.
-  Actions면 `gh run view --log-failed`의 끝부분을 쓴다.
+    않는 저장소다. 병합 뒤 배포는 wait-deploy.py로 본다.
+- 빨강일 때 실패 요지를 덧붙인다.
+  - Actions면 `gh run view --log-failed`의 끝부분을 쓴다(찾는 코드는 ci_common.py의 actions_excerpt).
+  - Jenkins 같은 외부 CI 상태가 빨강이면(그런 CI를 쓰는 저장소용):
+    - Jenkins 자격이 있으면 콘솔에서 FAILED·Error·예산 줄만 뽑는다. 자격은 다음 차례로 찾는다.
+      1. 환경변수 JENKINS_USER와 JENKINS_TOKEN
+      2. 작업 폴더나 그 위 폴더의 .claude/settings.local.json에 있는 env
+      (찾는 코드는 ci_common.py, wait-deploy.py와 공유)
+    - 자격이 없으면 PR 댓글에서 읽는다. PR 검사 잡이 실패할 때 첫 줄이 `<표지><단계> · <head 12자> · …`인
+      댓글을 단다고 본다(표지 기본값 `PR 검사 실패 — `, 바꾸려면 --comment-prefix 또는 환경변수
+      ISSUE_TRACK_PR_COMMENT_PREFIX). 첫 줄에 그 head SHA 앞 12자가 있는 가장 최근 댓글 본문을 출력한다.
+      댓글은 빌드 끝에 붙으니 최대 60초(--comment-wait) 기다린다. 못 찾으면 그렇다고 적고 빌드 링크만 남긴다.
+      그런 댓글을 달지 않는 CI면 이 길은 「댓글 없음」으로 끝난다.
+    - 자격이 있어도 Jenkins가 401·403을 내거나 연결되지 않으면(토큰을 폐기한 뒤 환경에 남은 옛 값 등)
+      표준 오류에 경고 한 줄을 찍고 자격 없음과 같이 PR 댓글에서 읽는다.
 
 배경으로 돌린다. 작업자는 Bash run_in_background, 조율자도 같다. 끝나면 부른 쪽이 깨어난다.
 돌고 있는 동안에는 아무것도 찍지 않는다.
@@ -38,7 +41,7 @@ import subprocess
 import sys
 import time
 
-from ci_common import JenkinsUnavailable, console_excerpt, jenkins_auth, setting, warn_fallback
+from ci_common import JenkinsUnavailable, actions_excerpt, console_excerpt, jenkins_auth, setting, warn_fallback
 
 FAIL = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure", "error"}
 OK = {"SUCCESS", "NEUTRAL", "SKIPPED", "success"}
@@ -90,17 +93,6 @@ def failure_comment(pr, repo, sha, prefix, wait_s=60, step_s=10):
         if time.time() >= deadline:
             return None
         time.sleep(step_s)
-
-
-def actions_excerpt(url):
-    m = re.search(r"/runs/(\d+)", url)
-    if not m:
-        return url
-    try:
-        out = gh("run", "view", m.group(1), "--log-failed")
-    except Exception as e:
-        return f"(Actions 로그를 못 읽음: {e}) {url}"
-    return "\n".join(out.splitlines()[-30:])
 
 
 def main():

@@ -1,4 +1,5 @@
-"""wait-ci.py·wait-deploy.py가 함께 쓰는 Jenkins 도우미. 자격·토큰은 어디에도 출력하지 않는다."""
+"""wait-ci.py·wait-deploy.py가 함께 쓰는 도우미: GitHub Actions 실행·로그(기본 CI)와 Jenkins(그런 CI를 쓰는 저장소용).
+자격·토큰은 어디에도 출력하지 않는다."""
 import base64
 import json
 import os
@@ -124,3 +125,34 @@ def deploy_state(repo, sha, context):
     d = json.loads(gh("api", f"repos/{repo}/commits/{sha}/status"))
     return next(({"state": s.get("state"), "description": s.get("description") or ""}
                  for s in d.get("statuses") or [] if s.get("context") == context), None)
+
+
+def actions_excerpt(url):
+    """Actions 실행 URL(`…/runs/<id>…`)의 `gh run view --log-failed` 끝 30줄. 못 읽으면 그 사유와 URL."""
+    m = re.search(r"/runs/(\d+)", url)
+    if not m:
+        return url
+    try:
+        out = gh("run", "view", m.group(1), "--log-failed")
+    except Exception as e:
+        return f"(Actions 로그를 못 읽음: {e}) {url}"
+    return "\n".join(out.splitlines()[-30:])
+
+
+def commit_runs(repo, sha):
+    """그 커밋(head_sha)에 걸린 workflow 실행 목록 [{id, name, status, conclusion, url}]. 실행이 없거나 못 읽으면 []."""
+    try:
+        d = json.loads(gh("api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=50"))
+    except Exception:
+        return []
+    return [{"id": r.get("id"), "name": r.get("name") or "", "status": r.get("status"), "conclusion": r.get("conclusion"),
+             "url": r.get("html_url") or ""} for r in d.get("workflow_runs") or []]
+
+
+def failed_job_names(repo, run_id):
+    """그 실행에서 실패로 끝난 잡 이름들. 못 읽으면 []."""
+    try:
+        d = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"))
+    except Exception:
+        return []
+    return [j.get("name") or "" for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled", "startup_failure")]
