@@ -1,7 +1,5 @@
 # 질문 패널 (Orca 플러그인, 시제품 0.5.1 — Claude Code question-panel 0.9.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
 
-> **풀림(question-panel 0.6.0, 2026-11-08).** 0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
-
 Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
 **0.4.0부터 Orca 채팅 UI 세션도 된다.** 채팅 세션의 질문은 Claude Code question-panel MCP 서버(0.6.1+)가 집 폴더 `~/.question-panel/orca-inbox`에 남기고, 이 플러그인이 읽어 카드로 띄운다. 답은 그 세션의 **오케스트레이션 메일함**으로 보낸다(Run에 묶였으면 `run:<run_id>`, 아니면 `orca_session_id:<세션 ID>`). 카드에 전달 경로(「터미널」·「메일함 run:run_xxxx」)가 보인다. 아래 「채팅 세션(0.4.0)」.
@@ -10,26 +8,55 @@ Claude Code 마켓플레이스 플러그인이 아니다. Orca 플러그인(`orc
 
 ## 흐름
 
+두 길이 있고, 둘 다 같은 「닫힘 장부」를 거친다. 질문 도구는 Claude Code `question-panel`의 `mcp__plugin_question-panel_qp__ask`이고, mod가 묶음을 쌓은 뒤 **짧은 결과 글**(「질문 묶음 q3을 패널에 올렸다. 질문을 대화창에 다시 쓰지 말고 짧게 말하고 턴을 마쳐라」와 답이 오는 모양)만 돌려준다. 질문 블록을 대화창에 옮겨 적게 하는 옛 결과는 `QUESTION_PANEL_ECHO=1`일 때만 나온다(0.7.0). Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
+
+### ① 터미널 세션
+
 ```
-Claude(Orca 터미널) ── mcp__plugin_question-panel_qp__ask ──▶ Claude Code question-panel: 질문 묶음 q3 를 쌓고 블록을 돌려줌
-        │                                              (Claude는 턴을 끝낸다)
-        └─ Orca agent.tool.after 훅 ──▶ 워커: 입력(질문)·결과(q3)·terminalId 를 storage("batches")에 저장
+Claude(Orca 터미널) ── qp ask ──▶ question-panel mod: 묶음 q3 을 쌓고 짧은 결과 글을 돌려줌 (Claude는 턴을 끝낸다)
+        └─ Orca agent.tool.after 훅 ──▶ 워커: 입력(질문)·결과(q3)·terminalId·panel_key 를 storage("batches")에 저장
                                               │
                     패널(components) ◀────────┘ persist:'storage' atom 으로 곧바로 다시 그림
                          │ 사용자가 고르고 「답 보내기」
                          ▼
-                    워커 qp.answer ── terminal.sendText(terminalId, "[질문 패널 답 q3] 1) … = … [2]", enter) ──▶ Claude
+                    워커: 장부를 먼저 차지(③) → terminal.sendText(terminalId, "[질문 패널 답 q3] 1) … = … [2]", enter) ──▶ Claude
 ```
 
-- 답 줄에 `q3`이 들어 있어 Claude Code 쪽 question-panel의 `prompt.submit` 훅이 같은 묶음을 「대화창에서 답함」으로 닫는다.
-- 줄바꿈은 터미널에서 먼저 제출될 수 있어 한 줄(` / `로 질문 구분)로 보낸다.
-- 터미널이 답을 받지 않으면(닫힘) 묶음을 대기로 남기고 패널에 경고를 띄운다.
+- 터미널 줄은 한 줄(` / `로 질문 구분, 「기타」 글의 줄바꿈은 ` ↵ `)이다. 줄바꿈은 터미널에서 먼저 제출될 수 있다.
+- 줄에 `q3`이 들어 있어 Claude Code 쪽 `prompt.submit` 훅이 그 묶음을 「대화창에서 답함」 처리하고 장부에 `answered by chat`을 남기려 한다. 이 패널이 이미 장부를 차지한 뒤라 그 시도는 지고(③), 닫힘 기록의 주인은 바뀌지 않는다.
+- 터미널이 답을 받지 않으면(닫힘) 차지를 거두고 묶음을 대기로 남기며 패널에 경고를 띄운다.
+
+### ② 채팅 세션 (0.4.0)
+
+```
+Claude(Orca 채팅) ── qp ask ──▶ MCP 서버: 묶음 q3 의 질문·세션 ID·Run·key 를 ~/.question-panel/orca-inbox 에 파일로 남김
+        └─ (턴을 끝냄)                  (이 세션에는 agent.tool.after 훅이 오지 않아 폴더가 입구)
+워커: 1.5초마다(그리고 패널을 열 때) 폴더를 읽어 묶음으로 저장하고 파일을 지운다 → 카드 「메일함 run:run_xxxx」
+      「답 보내기」 → 장부를 먼저 차지(③) → orca orchestration send --to run:<run_id> | orca_session_id:<세션 ID>
+                       --subject '[질문 패널 답] q3'  --body 'q3 1-2, 2-1 / [질문 패널 답] 질문 = 고른 것 / …'
+Orca: 그 세션의 메일함에 넣고 세션을 깨운다 → Claude가 메일(제목·본문)을 읽고 이어 간다
+```
+
+자세한 까닭은 아래 「채팅 세션(0.4.0)」.
+
+### ③ 두 패널을 맞추는 닫힘 장부 (0.5.0)
+
+Claude Code 패널과 이 패널은 같은 질문을 따로 그린다. 한 번만 답이 가도록 집 폴더 `~/.question-panel/ledger/<key>.json`(key는 mod가 질문 때 만든다)을 정본으로 쓴다. 없으면 대기, 있으면 닫힘이고, 만들기는 배타 생성이라 먼저 만든 쪽이 이긴다.
+
+```
+Claude Code 패널 「완료」 ─ sync(close, by claude) ─▶ 장부 ◀─ claimLedger(by orca) ─ 이 패널 「답 보내기」
+mod: 대기 묶음이 있으면 2초마다 sync ───────────────▶ 장부 ◀─ 워커가 1.5초마다 읽어 대기 카드를 닫음
+```
+
+- 이 패널의 「답 보내기」는 **보내기 직전에** 장부를 차지한다. 이미 있으면(Claude Code 패널·대화창·resolve가 먼저 닫음) 보내지 않고 카드를 그 사유(「Claude Code 패널에서 답함」 등)로 닫는다. Claude Code 패널의 「완료」도 같은 규칙이라 진 쪽은 세션에 보내지 않는다.
+- 이 패널에서 대기 카드를 「지우기」하면 장부에 `dismissed by orca`를 남긴다. mod가 그 묶음을 닫고 세션에 `[질문 패널 답] q3 답 없이 닫음(Orca)`를 보낸다.
+- key 없는 묶음(question-panel 0.8.0 이하)은 장부 없이 예전대로 돈다. 상세는 아래 「0.5.0」.
 
 ## 되는 곳·안 되는 곳
 
 | 세션 | 질문 카드 | 답 넣기 | 근거 |
 | --- | --- | --- | --- |
-| Orca 터미널에서 도는 Claude Code(question-panel 0.6.0+) | 됨(MCP 도구라 훅을 탐) | 경로는 있음(`terminal.sendText`) | 위 「풀림」 |
+| Orca 터미널에서 도는 Claude Code(question-panel 0.6.0+) | 됨(MCP 도구라 훅을 탐) | 경로는 있음(`terminal.sendText`) | 아래 「0.3.0 — 풀림」 |
 | Orca 채팅 UI(stream-json, `ORCA_STRUCTURED_SESSION=1`, question-panel 0.6.1+) | 됨(MCP 서버가 폴더에 남김) | 됨(오케스트레이션 메일함, `orca` CLI) | 아래 「채팅 세션(0.4.0)」 |
 | SSH·WSL 호스트의 에이전트 | 안 됨 | — | Orca 문서: 도구 훅은 SSH·WSL에 아직 없다 |
 
@@ -151,6 +178,10 @@ mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5�
 - **정리.** 카드마다 ×(확인 없이 바로 지우고 위쪽에 「되돌리기」), 패널 위쪽 「정리」 줄에 「답한 것·보낸 것 모두 지우기 (N)」·「닫힌 세션 질문 지우기 (N)」. 닫힌 세션 = 터미널이 닫힘(0.3.2·0.3.3) 또는 채팅 세션이 Orca에 없음: 패널을 열 때(`qp.refresh`) 채팅 묶음마다 그 세션 신원으로 `run-current`를 불러 `session_caller_unknown`이면 닫힘(쉬는 세션 `session_caller_not_live` 등은 닫힘으로 보지 않는다). 살아 있으면 배지의 Run도 지금 값으로 맞춘다.
 - **다시 뜨지 않게.** 지운 묶음은 저장소 키 `dismissed`에 `<terminalId>/<qN>@<만든 시각>`으로 남는다(최근 100개, 되돌리기에 씀). 질문 폴더 파일은 원래 읽자마자 지우지만, 지우기가 실패해 남아 있어도 지운 묶음이면 버리고, 이미 받은 묶음(보낸 것 포함)이면 다시 넣지 않는다(보낸 카드가 대기로 되살아나 또 보내는 일이 없게). 시각이 키에 들어 있어 같은 세션이 나중에 같은 q 번호로 다시 물으면 새 묶음으로 뜬다.
 - **저장소 경합.** 패널의 `qp.refresh`가 시작 때 폴더 읽기와 겹치면 그 읽기를 같이 기다린다. 훅과 폴더 읽기는 저장 직전에 다시 읽어 서로 덮어쓰지 않는다.
+
+## 0.3.0 — 풀림 (question-panel 0.6.0, 2026-11-08)
+
+0.2.0까지는 질문이 워커에 닿지 않았다. Claude Code는 mod 도구(옛 `mcp__question-panel__ask`) 호출에 `PreToolUse`·`PostToolUse` 설정 훅을 돌리지 않고, Orca의 `agent.tool.after`는 그 훅(`orca-agent-hook`)을 타고 오기 때문이다. Claude Code question-panel 0.6.0이 질문 도구를 진짜 stdio MCP 서버(`qp`)로 옮겨, 도구 이름이 `mcp__plugin_question-panel_qp__ask`가 되었고 훅을 탄다(Claude Code 2.1.319, `matcher: "*"` 기록 훅으로 Pre·Post 둘 다, `tool_response`에 「질문 묶음 qN」 확인). 이 플러그인 0.3.0은 그 이름을 본다. 다른 이름의 질문 도구가 오면 로그에 `질문 도구 이름이 아니라 무시`를 남긴다.
 
 ## 답이 안 들어갈 때 (0.2.0, 0.3.1)
 
