@@ -38,6 +38,9 @@ plugins/
       tests/                       스크립트 단위 시험(`python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests`)
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
       reference/parallel-runs.md   체인 여럿을 나란히 돌릴 때의 함정(리뷰 포크, 통합 tip, 의미 충돌, compose -p)
+      reference/remote-session.md  한 건을 원격 기계 작업자 세션에 맡기기: 이슈 → Orca로 세션 → 지시서 메일 → 착수 확인 → 보고 뒤 세션 닫기
+      scripts/update-plugins.py    로컬·원격(ssh 별칭) 기계에서 마켓·플러그인 갱신 → 기계×플러그인 버전 표, 옛 판으로 떠 있는 세션 목록
+      issue-track.example.json     사용자 설정(`~/.config/dev-kit/issue-track.json`, `DEV_KIT_CONFIG`) 예시 — 가짜 값
   django-asgi/
     skills/django-asgi-perf/       ASGI 점검표 → reference/ (연결 풀, async 미들웨어, SSE 스냅샷·스트림 거르기), examples/
   test-speed/
@@ -92,7 +95,7 @@ orca-plugins/
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
 |---|---|---|
-| issue-track | `issue-track` 스킬 | 「남은 이슈 차례로 1트랙으로 처리해줘」 |
+| issue-track | `issue-track` 스킬 | 「남은 이슈 차례로 1트랙으로 처리해줘」, 「이 저장소에 이것 고쳐 줘」「원격 기계에 맡겨」(한 건을 원격 작업자 세션에), 「플러그인 갱신」 |
 | | `issue-track:issue-worker`, `issue-track:errand` 에이전트 | 조율자가 `Agent`의 `subagent_type`으로 띄운다 |
 | django-asgi | `django-asgi-perf` | Django ASGI의 느린 요청, 연결 풀, SSE, async 미들웨어 |
 | test-speed | `test-budgets` | 시험이 느리다, 한도를 세우거나 켠다, 고정 대기·흔들림을 없앤다 |
@@ -177,6 +180,14 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — issue-track 0.8.0: 원격 세션에 일 맡기기·플러그인 갱신 스크립트 (#110)
+
+- 조율 세션이 손으로 되풀이하던 두 절차를 담았다: 한 건을 원격 기계 작업자 세션에 맡기기(19건), 플러그인 새 판을 기계마다 깔기(약 13회).
+- 새 스킬을 만들지 않고 `issue-track`을 넓혔다. 둘 다 「이슈를 작업자에게 맡기고 보고를 받아 확인한다」는 같은 조율자 일이고, 지시서 틀·모델 고르기·Agent Mail 보고 길(`reference/agent-mail.md`)을 그대로 쓴다. SKILL.md에 「6. 원격 세션에 한 건 맡기기」 절(짧게), 절차는 `reference/remote-session.md`, description에 「이 저장소에 이것 고쳐 줘」「원격 기계에 맡겨」「플러그인 갱신」 갈래.
+- `scripts/update-plugins.py`(표준 라이브러리만): 로컬과 `ssh <별칭>`에서 `claude plugin marketplace update` → `claude plugin list --json`의 그 마켓 플러그인을 `claude plugin update <id> --scope <scope>`(local·project는 그 폴더에서) → 기계×플러그인 표(`옛→새`, 실패 칸). 한 기계가 실패해도 계속하고 종료 코드 1. 그다음 `agent-mail status --json`에서 online이고 그 기계 switchboard의 lastUpdated보다 먼저 등록한 세션을 「옛 판」으로 찍는다(로컬 scope 설치는 그 폴더 세션에). reload·재시작은 하지 않는다.
+- 설정은 저장소 밖 `~/.config/dev-kit/issue-track.json`(`DEV_KIT_CONFIG`)의 `delegate`·`update` 절, 저장소에는 가짜 값의 `issue-track.example.json`만.
+- 시험: 새 8건(`tests/test_update_plugins.py`, 명령 실행 함수를 가짜로 주입), 스크립트 시험 전체 55건.
 
 ### 2026-11-17 — switchboard 0.8.5: 쉬는 세션을 막힘으로 보지 않기 (#107)
 
