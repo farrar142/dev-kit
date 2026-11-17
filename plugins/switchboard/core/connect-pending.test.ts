@@ -47,7 +47,7 @@ test('연결 전 pending: 사람 입력 뒤 보류 중에 연결돼도 보류가
   const a = mail.send()
   await host.clock.advance(1 * MIN)
   expect(host.turns).toEqual([])
-  expect(logs.some(l => l.includes('미룸 — 사람 입력 뒤 보류'))).toBe(true)
+  expect(logs.some(l => l.includes('미룸 — 답 읽는 시간 보류'))).toBe(true)
   await host.clock.advance(2 * MIN)
   expect(host.turns).toEqual([announce([a])])
 })
