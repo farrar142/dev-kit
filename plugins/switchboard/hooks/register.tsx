@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, RenderSurface } from 'claude-code'
 
-import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, holdEnv, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, holdEnv, mailProfilePath, slotEnv, wireClaudeEvents } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { mcpLedger } from '../adapters/ledger'
 import {
@@ -18,6 +18,7 @@ import {
 } from '../core/questions'
 import type { Store } from '../core/questions'
 import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboard'
+import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
 import type { QuestionPanelBatch } from '../types'
 
@@ -325,12 +326,26 @@ export const register: Register = on => {
       name: 'questions-clear',
       description: '질문 패널에서 답한 묶음(보냄·대화창에서 답함)을 모두 지운다. 대기 중인 묶음은 남긴다',
     })
+    await $.command.register({
+      name: 'switchboard-takeover',
+      description: '이 세션이 Agent Mail 역할의 -1 번호를 가져온다(번호 없이 온 메일을 받는다). 지금 -1 은 다른 번호로 밀린다',
+    })
     // 코어를 띄운다: 세션 상태를 따라가고, AGENT_MAIL_PROFILE 이 있으면 메일함(D2)도 켠다.
     board?.stop()
     const ce = await compactEnv($)
     const compactBeforeMail = compactConfig(ce.tokens, ce.instructions)
+    const se = await slotEnv($)
     board = createSwitchboard(claudeHost($, emitter, box), {
-      mail: { profilePath: await mailProfilePath($), log: text => void $.ui.log(text) },
+      mail: {
+        profilePath: await mailProfilePath($),
+        log: text => void $.ui.log(text),
+        slot: {
+          ...(se.label === undefined ? {} : { label: se.label }),
+          ...(se.parent === undefined ? {} : { parent: se.parent }),
+          singleRoles: singleRolesConfig(se.singles),
+          warn: text => void $.ui.toast(text),
+        },
+      },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
       holdAfterUserMs: holdConfig(await holdEnv($)),
     })
@@ -434,6 +449,14 @@ export const register: Register = on => {
     }
 
     return { text: '질문 패널을 열었습니다.' }
+  })
+
+  on('command.run', { command: 'switchboard-takeover' }, async () => {
+    if (board === undefined) return { text: 'switchboard 가 아직 켜지지 않았습니다.' }
+    const r = await board.takeover()
+    if (!r.ok) return { text: `takeover 실패: ${r.reason}` }
+
+    return { text: `이 세션이 ${r.role} 입니다.${r.displaced === undefined ? '' : ` 이전 보유 세션은 ${r.displaced} 로 옮겨졌습니다.`}` }
   })
 
   on('command.run', { command: 'questions-clear' }, async $ => {
