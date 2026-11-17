@@ -7,6 +7,10 @@
 // Claude Code question-panel 0.6.0부터 질문 도구는 그 플러그인의 stdio MCP 서버(qp)가 낸다.
 // 예전 mod 도구(mcp__question-panel__ask)는 Claude Code가 PostToolUse 훅을 돌리지 않아 여기 닿지 않았다.
 export const ASK_TOOL = 'mcp__plugin_question-panel_qp__ask'
+// switchboard 플러그인(question-panel 을 옮긴 것, 0.5.2부터)도 같은 MCP 서버 qp 를 내서 이름의 플러그인 자리만 다르다.
+export const SWITCHBOARD_ASK_TOOL = 'mcp__plugin_switchboard_qp__ask'
+/** 질문 도구인가(question-panel·switchboard). */
+export const isAskTool = (tool: string) => tool === ASK_TOOL || tool === SWITCHBOARD_ASK_TOOL
 export const STORE_KEY = 'batches'
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
@@ -113,7 +117,7 @@ export const batchIdFrom = (output: JsonValue | undefined): string | null => {
  * fallbackId 는 결과에서 ID를 못 찾았을 때 쓴다.
  */
 export const batchFromTool = (e: ToolEvent, now: number, fallbackId: string): Batch | null => {
-  if (e.tool !== ASK_TOOL || e.terminalId === undefined || e.terminalId === '') return null
+  if (!isAskTool(e.tool) || e.terminalId === undefined || e.terminalId === '') return null
   if (!isRecord(e.input)) return null
   const questions = normalize(e.input.questions)
   if (questions.length === 0) return null
@@ -232,6 +236,9 @@ export const markSent = (list: readonly Batch[], id: string, terminalId: string,
  * 채팅 세션은 질문 폴더에도 아무것도 남지 않았다. 그래서 닫힌 묶음이 패널에 남아 또 답이 갔다.
  */
 export const RESOLVE_TOOL = 'mcp__plugin_question-panel_qp__resolve'
+export const SWITCHBOARD_RESOLVE_TOOL = 'mcp__plugin_switchboard_qp__resolve'
+/** 닫기 도구인가(question-panel·switchboard). */
+export const isResolveTool = (tool: string) => tool === RESOLVE_TOOL || tool === SWITCHBOARD_RESOLVE_TOOL
 export const CHAT_VIA = '대화창에서 답함'
 
 const BATCH_ID_RE = /^q\d{1,6}$/

@@ -1,0 +1,449 @@
+import { atom, read, update } from 'claude-code'
+import type { Hook, Register, RenderSurface } from 'claude-code'
+
+import { claudeHost, createEmitter, createMidTurnBox, emitSubmit, wireClaudeEvents } from '../adapters/claude'
+import type { Self } from '../adapters/claude'
+import { mcpLedger } from '../adapters/ledger'
+import {
+  chatBlock,
+  chatClosed,
+  createQuestionPanel,
+  fencedPreview,
+  hhmm as clock,
+  isAnswered,
+  isComplete,
+  mentionedIds,
+  normalize,
+  VIA_TEXT,
+} from '../core/questions'
+import type { Store } from '../core/questions'
+import { createSwitchboard } from '../core/switchboard'
+import type { Switchboard } from '../core/switchboard'
+import type { QuestionPanelBatch } from '../types'
+
+// Claude Code 쪽 껍데기: 코어(../core)를 Claude 어댑터(../adapters/claude)로 잇고, 질문 패널을 그린다.
+// 질문 패널 동작은 question-panel 0.9.0 그대로다(도구 이름만 플러그인 이름을 따라 바뀌었다).
+
+const PANE = 'questions'
+const TITLE = '질문'
+// 질문 도구는 이 플러그인의 stdio MCP 서버(.mcp.json의 qp, mcp/server.mjs)가 낸다. mod 도구로 내면
+// Claude Code가 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca 등 바깥 도구가 질문을 못 받는다.
+const TOOL = 'mcp__plugin_switchboard_qp__ask'
+// 「대화창에서 답함」으로 닫는 도구도 MCP 서버가 낸다.
+const RESOLVE_TOOL = 'mcp__plugin_switchboard_qp__resolve'
+// 닫힘 장부를 다루는 MCP 서버 내부 도구. mod가 $.mcp.call 로만 부르고, 모델이 부르면 막는다.
+const SYNC_TOOL = 'mcp__plugin_switchboard_qp__sync'
+// 대기 묶음이 있을 때 장부를 볼 간격. Orca 워커는 1.5초마다 본다.
+const SYNC_MS = 2000
+
+// 필드가 바뀌면 태그를 올린다: 이전 버전이 저장한 값은 비어 있는 것으로 읽힌다.
+const queue = atom({ plugin: 'switchboard', key: 'queue' } as const, [], {
+  shape: 'queue-1',
+})
+// 패널 아래 「보내기」 칸에 쓰는 중인 글.
+const draft = atom({ plugin: 'switchboard', key: 'draft' } as const, '')
+
+// 데스크톱 등 원격 표면이 pane을 그리지 않을 때도 질문이 보이도록, 터미널 밖에서는
+// 질문을 올린 도구 줄과 /questions 출력 줄에도 같은 내용을 그린다.
+const isRemote = (surface: RenderSurface) => surface !== 'terminal'
+
+// 질문 패널을 붙일 화면이 있는가. 터미널 REPL은 늘 terminal surface를 가진다.
+// Orca 채팅(stream-json)처럼 surface가 하나도 없으면 패널도 원격 카드도 그려지지 않는다.
+// 그래도 AskUserQuestion(세션을 막는다)으로 돌리지 않고 질문을 쌓은 뒤 턴을 끝낸다.
+const panelMode = (surfaces: readonly RenderSurface[]): 'panel' | 'no-surface' =>
+  surfaces.length > 0 ? 'panel' : 'no-surface'
+
+const NO_SURFACE_TEXT =
+  '이 세션은 Claude Code 패널 화면이 없습니다(Orca 채팅 등 — Orca 사이드바 「질문」 패널에서 답할 수 있습니다). 대기 중인 질문은 아래와 같고, 글로 답해도 됩니다(예: q4 1-2).'
+
+// 포트 이벤트와 도구 뒤 끼워 넣기 상자는 세션에 하나다(register 가 한 번 돈다).
+const emitter = createEmitter()
+const box = createMidTurnBox()
+let board: Switchboard | undefined
+
+/** mod 상태(atom)를 코어의 Store 포트로. */
+const queueStore = ($: Self): Store<QuestionPanelBatch[]> => ({
+  read: () => read($, queue),
+  update: fn => update($, queue, fn),
+})
+const draftStore = ($: Self): Store<string> => ({
+  read: () => read($, draft),
+  update: fn => update($, draft, fn),
+})
+
+/** 이 `$` 로 질문 패널 코어를 만든다(가볍다: 상태는 atom 에 있다). */
+const panelOf = ($: Self) =>
+  createQuestionPanel({
+    queue: queueStore($),
+    draft: draftStore($),
+    host: claudeHost($, emitter, box),
+    ledger: mcpLedger($),
+    notify: text => $.ui.toast(text),
+  })
+
+// 질문 카드와 「보내기」 칸을 그리는 함수들: pane, 도구 줄, /questions 출력 줄이 같이 쓴다.
+type RenderEvent = Parameters<Hook<'ui.render'>>[1]
+function kit($: Self, e: RenderEvent) {
+  const t = $.ui.resolve(e)
+  const { Box, Text, Button, Markdown } = t
+  // 모바일에는 Input과 Select가 없다: 입력 칸은 그 표면에서 그리지 않는다. 표는 빠진 요소를
+  // 빈 조각으로 채워 건네므로 'Input' in t만으로는 가릴 수 없어 표면 이름도 본다.
+  const Input = e.surface !== 'mobile' && 'Input' in t ? t.Input : undefined
+  // 데스크톱은 Button을 네이티브 버튼 한 줄로 그려 긴 글을 줄임표로 자른다(ButtonProps에는
+  // wrap이 없다). 원격 표면에서는 버튼에 짧은 표시만 두고 글은 줄바꿈되는 Text로 뺀다.
+  const remote = isRemote(e.surface)
+  // 원격 표면의 입력 칸은 여러 줄로 둬 긴 글이 한눈에 보이게 한다(터미널은 그대로 한 줄).
+  const rows = remote ? 3 : undefined
+
+  const p = panelOf($)
+  const { pick, togglePeek, typeOther, finish, askDelete, removeSent } = p
+  const remove = p.dismiss
+
+  const card = (batch: QuestionPanelBatch) => {
+    if (batch.status === 'sent') {
+      return (
+        <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
+          <Text dimColor wrap="wrap">
+            {batch.via === undefined ? '보냄' : VIA_TEXT[batch.via]} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
+            {batch.questions.length}개
+          </Text>
+          <Button key={`delsent:${batch.id}`} label="기록 지우기" onPress={() => removeSent(batch.id)} />
+        </Box>
+      )
+    }
+
+    if (batch.confirmingDelete === true) {
+      return (
+        <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
+          <Text weight="bold" wrap="wrap">
+            묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
+          </Text>
+          <Text wrap="wrap">이 질문을 답 없이 닫을까요?</Text>
+          <Button
+            key={`delok:${batch.id}`}
+            label="닫기 확인"
+            variant="primary"
+            onPress={() => remove(batch.id)}
+          />
+          <Button
+            key={`delno:${batch.id}`}
+            label="취소"
+            onPress={() => askDelete(batch.id, false)}
+          />
+        </Box>
+      )
+    }
+
+    return (
+      <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
+        <Text weight="bold" wrap="wrap">
+          묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
+        </Text>
+        {batch.questions.map((q, qi) => (
+          <Box key={`q:${batch.id}:${qi}`} flexDirection="column" marginTop={1}>
+            <Text wrap="wrap">
+              <Text inverse> {q.header || '질문'} </Text> <Text weight="bold">{q.question}</Text>
+              {q.multiSelect && <Text dimColor> (여러 개 선택)</Text>}
+            </Text>
+            {q.options.map((o, oi) => {
+              const isOn = q.picked.includes(o.label)
+              const mark = q.multiSelect ? (isOn ? '[x]' : '[ ]') : isOn ? '(o)' : '( )'
+              const peekButton =
+                o.preview === undefined ? null : (
+                  <Button
+                    key={`pv:${batch.id}:${qi}:${oi}`}
+                    label={q.peek === o.label ? '미리보기 접기' : '미리보기'}
+                    onPress={() => togglePeek(batch.id, qi, o.label)}
+                  />
+                )
+
+              if (remote) {
+                return (
+                  <Box key={`or:${batch.id}:${qi}:${oi}`} flexDirection="row" gap={1} alignItems="flex-start">
+                    <Button
+                      key={`o:${batch.id}:${qi}:${oi}`}
+                      label={isOn ? `${mark} 고름` : `${mark} 고르기`}
+                      variant={isOn ? 'primary' : undefined}
+                      onPress={() => pick(batch.id, qi, o.label)}
+                    />
+                    <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                      <Text wrap="wrap">{o.label}</Text>
+                      {o.description !== '' && (
+                        <Text dimColor wrap="wrap">
+                          {o.description}
+                        </Text>
+                      )}
+                      {peekButton}
+                    </Box>
+                  </Box>
+                )
+              }
+
+              const optionButton = (
+                <Button
+                  key={`o:${batch.id}:${qi}:${oi}`}
+                  variant={isOn ? 'primary' : undefined}
+                  onPress={() => pick(batch.id, qi, o.label)}
+                >
+                  {mark} {o.label}
+                  {o.description !== '' && <Text dimColor> {o.description}</Text>}
+                </Button>
+              )
+              if (peekButton === null) return optionButton
+
+              return (
+                <Box key={`or:${batch.id}:${qi}:${oi}`} flexDirection="row" gap={1}>
+                  {optionButton}
+                  {peekButton}
+                </Box>
+              )
+            })}
+            {(() => {
+              // 펼친 preview는 선택지 목록 바로 아래에 둔다(좁은 패널에서도 옆이 아니라 아래로).
+              const shown = q.options.find(o => o.label === q.peek && o.preview !== undefined)
+              if (shown === undefined) return null
+
+              return (
+                <Box key={`pvbox:${batch.id}:${qi}`} flexDirection="column" marginTop={1}>
+                  <Text dimColor wrap="wrap">
+                    미리보기 · {shown.label}
+                  </Text>
+                  <Markdown key={`pvmd:${batch.id}:${qi}`} text={fencedPreview(shown.preview ?? '')} />
+                </Box>
+              )
+            })()}
+            {Input ? (
+              <Input
+                key={`x:${batch.id}:${qi}`}
+                label="기타(직접 입력)"
+                placeholder="직접 입력"
+                rows={rows}
+                value={q.other}
+                onInput={text => typeOther(batch.id, qi, text)}
+                onSubmit={text => typeOther(batch.id, qi, text)}
+              />
+            ) : (
+              <Text dimColor wrap="wrap">
+                이 화면에서는 직접 입력(기타)을 지원하지 않습니다.
+              </Text>
+            )}
+          </Box>
+        ))}
+        {isComplete(batch) ? (
+          <Button
+            key={`done:${batch.id}`}
+            label="완료"
+            variant="primary"
+            onPress={() => finish(batch.id)}
+          />
+        ) : (
+          <Text dimColor wrap="wrap">
+            완료 (모든 질문에 답하면 누를 수 있습니다: {batch.questions.filter(isAnswered).length}/
+            {batch.questions.length})
+          </Text>
+        )}
+        <Button key={`del:${batch.id}`} label="답 없이 닫기" onPress={() => askDelete(batch.id, true)} />
+      </Box>
+    )
+  }
+
+  // 패널만 닫는다: 질문·답 상태는 그대로이고, 새 질문이 오면 다시 열린다.
+  const closePane = () => $.ui.close({ id: PANE })
+
+  const composer = (text: string) =>
+    Input ? (
+      <Box key="say" flexDirection="column" marginTop={1}>
+        <Input
+          key="say:text"
+          label="세션에 보낼 글"
+          placeholder="세션에 보낼 글"
+          rows={rows}
+          value={text}
+          onInput={typed => p.typeDraft(typed)}
+          onSubmit={typed => p.say(typed)}
+        />
+        <Button key="say:send" label="보내기" variant="primary" onPress={() => p.say()} />
+      </Box>
+    ) : (
+      <Box key="say" marginTop={1}>
+        <Text dimColor wrap="wrap">
+          이 화면에서는 글 보내기를 지원하지 않습니다.
+        </Text>
+      </Box>
+    )
+
+  const panel = (list: QuestionPanelBatch[], text: string) => {
+    const answered = list.filter(b => b.status === 'sent').length
+
+    return (
+      <Box flexDirection="column">
+        <Button key="close" role="dismiss" label="패널 닫기" onPress={() => closePane()} />
+        {list.length === 0 ? <Text dimColor wrap="wrap">
+            쌓인 질문이 없습니다.
+          </Text> : list.map(card)}
+        {answered > 0 && (
+          <Button
+            key="clearsent"
+            label={`답한 기록 모두 지우기 (${answered})`}
+            onPress={() => p.clearAnswered()}
+          />
+        )}
+        {composer(text)}
+      </Box>
+    )
+  }
+
+  return { card, panel }
+}
+
+/** 장부를 읽어 다른 곳(Orca 질문 패널 등)에서 닫힌 대기 묶음을 닫는다. */
+export const pollLedger = ($: Self) => panelOf($).poll()
+
+export const register: Register = on => {
+  // 포트 이벤트(턴·입력·compact)를 코어로 넘긴다. 관찰만 하므로 세션 흐름은 그대로다.
+  wireClaudeEvents(on, emitter, box)
+
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'questions',
+      description: '질문 패널을 연다(열려 있으면 닫는다). /questions close 는 늘 닫는다',
+    })
+    await $.command.register({
+      name: 'questions-clear',
+      description: '질문 패널에서 답한 묶음(보냄·대화창에서 답함)을 모두 지운다. 대기 중인 묶음은 남긴다',
+    })
+    // 코어를 띄운다(D1: 세션 상태만 따라간다. 메일함은 D2부터).
+    board?.stop()
+    board = createSwitchboard(claudeHost($, emitter, box))
+    await board.start().catch(() => false)
+    // 닫힘 장부를 본다: Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
+    $.clock.every(SYNC_MS, () => void pollLedger($).catch(() => undefined))
+
+    return next(e)
+  })
+
+  // MCP 서버의 도구는 기본으로 ToolSearch 뒤에 숨는다. 예전 mod 도구(isDeferred: false)처럼
+  // 처음부터 도구 목록에 두어, 모델이 AskUserQuestion 대신 이것을 바로 고르게 한다.
+  on('tool.describe', { tool: TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
+  on('tool.describe', { tool: RESOLVE_TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
+  // 장부 도구는 mod 내부용이다($.mcp.call 은 tool.call 을 거치지 않는다). 모델의 호출은 막는다.
+  on('tool.call', { tool: SYNC_TOOL }, async () => ({ deny: 'switchboard: sync 는 질문 패널 내부용 도구다. 부르지 마라.' }))
+
+  // 질문 도구 호출을 감싼다: 묶음을 쌓고 모델이 읽을 결과 글을 만들어 입력의 panel_result로
+  // MCP 서버에 넘긴다(서버는 그 글을 그대로 돌려준다). next를 거쳐야 MCP 호출과 함께
+  // PreToolUse·PostToolUse 훅이 돌고, 그 tool_response에 「질문 묶음 qN」이 담긴다.
+  on('tool.call', { tool: TOOL }, async ($, e, next) => {
+    const questions = normalize(e.questions)
+    if (typeof questions === 'string') return { deny: `switchboard: ${questions}` }
+    const mode = panelMode(await $.session.surfaces())
+
+    const now = await $.clock.now()
+    const sid = await $.session.id().catch(() => '')
+    const p = panelOf($)
+    const { batch, before } = await p.add({ questions, toolUseId: e.tool_use_id, sessionId: sid, now })
+    const { id, key } = batch
+    // 결과 글은 짧게: 데스크톱 앱·CLI·Orca(터미널·채팅) 모두 질문 패널을 그리므로 질문을 대화창에
+    // 다시 쓰지 않게 한다. 패널이 정말 안 보이는 화면(Remote Control·폰)용 옛 결과(블록을 옮겨
+    // 적게 하는 글)는 panel_echo로 따로 넘기고, MCP 서버가 QUESTION_PANEL_ECHO=1일 때만 그것을 돌려준다
+    // (훅 환경에는 process가 없어 환경변수는 서버만 읽는다).
+    const replyLine = `답은 「[질문 패널 답] …」 메시지(Orca면 제목 「[질문 패널 답] ${id}」 메일)나 사용자의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`
+    const panelResult = [
+      `질문 묶음 ${id}을 패널에 올렸다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(${id})」 정도로 짧게 말하고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+      replyLine,
+    ].join('\n')
+    const panelEcho = [
+      `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
+      replyLine,
+      '',
+      chatBlock(batch),
+    ].join('\n')
+    if (mode === 'panel') {
+      void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
+        if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
+      })
+    }
+
+    const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(before), panel_key: key })
+    // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
+    if (ran.deny !== undefined || ran.isError === true) await p.drop(id)
+
+    return ran
+  })
+
+  // 이 세션의 패널 묶음을 닫고, MCP 서버로 이어 보낸다(next). 서버 호출이라 Orca 터미널 세션은
+  // agent.tool.after 훅으로 닫힘을 보고, 채팅 세션은 서버가 Orca 질문 패널 폴더에 닫힘을 남긴다.
+  on('tool.call', { tool: RESOLVE_TOOL }, async ($, e, next) => {
+    const id = typeof e.id === 'string' ? e.id.trim().toLowerCase() : ''
+    const found = (await read($, queue)).find(b => b.id === id)
+    await panelOf($).closeByChat(new Set([id]))
+    const after = await read($, queue)
+    const text =
+      found === undefined
+        ? `묶음 ${id}이 없다.`
+        : found.status !== 'pending'
+          ? `묶음 ${id}은 이미 닫혀 있다.`
+          : `묶음 ${id}을 「대화창에서 답함」으로 닫았다.`
+
+    return next({ ...e, id, panel_result: text, panel_closed: chatClosed(after) })
+  })
+
+  // 사용자가 대화창에 묶음 ID를 넣어 답하면(「q4 2번」) 패널의 그 묶음을 닫는다.
+  on('prompt.submit', async ($, e, next) => {
+    emitSubmit(emitter, e.text)
+    const ids = mentionedIds(e.text)
+    if (ids.size > 0) await panelOf($).closeByChat(ids)
+
+    return next(e)
+  })
+
+  on('command.run', { command: 'questions' }, async ($, e) => {
+    const arg = typeof e.args === 'string' ? e.args.trim().toLowerCase() : ''
+    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
+    if (arg === 'close' || arg === '닫기' || (arg === '' && isUp)) {
+      await $.ui.close({ id: PANE })
+
+      return { text: '질문 패널을 닫았습니다. 쌓인 질문은 그대로 있고, 새 질문이 오면 다시 열립니다.' }
+    }
+    if (panelMode(await $.session.surfaces()) === 'no-surface') {
+      const pending = (await read($, queue)).filter(b => b.status === 'pending')
+
+      return { text: [NO_SURFACE_TEXT, ...pending.map(b => `\n${chatBlock(b)}`)].join('\n') }
+    }
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    if (!opened.isPlaced) {
+      return { text: `질문 패널을 열지 못했습니다(${opened.reason}). 질문은 이 줄 아래에 그립니다.` }
+    }
+
+    return { text: '질문 패널을 열었습니다.' }
+  })
+
+  on('command.run', { command: 'questions-clear' }, async $ => {
+    const removed = await panelOf($).clearAnswered()
+
+    return { text: `보낸 묶음 ${removed}개를 지웠습니다.` }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const [list, text] = await Promise.all([read($, queue), read($, draft)])
+
+    return kit($, e).panel(list, text)
+  })
+
+  // 원격 표면에서는 /questions 출력 줄 자리에 패널 전체를 그린다(pane이 안 보여도 쓸 수 있게).
+  on('ui.render', { component: 'CommandOutput', props: { command: 'questions' } }, async ($, e, next) => {
+    if (!isRemote(e.surface)) return next(e)
+    const [list, text] = await Promise.all([read($, queue), read($, draft)])
+
+    return kit($, e).panel(list, text)
+  })
+
+  // 원격 표면에서는 질문을 올린 도구 줄 자리에 그 묶음의 카드를 그린다.
+  on('ui.render', { component: 'ToolUse', props: { tool: TOOL } }, async ($, e, next) => {
+    if (!isRemote(e.surface)) return next(e)
+    const list = await read($, queue)
+    const batch = list.find(b => b.toolUseId !== undefined && b.toolUseId === e.props.tool_use_id)
+    if (batch === undefined) return next(e)
+
+    return kit($, e).card(batch)
+  })
+}

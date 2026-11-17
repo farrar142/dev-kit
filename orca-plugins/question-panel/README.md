@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.5.1 — Claude Code question-panel 0.9.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
+# 질문 패널 (Orca 플러그인, 시제품 0.5.2 — Claude Code question-panel 0.9.0 이상 또는 switchboard 0.1.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
 
 Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
@@ -201,7 +201,7 @@ mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5�
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 61건(0.5.1)
+orca plugin test orca-plugins/question-panel --json    # 시험 62건(0.5.2; 2026-11-17 이 기계에서는 Orca 시험 하네스가 없어 못 돌림)
 node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·장부 sync·stdio 포함) 17건
 # orca CLI 가 orcad-artifacts 의 orca-test-register.mjs 를 못 찾으면(리눅스 설치에서 봄) node 로 바로:
 # node --import <Orca 설치>/resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test src/*.test.ts* worker/*.test.ts

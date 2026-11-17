@@ -29,6 +29,11 @@
       "description": "질문 패널 mod: 모델의 객관식 질문(MCP 서버 도구 mcp__plugin_question-panel_qp__ask, node 필요)을 오른쪽 「질문」 패널에 쌓아 두고 사용자가 원할 때 답하면 「[질문 패널 답] 질문 = 답」 메시지로 돌려준다. AskUserQuestion처럼 턴을 막지 않는다. 선택지 preview, 답한 기록 지우기(/questions·/questions-clear). Orca 사이드바 질문 패널과 닫힘 장부를 같이 써 한쪽에서 답하면 다른 쪽도 닫힌다(0.9.0)"
     },
     {
+      "name": "switchboard",
+      "source": "./plugins/switchboard",
+      "description": "question-panel을 대체하는 세션 교환대 mod(0.1.0): 질문 도구 mcp__plugin_switchboard_qp__ask·…__resolve(MCP 서버, node 필요)와 오른쪽 「질문」 패널은 question-panel 0.9.0과 같다. 에이전트를 모르는 코어와 AgentHost 포트(submitTurn·injectMidTurn·compact·usage·이벤트·identity·services)로 나눠 Claude 어댑터를 붙였고, 이후 Agent Mail 메일함(깨우기·compact·presence)이 이 코어에 붙는다. question-panel과 함께 켜지 말 것(질문 도구가 둘이 된다)"
+    },
+    {
       "name": "security-recon",
       "source": "./plugins/security-recon",
       "description": "인가 받은 서버·인스턴스를 바깥에서 점검하는 방어 절차: 인가·범위 확인(문지기), 두 지점 블랙박스 점검(포트·TLS·헤더·인증 강제·IDOR·CORS·운영 API 문서), 이중 차단과 외부 재검증, 방화벽 좁힐 때의 사고 교훈, OCI·AWS·GCP 방화벽 레퍼런스"

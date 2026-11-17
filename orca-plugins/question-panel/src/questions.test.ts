@@ -9,6 +9,8 @@ import {
   DISMISSED_MAX,
   DISMISSED_TTL_MS,
   dismissKey,
+  isAskTool,
+  isResolveTool,
   asBatches,
   batchFromTool,
   clearSent,
@@ -62,6 +64,15 @@ test('질문 패널 도구 호출에서 묶음을 만들고 결과의 q<N>을 ID
     ['캐시', '로그'],
     '빈 label 선택지는 버린다',
   )
+})
+
+test('switchboard 플러그인의 질문·닫기 도구 이름도 알아본다', () => {
+  const b = batchFromTool({ ...EVENT, tool: 'mcp__plugin_switchboard_qp__ask' }, 1000, 'o1')
+  assert.equal(b?.id, 'q3')
+  assert.equal(isAskTool('mcp__plugin_switchboard_qp__ask'), true)
+  assert.equal(isResolveTool('mcp__plugin_switchboard_qp__resolve'), true)
+  assert.equal(isResolveTool('mcp__plugin_question-panel_qp__resolve'), true)
+  assert.equal(isAskTool('mcp__plugin_other_qp__ask'), false)
 })
 
 test('결과에 ID가 없으면 fallback ID', () => {
