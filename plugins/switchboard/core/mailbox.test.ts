@@ -25,7 +25,7 @@ test('메일함: 바쁜 동안 쌓인 메일은 턴이 끝난 뒤 한 줄로 묶
   await flush()
   const b = mail.send()
   await flush()
-  const c = mail.send('urgent') // 긴급도 지금은 일반과 같다(D4 몫).
+  const c = mail.send()
   await flush()
   expect(host.turns).toEqual([])
 

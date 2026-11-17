@@ -150,8 +150,10 @@ export type FakeHost = AgentHost & {
   fs: FakeFs
   /** submitTurn 으로 들어온 글(받아들여진 순). */
   turns: string[]
-  /** injectMidTurn 으로 들어온 글. */
+  /** injectMidTurn 으로 들어와 도구 결과에 붙은 글. */
   injected: string[]
+  /** 본 세션 도구 호출 하나가 끝났다: 기다리던 끼워 넣기를 붙인다(Claude 의 PostToolUse 자리). */
+  toolCall: () => void
   /** compact 호출의 instructions. */
   compacts: (string | undefined)[]
   /** 이벤트를 보낸다(에이전트 쪽 흉내). */
@@ -184,9 +186,22 @@ export const fakeHost = (
   let usage: Usage = { tokens: 0 }
   let compactResult: CompactResult = { done: true }
   let running = false
+  // 끼워 넣기는 Claude 처럼 다음 도구 호출에서야 붙고, 도구 호출 없이 턴이 끝나면 버려진다(false).
+  let box: { text: string; done: (attached: boolean) => void }[] = []
+  const drain = (attached: boolean) => {
+    const out = box
+    box = []
+    for (const w of out) {
+      if (attached) injected.push(w.text)
+      w.done(attached)
+    }
+  }
   const emit = (e: HostEvent) => {
     if (e.type === 'turn.start') running = true
-    if (e.type === 'turn.complete') running = false
+    if (e.type === 'turn.complete') {
+      running = false
+      drain(false)
+    }
     for (const l of [...listeners]) l(e)
   }
 
@@ -199,6 +214,7 @@ export const fakeHost = (
     fs,
     turns,
     injected,
+    toolCall: () => drain(true),
     compacts,
     emit,
     failNextSubmit: (reason = 'submit failed') => void (failSubmit = reason),
@@ -220,7 +236,7 @@ export const fakeHost = (
       return () => void listeners.delete(l)
     },
   }
-  if (features.midTurnInject) host.injectMidTurn = async text => void injected.push(text)
+  if (features.midTurnInject) host.injectMidTurn = text => new Promise<boolean>(done => void box.push({ text, done }))
   if (features.compact) {
     host.compact = async instructions => {
       if (running) throw new Error('turn is running')

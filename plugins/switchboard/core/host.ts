@@ -88,7 +88,10 @@ export type AgentHost = {
   /** 새 턴으로 실행한다. 턴이 도는 중이면 끝난 뒤 새 턴으로 간다(끼어들지 않는다). 받아들여지면 풀린다. */
   submitTurn: (text: string) => Promise<void>
   /** 실행 중인 턴의 다음 도구 호출이 끝날 때 끼워 넣는다(선택, features.midTurnInject). */
-  injectMidTurn?: (text: string) => Promise<void>
+  /**
+   * 붙었으면 true. 턴이 도구 호출 없이 끝나 붙지 못했으면 false 로 풀린다(그 글은 버려진다: 코어가 새 턴으로 넣는다).
+   */
+  injectMidTurn?: (text: string) => Promise<boolean>
   /** 대화를 줄인다(선택, features.compact). 턴이 도는 중이면 거절된다. */
   compact?: (instructions?: string) => Promise<CompactResult>
   usage: () => Promise<Usage>

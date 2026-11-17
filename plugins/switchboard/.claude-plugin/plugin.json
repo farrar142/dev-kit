@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.3.0",
-  "description": "세션 안의 교환대: 질문 패널(ask/resolve, 로컬 패널, Orca 사이드바 선택 연동)을 맡고, 에이전트를 모르는 코어와 AgentHost 포트(Claude 어댑터) 위에 Agent Mail 메일함(AGENT_MAIL_PROFILE이 있으면 일반 메일로 세션을 깨우고, 컨텍스트가 크면 먼저 compact한다)을 붙였다. question-panel을 대체한다",
+  "version": "0.4.0",
+  "description": "세션 안의 교환대: 질문 패널(ask/resolve, 로컬 패널, Orca 사이드바 선택 연동)을 맡고, 에이전트를 모르는 코어와 AgentHost 포트(Claude 어댑터) 위에 Agent Mail 메일함(AGENT_MAIL_PROFILE이 있으면 일반 메일로 세션을 깨우고, 컨텍스트가 크면 먼저 compact하며, 긴급 메일은 실행 중인 턴의 다음 도구 호출 뒤에 본문을 끼워 넣는다)을 붙였다. question-panel을 대체한다",
   "types": "./types/index.d.ts"
 }

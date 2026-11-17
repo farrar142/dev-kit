@@ -44,12 +44,21 @@ test('Claude 어댑터: identity 는 본 세션으로 답한다', async $ => {
 
 test('Claude 어댑터: injectMidTurn 은 다음 도구 결과에 붙을 때 풀린다', async () => {
   const box = createMidTurnBox()
-  let done = false
-  const p = box.put('[긴급] 멈춰라').then(() => void (done = true))
+  let done: boolean | undefined
+  const p = box.put('[긴급] 멈춰라').then(v => void (done = v))
   expect(box.size()).toBe(1)
-  expect(done).toBe(false)
+  expect(done).toBeUndefined()
   expect(box.take()).toEqual(['[긴급] 멈춰라'])
   await p
   expect(done).toBe(true)
+  expect(box.take()).toEqual([])
+})
+
+test('Claude 어댑터: 턴이 도구 호출 없이 끝나면 끼워 넣기는 false 로 풀리고 버려진다', async () => {
+  const box = createMidTurnBox()
+  const p = box.put('[긴급] 늦음')
+  box.expire()
+  expect(await p).toBe(false)
+  expect(box.size()).toBe(0)
   expect(box.take()).toEqual([])
 })
