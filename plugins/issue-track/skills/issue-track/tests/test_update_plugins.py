@@ -176,8 +176,53 @@ class UpdatePlugins(unittest.TestCase):
         finally:
             up.subprocess.run = orig
         self.assertEqual(calls[0], (["ssh", "-o", "BatchMode=yes", "remote-1",
-                                     "cd '/w/my app' && claude plugin update a@kit --scope local"], None))
+                                     "cd '/w/my app' && PATH=\"$HOME/.local/bin:$PATH\" claude plugin update a@kit --scope local"], None))
         self.assertEqual(calls[1], (["claude", "plugin", "list", "--json"], "/w/x"))
+
+    def test_remote_command_prefixes_path_unexpanded_locally(self):
+        calls = []
+
+        class P:
+            returncode, stdout, stderr = 0, "", ""
+
+        orig = up.subprocess.run
+        up.subprocess.run = lambda argv, **kw: calls.append(argv) or P()
+        try:
+            up.run_cmd("mac", ["claude", "plugin", "list", "--json"])
+        finally:
+            up.subprocess.run = orig
+        self.assertEqual(calls[0][-1], 'PATH="$HOME/.local/bin:$PATH" claude plugin list --json')
+
+    def test_remote_claude_setting_used_only_for_remote_hosts(self):
+        calls = []
+
+        def fake(host, argv, cwd=None):
+            calls.append((host, argv[0]))
+            return up.Result(0, "[]" if "list" in argv else "ok", "")
+
+        up.update_machine(fake, "mac", "kit", "/opt/bin/claude")
+        up.update_machine(fake, up.LOCAL, "kit", "/opt/bin/claude")
+        self.assertEqual({c for h, c in calls if h == "mac"}, {"/opt/bin/claude"})
+        self.assertEqual({c for h, c in calls if h == up.LOCAL}, {"claude"})
+
+    def test_remote_claude_read_from_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with open(path, "w") as f:
+                json.dump({"update": {"remote_claude": "~/bin/claude"}}, f)
+            self.assertEqual(up.load_update_config(path)["remote_claude"], "~/bin/claude")
+
+    def test_non_utf8_output_does_not_raise(self):
+        code = "import sys; sys.stdout.buffer.write(b'\\xff\\xfe\\xb0\\xa1 ok')"
+        orig = up.subprocess.run
+        real = orig
+        up.subprocess.run = lambda argv, **kw: real([sys.executable, "-c", code], **kw)
+        try:
+            r = up.run_cmd(up.LOCAL, ["claude"])
+        finally:
+            up.subprocess.run = orig
+        self.assertEqual(r.code, 0)
+        self.assertIn("ok", r.out)
 
 
 if __name__ == "__main__":

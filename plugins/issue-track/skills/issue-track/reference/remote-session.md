@@ -45,7 +45,7 @@
 플러그인 새 판이 병합되면 로컬과 원격 기계에 깐다.
 
 ```bash
-python3 <스킬 폴더>/scripts/update-plugins.py            # 설정의 update 절대로
+python3 <스킬 폴더>/scripts/update-plugins.py            # 설정의 update 절대로. Windows는 python3 대신 py 런처: py <스킬 폴더>/scripts/update-plugins.py
 python3 <스킬 폴더>/scripts/update-plugins.py --local-only
 python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts remote-1,remote-2 --no-sessions
 ```
@@ -59,3 +59,4 @@ python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts
 | `mail_profile` | `agent-mail status`를 읽을 프로필 |
 | `machines` | ssh 별칭(로컬은 `local`) → Agent Mail이 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
 | `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
+| `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). 원격 명령은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
