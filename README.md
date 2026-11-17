@@ -188,6 +188,12 @@ my-private-repo
 - 통과: 질문 하나라도 `header`가 `급함`으로 시작할 때, qp 서버가 붙지 않은 세션(`$.mcp.connect('qp')`가 연결 아님), `SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1`.
 - 시험: mod 154건(가드 시험 4건 추가).
 
+### 2026-11-17 — issue-track 0.8.1: update-plugins Windows 로캘·원격 PATH (#115)
+
+- `update-plugins.py`가 Windows 한국어 로캘(cp949)에서 출력 읽기 예외·한국어 깨짐을 냈다 → subprocess를 `encoding="utf-8", errors="replace"`로, stdout·stderr도 utf-8로 reconfigure.
+- ssh 비대화형 셸 PATH에 `~/.local/bin`이 없어 `claude: command not found` → 원격 명령 앞에 `PATH="$HOME/.local/bin:$PATH"`를 붙이고, 설정 `update.remote_claude`로 원격 claude 경로를 바꿀 수 있다. Windows는 `py <스킬 폴더>/scripts/update-plugins.py`.
+- 시험: 새 4건, 스크립트 시험 전체 59건.
+
 ### 2026-11-17 — issue-track 0.8.0: 원격 세션에 일 맡기기·플러그인 갱신 스크립트 (#110)
 
 - 조율 세션이 손으로 되풀이하던 두 절차를 담았다: 한 건을 원격 기계 작업자 세션에 맡기기(19건), 플러그인 새 판을 기계마다 깔기(약 13회).

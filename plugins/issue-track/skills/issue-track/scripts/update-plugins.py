@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import Callable, Protocol, TypedDict
 
 LOCAL = "local"
+REMOTE_PATH_PREFIX = 'PATH="$HOME/.local/bin:$PATH"'
 JSON = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
 
@@ -58,12 +59,14 @@ def run_cmd(host: str, argv: list[str], cwd: str | None = None) -> Result:
     if host == LOCAL:
         full, run_cwd = argv, cwd
     else:
-        line = shlex.join(argv)
+        # ssh 비대화형 셸은 PATH에 ~/.local/bin이 없다. $HOME은 원격 셸이 풀게 따옴표 안에 둔다.
+        line = f"{REMOTE_PATH_PREFIX} {shlex.join(argv)}"
         if cwd:
             line = f"cd {shlex.quote(cwd)} && {line}"
         full, run_cwd = ["ssh", "-o", "BatchMode=yes", host, line], None
     try:
-        p = subprocess.run(full, cwd=run_cwd, env=env, capture_output=True, text=True, timeout=600)
+        p = subprocess.run(full, cwd=run_cwd, env=env, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=600)
     except FileNotFoundError as e:
         return Result(127, "", str(e))
     except subprocess.TimeoutExpired:
@@ -85,6 +88,7 @@ class UpdateConfig(TypedDict, total=False):
     mail_profile: str
     machines: dict[str, str]
     session_plugin: str
+    remote_claude: str
 
 
 def config_path() -> str:
@@ -112,6 +116,8 @@ def load_update_config(path: str) -> UpdateConfig:
         cfg["machines"] = {str(k): str(v) for k, v in machines.items()}
     if isinstance(sect.get("session_plugin"), str):
         cfg["session_plugin"] = str(sect["session_plugin"])
+    if isinstance(sect.get("remote_claude"), str) and sect["remote_claude"]:
+        cfg["remote_claude"] = str(sect["remote_claude"])
     return cfg
 
 
@@ -158,8 +164,8 @@ class MachineReport:
     failed: dict[str, str]
 
 
-def list_installs(run: Runner, host: str, market: str) -> list[Install] | str:
-    r = run(host, ["claude", "plugin", "list", "--json"])
+def list_installs(run: Runner, host: str, market: str, claude: str = "claude") -> list[Install] | str:
+    r = run(host, [claude, "plugin", "list", "--json"])
     if r.code != 0:
         return f"plugin list 실패: {last_line(r)}"
     try:
@@ -168,21 +174,22 @@ def list_installs(run: Runner, host: str, market: str) -> list[Install] | str:
         return "plugin list 출력이 JSON이 아님"
 
 
-def update_machine(run: Runner, host: str, market: str) -> MachineReport:
-    r = run(host, ["claude", "plugin", "marketplace", "update", market])
+def update_machine(run: Runner, host: str, market: str, remote_claude: str = "claude") -> MachineReport:
+    claude = "claude" if host == LOCAL else remote_claude
+    r = run(host, [claude, "plugin", "marketplace", "update", market])
     if r.code != 0:
         return MachineReport(host, f"marketplace update 실패: {last_line(r)}", {}, [], {})
-    before = list_installs(run, host, market)
+    before = list_installs(run, host, market, claude)
     if isinstance(before, str):
         return MachineReport(host, before, {}, [], {})
     failed: dict[str, str] = {}
     for i in before:
-        argv = ["claude", "plugin", "update", i["id"], "--scope", i["scope"]]
+        argv = [claude, "plugin", "update", i["id"], "--scope", i["scope"]]
         cwd = i["projectPath"] if i["scope"] in ("local", "project") and i["projectPath"] else None
         u = run(host, argv, cwd)
         if u.code != 0:
             failed[install_key(i)] = last_line(u)
-    after = list_installs(run, host, market)
+    after = list_installs(run, host, market, claude)
     if isinstance(after, str):
         return MachineReport(host, after, {install_key(i): i["version"] for i in before}, [], failed)
     return MachineReport(host, None, {install_key(i): i["version"] for i in before}, after, failed)
@@ -255,6 +262,10 @@ def stale_sessions(status_text: str, reports: list[MachineReport], machines: dic
 
 def main(argv: list[str] | None = None, run: Runner = run_cmd,
          hostname: Callable[[], str] = socket.gethostname) -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows 로캘(cp949)에서 한국어 출력이 깨지지 않게
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf:
+            reconf(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--config", default=None)
     ap.add_argument("--marketplace", default=None)
@@ -275,7 +286,7 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
     else:
         hosts = cfg.get("hosts", [])
 
-    reports = [update_machine(run, h, market) for h in [LOCAL, *hosts]]
+    reports = [update_machine(run, h, market, cfg.get("remote_claude", "claude")) for h in [LOCAL, *hosts]]
     print(f"마켓 {market} 갱신 결과(재시작해야 새 판이 적용된다)\n")
     print(render_table(reports))
 
