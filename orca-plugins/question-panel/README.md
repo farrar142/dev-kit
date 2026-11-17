@@ -117,6 +117,12 @@ orca plugin open local.question-panel --panel questions --json
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
 
+## 0.7.0 — 원격 질문 카드 (switchboard 0.11.0, #112)
+
+- 대장 역할 세션의 switchboard 가 Agent Mail 서버 질문을 끌어와 질문 폴더에 `v: 2` 파일(`remote: {id: q_…, asker}`)로 남긴다. 이 패널은 그것을 카드로 띄우고 경로 배지에 「원격 질문 · <묻는 역할>」을 보인다. `v: 2`는 `remote`가 맞아야 받는다(옛 패널은 `v: 2`를 버린다).
+- 원격 카드의 답은 터미널·메일함에 넣지 않는다(대장 세션 자신의 턴이 되면 안 된다). 서버 모양 답(`[{selected:[label…], other?}]`)을 닫힘 장부 기록의 `answers`에 담아 차지하면, 대장 세션의 switchboard 가 장부를 보다가 `POST /api/questions/{id}/answer`로 보낸다. 대장 패널이 먼저 답했으면(장부를 먼저 차지) 막는다.
+- 시험: 70건(원격 카드 답·v2 파일 거르기·답 모양 3건 추가). 이 기계에는 `orca.d.ts`가 없어 tsc 는 못 돌렸다.
+
 ## 0.6.0 — 터미널 탭 세션의 질문 파일 (#102)
 
 - 질문 폴더 파일이 `session:{id}`(채팅) 말고 `session:{terminal: term_…}`(터미널 탭)도 받는다. 묶음은 터미널 묶음(route 없음)이라 답은 `terminal.sendText`로 그 터미널에, 포커스 밖이면 `workspaceId`로 그 workspace 를 연다(①과 같은 길).

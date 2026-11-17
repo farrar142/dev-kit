@@ -72,7 +72,28 @@ export type Batch = {
    * 있으면 보내기 전에 장부를 차지하고, 장부에서 다른 곳의 닫힘을 읽어 카드를 닫는다. 없으면(옛 mod) 예전대로.
    */
   key?: string
+  /**
+   * 원격 질문(0.7.0, switchboard 0.11.0+): Agent Mail 서버의 질문을 대장 세션이 끌어와 올린 카드. 답은 그 세션 터미널·메일함에
+   * 넣지 않고 장부 기록(answers)에 담아 두면 대장 세션의 switchboard 가 서버에 보낸다(대장 세션 자신의 턴이 되지 않게).
+   */
+  remote?: RemoteRef
 }
+
+/** 원격 질문 손잡이: 서버 id(`q_` + 32 hex)와 묻는 역할. */
+export type RemoteRef = { id: string; asker: string }
+const REMOTE_ID_RE = /^q_[0-9a-f]{32}$/
+const ROLE_RE = /^[A-Za-z0-9._/-]{1,120}$/
+
+/** 질문 파일의 remote 칸. 모양이 틀리면 null. */
+export const remoteOf = (v: unknown): RemoteRef | null => {
+  if (!isRecord(v) || typeof v.id !== 'string' || !REMOTE_ID_RE.test(v.id)) return null
+  const asker = typeof v.asker === 'string' && ROLE_RE.test(v.asker) ? v.asker : ''
+
+  return { id: v.id, asker }
+}
+
+/** 원격 질문의 문항 하나의 답(서버 모양): 고른 label 들, 「기타」 글. */
+export type RemoteAnswer = { selected: string[]; other?: string }
 
 /** agent.tool.after 훅 이벤트에서 쓰는 부분. */
 export type ToolEvent = {
@@ -203,6 +224,28 @@ const labelsOf = (q: Question, p: readonly number[], text: string) =>
 
 /** 고른 번호들: 1부터, 「기타」는 그 이름 그대로. */
 const numsOf = (p: readonly number[]) => sortPicks(p).map(n => (n === OTHER ? OTHER_LABEL : String(n + 1)))
+
+/** 원격 질문의 답(서버 모양, 0.7.0): 문항마다 고른 label 들과 「기타」 글. 기본 선택(withDefaults)은 부르는 쪽이 먼저 붙인다. */
+export const remoteAnswers = (b: Batch, picks: Picks, texts?: Texts): RemoteAnswer[] =>
+  b.questions.map((q, i) => {
+    const p = sortPicks(picks[i] ?? [])
+    const selected = p.flatMap(n => (n === OTHER || q.options[n] === undefined ? [] : [q.options[n].label]))
+    const other = p.includes(OTHER) ? textAt(texts, i) : ''
+
+    return other === '' ? { selected } : { selected, other }
+  })
+
+/** 원격 질문 카드의 보낸 기록 한 줄. */
+export const remoteLine = (b: Batch, answers: readonly RemoteAnswer[]): string =>
+  `[원격 질문 ${b.remote?.id ?? b.id}] ` +
+  b.questions
+    .map((q, i) => {
+      const a = answers[i]
+      const parts = [...(a?.selected ?? []), ...(a?.other === undefined ? [] : [`${OTHER_LABEL}: ${oneLine(a.other)}`])]
+
+      return `${q.question} = ${parts.join(', ')}`
+    })
+    .join(' / ')
 
 /**
  * 터미널에 넣을 한 줄. 줄바꿈은 터미널에서 먼저 제출될 수 있어 쓰지 않는다.
@@ -416,8 +459,18 @@ const isWorkspaceId = (s: string) => s.length > 0 && s.length <= 600 && !/[\u000
 const optStr = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
 /** 받은 파일 하나를 묶음으로. 모양이 틀리면 null(워커가 로그를 남기고 버린다). */
+/** 원격 질문 파일 판(switchboard 0.11.0+). */
+export const INBOX_REMOTE_VERSION = 2
+
+const remoteSpread = (v: unknown): { remote?: RemoteRef } => {
+  const r = remoteOf(v)
+
+  return r === null ? {} : { remote: r }
+}
+
 export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
-  if (!isRecord(raw) || raw.v !== INBOX_VERSION) return null
+  // v 2(0.7.0): 원격 질문 파일 — remote 가 있어야 한다(옛 패널은 v 2 를 버려 답을 대장 터미널에 넣지 않는다).
+  if (!isRecord(raw) || !(raw.v === INBOX_VERSION || (raw.v === INBOX_REMOTE_VERSION && remoteOf(raw.remote) !== null))) return null
   const id = str(raw.id)
   const session = isRecord(raw.session) ? raw.session : null
   const sessionId = session === null ? '' : str(session.id)
@@ -438,6 +491,7 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
       status: 'pending',
       ...(cwd === null ? {} : { cwd }),
       ...(isKey(raw.key) ? { key: raw.key } : {}),
+      ...remoteSpread(raw.remote),
     }
   }
   if (!ID_RE.test(id) || !SESSION_RE.test(sessionId)) return null
@@ -462,6 +516,7 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
     },
     ...(cwd === null ? {} : { cwd }),
     ...(isKey(raw.key) ? { key: raw.key } : {}),
+    ...remoteSpread(raw.remote),
   }
 }
 
@@ -489,7 +544,9 @@ export const mailTarget = (sessionId: string, runId: string | null) =>
 
 /** 카드에 보일 전달 경로. */
 export const routeLabel = (b: Batch): string =>
-  isMailbox(b) ? `메일함 ${mailTarget(b.route.sessionId, b.route.runId)}` : '터미널'
+  b.remote !== undefined
+    ? `원격 질문 · ${b.remote.asker || '?'}`
+    : isMailbox(b) ? `메일함 ${mailTarget(b.route.sessionId, b.route.runId)}` : '터미널'
 
 export const mailSubject = (b: Batch) => `[질문 패널 답] ${b.id}`
 
@@ -638,15 +695,18 @@ export type LedgerRecord = {
   /** claude: Claude Code 패널, orca: 이 패널, chat: 대화창 글·resolve. */
   by: 'claude' | 'orca' | 'chat'
   at: number
+  /** 원격 질문 카드의 답(0.7.0): 대장 세션의 switchboard 가 읽어 서버에 보낸다. */
+  answers?: RemoteAnswer[]
 }
 
-export const ledgerRecord = (key: string, state: LedgerRecord['state'], at: number): LedgerRecord => ({
+export const ledgerRecord = (key: string, state: LedgerRecord['state'], at: number, answers?: RemoteAnswer[]): LedgerRecord => ({
   v: 1,
   key,
   id: key.split('~')[1],
   state,
   by: 'orca',
   at,
+  ...(answers === undefined ? {} : { answers }),
 })
 
 /** 장부 파일 글 → 기록. 모양이 틀리거나(반쯤 쓴 파일 등) key가 다르면 null. */

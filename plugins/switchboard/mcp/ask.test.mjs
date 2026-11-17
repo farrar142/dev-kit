@@ -338,3 +338,42 @@ test('pruneLedger: 오래된 기록만 지운다', () => {
   assert.equal(readTextFile(ctx.ledgerDir, 'old~q1~1.json'), null)
   assert.equal(readTextFile(ctx.ledgerDir, 'new~q1~1.json'), '{}')
 })
+
+// ── 원격 질문(0.11.0, 대장 세션) ──
+const RID = `q_${'e'.repeat(32)}`
+const RQ = [{ header: 'DB', question: '어느 DB?', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }]
+
+test('sync offer: Orca 세션이면 원격 묶음을 v2 질문 파일(remote 포함)로 남기고, 아니면 남기지 않는다', () => {
+  const offer = { id: 'q3', key: KEY, questions: RQ, remote: { id: RID, asker: 'team/worker-2' } }
+  const term = fakeCtx(TERM_ENV)
+  const ctx = { ...term.ctx, ledgerDir: '/l', claim: () => true, readText: () => null }
+  assert.equal(syncOut(callSync({ offer }, ctx)).offered, true)
+  assert.equal(term.writes.length, 1)
+  const e = term.writes[0].entry
+  assert.equal(term.writes[0].name, 'q3-term_aaaa-1111.json')
+  assert.equal(e.v, 2)
+  assert.deepEqual(e.remote, { id: RID, asker: 'team/worker-2' })
+  assert.equal(e.key, KEY)
+  assert.deepEqual(e.session, { terminal: 'term_aaaa-1111' })
+  // 채팅 세션도 남긴다(Run 은 읽지 않는다 — 답은 메일함으로 가지 않는다)
+  const chat = fakeCtx(CHAT_ENV)
+  assert.equal(syncOut(callSync({ offer }, { ...chat.ctx, ledgerDir: '/l', claim: () => true, readText: () => null })).offered, true)
+  assert.equal(chat.writes[0].entry.session.runId, null)
+  // Orca 가 아니거나 모양이 틀리면 남기지 않는다
+  const none = fakeCtx({})
+  assert.equal(syncOut(callSync({ offer }, { ...none.ctx, ledgerDir: '/l', claim: () => true, readText: () => null })).offered, false)
+  assert.equal(syncOut(callSync({ offer: { ...offer, remote: { id: 'q_x' } } }, ctx)).offered, false)
+  assert.equal(syncOut(callSync({ offer: { ...offer, key: '../k' } }, ctx)).offered, false)
+  assert.equal(term.writes.length, 1)
+})
+
+test('sync: Orca 가 원격 카드에 답한 기록의 answers 를 돌려준다(다른 기록·틀린 모양은 뺀다)', () => {
+  const ctx = ledgerCtx(5)
+  const answers = [{ selected: ['A'] }, { selected: [], other: ' 나중에 ' }]
+  writeFileSync(join(ctx.ledgerDir, `${KEY}.json`), JSON.stringify({ v: 1, key: KEY, id: 'q3', state: 'answered', by: 'orca', at: 9, answers }))
+  const other = 'sess-9~q1~1'
+  writeFileSync(join(ctx.ledgerDir, `${other}.json`), JSON.stringify({ v: 1, key: other, id: 'q1', state: 'answered', by: 'orca', at: 9, answers: [{ selected: 3 }] }))
+  const out = syncOut(callSync({ keys: [KEY, other] }, ctx))
+  assert.deepEqual(out.closed[KEY].answers, [{ selected: ['A'] }, { selected: [], other: '나중에' }])
+  assert.equal('answers' in out.closed[other], false)
+})

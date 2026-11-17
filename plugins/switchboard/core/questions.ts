@@ -4,6 +4,7 @@
 // question-panel 0.9.0 의 동작을 그대로 옮겼다.
 import type { QuestionPanelBatch, QuestionPanelQuestion } from '../types'
 import type { AgentHost } from './host'
+import type { RemoteAnswer, RemoteItem, RemoteQuestion } from './remote-questions'
 
 /** 값 하나를 들고 있는 저장소. update 는 다시 시도할 수 있어 fn 이 여러 번 돌 수 있다. */
 export type Store<T> = {
@@ -20,11 +21,15 @@ export type LedgerRecord = {
   state: 'answered' | 'dismissed'
   by: 'claude' | 'orca' | 'chat'
   at: number
+  /** Orca 질문 패널이 원격 질문 카드에 답했을 때 실은 답(서버 모양, 0.11.0). */
+  answers?: RemoteAnswer[]
 }
-export type SyncOut = { claimed?: boolean; holder?: LedgerRecord | null; closed: Record<string, LedgerRecord> }
+export type SyncOut = { claimed?: boolean; holder?: LedgerRecord | null; closed: Record<string, LedgerRecord>; offered?: boolean }
 export type SyncArgs = {
   close?: { key: string; state: LedgerRecord['state']; by: 'claude' | 'chat' }
   keys?: string[]
+  /** 원격 묶음을 Orca 질문 패널 폴더에 남긴다(0.11.0, Orca 세션일 때만). */
+  offer?: { id: string; key: string; questions: RemoteItem[]; remote: { id: string; asker: string } }
 }
 
 /**
@@ -82,9 +87,10 @@ export const chatBlock = (b: QuestionPanelBatch) => {
 // 패널에서 같은 질문에 또 답해 답이 두 번 가는 일을 막는다.
 export const mentionedIds = (text: string) => new Set([...text.matchAll(/\bq(\d+)\b/gi)].map(m => `q${m[1]}`))
 
+// 원격 묶음은 대화창 글로 닫지 않는다: 그 글은 이 세션에 갈 뿐 서버에 답이 되지 않는다.
 const closeInChat = (list: QuestionPanelBatch[], ids: Set<string>) =>
   list.map(b =>
-    ids.has(b.id) && b.status === 'pending'
+    ids.has(b.id) && b.status === 'pending' && b.remote === undefined
       ? { ...b, status: 'sent' as const, via: 'chat' as const, confirmingDelete: false }
       : b,
   )
@@ -119,7 +125,33 @@ export const VIA_TEXT: Record<NonNullable<QuestionPanelBatch['via']>, string> = 
   dismissed: '답 없이 닫음',
   orca: 'Orca에서 답함',
   'orca-dismissed': 'Orca에서 답 없이 닫음',
+  'remote-answered': '다른 곳에서 답함(원격)',
+  'remote-withdrawn': '묻는 쪽이 거둠(원격)',
+  'remote-taken': '이미 답함·거둠(원격)',
 }
+
+// ── 원격 질문(대장 세션, 0.11.0) ─────────────────────────────────────────────
+
+/** 서버 질문 문항 → 패널 문항(고른 것 없음). */
+export const panelQuestions = (items: readonly RemoteItem[]): QuestionPanelQuestion[] =>
+  items.map(q => ({
+    question: q.question,
+    header: q.header,
+    options: q.options.map(o => ({ label: o.label, description: o.description, ...(o.preview === undefined ? {} : { preview: o.preview }) })),
+    multiSelect: q.multiSelect,
+    picked: [],
+    other: '',
+  }))
+
+/** 패널 답 → 서버 답: 고른 label 들, 「기타」 글은 other. */
+export const remoteAnswers = (b: QuestionPanelBatch): RemoteAnswer[] =>
+  b.questions.map(q => (q.other.trim() === '' ? { selected: [...q.picked] } : { selected: [...q.picked], other: q.other.trim() }))
+
+/** 서버에 답을 보낸 결과: ok(200), closed(409·404 — 이미 답함·거둠·없음), failed(연결 실패 등, 다시 해 볼 수 있음). */
+export type RemoteAnswerOutcome = { kind: 'ok' } | { kind: 'closed'; reason: string } | { kind: 'failed'; reason: string }
+/** 원격 묶음의 답을 서버로 보내는 길(대장 세션의 코어). */
+export type RemoteAnswerPort = { answer: (id: string, answers: RemoteAnswer[]) => Promise<RemoteAnswerOutcome> }
+
 
 export const sessionKey = (sid: string, id: string, now: number) =>
   `${sid.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80) || 'session'}~${id}~${Math.floor(now)}`
@@ -181,11 +213,15 @@ export type QuestionPanelDeps = {
   ledger?: LedgerLink
   /** 사용자에게 짧게 알린다(토스트 등). */
   notify: (text: string) => void
+  /** 원격 묶음의 답을 서버로(0.11.0). 없으면 원격 묶음에 답할 수 없다. */
+  remote?: RemoteAnswerPort
+  /** 기록 한 줄(선택). */
+  log?: (text: string) => void
 }
 
 export type QuestionPanel = ReturnType<typeof createQuestionPanel>
 
-export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: QuestionPanelDeps) => {
+export const createQuestionPanel = ({ queue, draft, host, ledger, notify, remote, log }: QuestionPanelDeps) => {
   const sync = async (args: SyncArgs) => (ledger === undefined ? null : ledger.sync(args).catch(() => null))
   const send = (text: string, onFail: () => void) => {
     // 결과를 기다리지 않는다(턴이 시작될 때야 풀린다). 실패하면 onFail.
@@ -257,6 +293,7 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
       })
     })
     if (sent === undefined) return
+    if ((sent as QuestionPanelBatch).remote !== undefined) return finishRemote(sent as QuestionPanelBatch)
     // 장부에서 먼저 닫는다: Orca 질문 패널이 먼저 답했으면 보내지 않는다(세션에는 한 번만 간다).
     const key = (sent as QuestionPanelBatch).key
     if (key !== undefined) {
@@ -275,11 +312,97 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
     })
   }
 
+  const sendRemote = async (b: QuestionPanelBatch, answers: RemoteAnswer[]): Promise<RemoteAnswerOutcome> => {
+    const rid = b.remote?.id ?? ''
+    if (remote === undefined) return { kind: 'failed', reason: '서버에 답할 길이 없음(메일함 꺼짐)' }
+    try {
+      return await remote.answer(rid, answers)
+    } catch {
+      return { kind: 'failed', reason: '서버에 닿지 않음' }
+    }
+  }
+
+  const setVia = (id: string, via: QuestionPanelBatch['via']) =>
+    queue.update(l => l.map(b => (b.id === id ? { ...b, status: 'sent' as const, via, confirmingDelete: false } : b)))
+
+  /**
+   * 원격 묶음을 패널에서 끝냈다(이미 sent 로 바꿈): 서버에 답을 보낸다. 세션에는 아무것도 넣지 않는다(대장 세션 자신의 턴이 아니다).
+   * 200 이면 장부에 닫힘을 남겨 Orca 카드도 닫고, 409·404 면 「이미 답함·거둠」으로 닫고, 실패면 대기로 되돌린다.
+   */
+  const finishRemote = async (b: QuestionPanelBatch) => {
+    const r = await sendRemote(b, remoteAnswers(b))
+    if (r.kind === 'failed') {
+      await queue.update(l => l.map(x => (x.id === b.id ? { ...x, status: 'pending' as const } : x)))
+      notify(`원격 질문 답을 보내지 못했습니다(${r.reason}). 다시 완료를 눌러 주세요.`)
+
+      return
+    }
+    if (r.kind === 'closed') await setVia(b.id, 'remote-taken')
+    if (b.key !== undefined) await sync({ close: { key: b.key, state: 'answered', by: 'claude' } })
+    notify(
+      r.kind === 'ok'
+        ? `${b.id} 답을 서버에 보냈습니다(원격 질문 · ${b.remote?.asker || '?'}).`
+        : `${b.id}은(는) 이미 답이 났거나 거둔 질문이라 닫았습니다(${r.reason}).`,
+    )
+  }
+
+  /** 서버 질문을 패널에 올린다. 같은 서버 id 가 큐에 있으면(대기든 닫혔든) 올리지 않고 null. */
+  const addRemote = async (a: { q: RemoteQuestion; sessionId: string; now: number }) => {
+    let added = undefined as QuestionPanelBatch | undefined
+    await queue.update(l => {
+      added = undefined
+      if (l.some(b => b.remote?.id === a.q.id)) return l
+      const top = Math.max(0, ...l.map(b => Number(b.id.slice(1)) || 0))
+      const id = `q${top + 1}`
+      added = {
+        id,
+        createdAt: a.now,
+        status: 'pending',
+        questions: panelQuestions(a.q.questions),
+        key: sessionKey(a.sessionId, id, a.now),
+        remote: { id: a.q.id, asker: a.q.asker },
+      }
+
+      return [...l, added]
+    })
+
+    return added ?? null
+  }
+
+  /** 다른 곳(대시보드·다른 대장)에서 답했거나 묻는 쪽이 거둔 서버 질문의 대기 묶음을 닫는다. 닫았으면 true. */
+  const closeRemote = async (rid: string, via: 'remote-answered' | 'remote-withdrawn' | 'remote-taken') => {
+    let key = undefined as string | undefined
+    let closed = false
+    await queue.update(l => {
+      closed = false
+      key = undefined
+
+      return l.map(b => {
+        if (b.remote?.id !== rid || b.status !== 'pending') return b
+        closed = true
+        key = b.key
+
+        return { ...b, status: 'sent' as const, via, confirmingDelete: false }
+      })
+    })
+    if (closed && key !== undefined) await sync({ close: { key, state: via === 'remote-withdrawn' ? 'dismissed' : 'answered', by: 'claude' } })
+
+    return closed
+  }
+
+  /** 서버에서 대기가 아닌(목록에 없는) 대기 원격 묶음을 닫는다(세션이 꺼진 사이 답이 났을 때). */
+  const pruneRemote = async (open: ReadonlySet<string>) => {
+    const gone = (await queue.read()).filter(b => b.status === 'pending' && b.remote !== undefined && !open.has(b.remote.id))
+    for (const b of gone) await closeRemote(b.remote?.id ?? '', 'remote-taken')
+
+    return gone.length
+  }
+
   // 대화창 글(「q4 1-2」·resolve)로 닫는다. 장부에도 「대화창에서 답함」을 남겨 Orca 카드가 곧 닫히게 한다.
   const closeByChat = async (ids: Set<string>) => {
     let keys: string[] = []
     await queue.update(l => {
-      keys = l.filter(b => ids.has(b.id) && b.status === 'pending' && b.key !== undefined).map(b => b.key as string)
+      keys = l.filter(b => ids.has(b.id) && b.status === 'pending' && b.remote === undefined && b.key !== undefined).map(b => b.key as string)
 
       return closeInChat(l, ids)
     })
@@ -315,14 +438,17 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
   // 모델이 기다리지 않게 한다.
   const dismiss = async (id: string) => {
     let closed = false
+    let wasRemote = false
     let key = undefined as string | undefined
     await queue.update(l => {
       closed = false
+      wasRemote = false
       key = undefined
 
       return l.map(b => {
         if (b.id !== id || b.status !== 'pending' || b.confirmingDelete !== true) return b
         closed = true
+        wasRemote = b.remote !== undefined
         key = b.key
 
         return { ...b, status: 'sent' as const, via: 'dismissed' as const, confirmingDelete: false }
@@ -337,6 +463,8 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
         return
       }
     }
+    // 원격 묶음은 이 패널에서만 내린다(서버 질문은 그대로 — 대시보드·다른 대장이 답할 수 있다). 세션에 알릴 것도 없다.
+    if (wasRemote) return
     send(`[질문 패널 답] ${id} 답 없이 닫음`, () => notify('세션에 닫음을 알리지 못했습니다.'))
   }
 
@@ -364,8 +492,10 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
     const r = await sync({ keys })
     if (r === null) return
     let shut: QuestionPanelBatch[] = []
+    const forward = new Map<string, RemoteAnswer[] | null>()
     await queue.update(l => {
       shut = []
+      forward.clear()
 
       return l.map(b => {
         const rec = b.status === 'pending' && b.key !== undefined ? r.closed[b.key] : undefined
@@ -373,12 +503,36 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
         if (rec === undefined || rec.by === 'claude') return b
         const next = { ...b, status: 'sent' as const, via: viaOf(rec), confirmingDelete: false }
         shut.push(next)
+        if (b.remote !== undefined && rec.by === 'orca' && rec.state === 'answered') forward.set(b.id, rec.answers ?? null)
 
         return next
       })
     })
-    for (const b of shut.filter(x => x.via === 'orca-dismissed')) {
+    for (const b of shut.filter(x => x.via === 'orca-dismissed' && x.remote === undefined)) {
       send(`[질문 패널 답] ${b.id} 답 없이 닫음(Orca)`, () => notify('세션에 닫음을 알리지 못했습니다.'))
+    }
+    // Orca 사이드바에서 답한 원격 묶음: 장부 기록에 실린 답을 서버로 보낸다(세션에는 넣지 않는다).
+    for (const b of shut.filter(x => forward.has(x.id))) {
+      const answers = forward.get(b.id) ?? null
+      if (answers === null || answers.length !== b.questions.length) {
+        notify(`${b.id}: Orca 질문 패널이 원격 질문 답을 싣지 않아 서버에 보내지 못했습니다(Orca 질문 패널 0.7.0+ 필요).`)
+        continue
+      }
+      const r = await sendRemote(b, answers)
+      if (r.kind === 'ok') log?.(`switchboard 질문: ${b.id}(원격 ${b.remote?.id ?? '?'}) Orca 답을 서버에 보냈다`)
+      else if (r.kind === 'closed') await setVia(b.id, 'remote-taken')
+      else {
+        // 대기로 되돌린다: 장부의 Orca 기록이 남아 있어 다음 장부 보기에서 다시 보낸다.
+        await queue.update(l =>
+          l.map(x => {
+            if (x.id !== b.id) return x
+            const { via: _, ...rest } = x
+
+            return { ...rest, status: 'pending' as const }
+          }),
+        )
+        log?.(`switchboard 질문: ${b.id} Orca 답을 서버에 보내지 못함(${r.reason}) — 다시 해 본다`)
+      }
     }
   }
 
@@ -397,5 +551,8 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify }: Ques
     closeByChat,
     clearAnswered,
     poll,
+    addRemote,
+    closeRemote,
+    pruneRemote,
   }
 }

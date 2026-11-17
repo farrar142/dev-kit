@@ -821,3 +821,66 @@ test('터미널 탭 세션 닫힘 파일(session:{terminal})은 그 터미널의
   assert.equal(host.callsOf('terminal.sendText').length, 0)
   await w.deactivate()
 })
+
+// 원격 질문(0.7.0, switchboard 0.11.0 대장 세션): 답은 터미널·메일함에 넣지 않고 장부 기록의 answers 로 남긴다.
+const RID = `q_${'a'.repeat(32)}`
+const RKEY = 'sess-b~q2~1700000000000'
+const remoteInbox = (v = 2, remote: unknown = { id: RID, asker: 'team/worker-2' }) => ({
+  name: `q2-term_1.json`,
+  text: JSON.stringify({
+    v,
+    id: 'q2',
+    key: RKEY,
+    createdAt: Date.now(),
+    questions: [
+      { question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres' }, { label: 'SQLite' }] },
+      { question: '넣을 것?', header: '기능', multiSelect: true, options: [{ label: '검색' }, { label: '알림' }] },
+    ],
+    session: { terminal: 'term_1' },
+    workspaceId: 'ws_1',
+    remote,
+  }),
+})
+
+test('원격 질문 카드: 답은 터미널에 넣지 않고 장부 기록에 서버 모양 답으로 남긴다', async () => {
+  const f = fakeIo([remoteInbox()])
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.request('qp.refresh', {})
+  const [b] = (w.host.data().storage.batches ?? []) as { id: string; remote?: { id: string; asker: string } }[]
+  assert.deepEqual(b.remote, { id: RID, asker: 'team/worker-2' })
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1], [0, -1]], texts: ['', ' 나중에 '] })) as { ok: boolean; via?: string }
+  assert.equal(r.ok, true)
+  assert.deepEqual(host.callsOf('terminal.sendText'), [])
+  assert.equal(f.runs.length, 0)
+  const rec = JSON.parse(f.ledger.get(RKEY) ?? '{}')
+  assert.equal(rec.by, 'orca')
+  assert.equal(rec.state, 'answered')
+  assert.deepEqual(rec.answers, [{ selected: ['SQLite'] }, { selected: ['검색'], other: '나중에' }])
+  const [sent] = (w.host.data().storage.batches ?? []) as { status: string; via?: string }[]
+  assert.equal(sent.status, 'sent')
+  assert.equal(sent.via, r.via)
+  // 대장 패널이 먼저 답했으면(장부를 먼저 차지) 막는다.
+  const g = fakeIo([remoteInbox()])
+  g.ledger.set(RKEY, JSON.stringify({ v: 1, key: RKEY, id: 'q2', state: 'answered', by: 'claude', at: 1 }))
+  const w2 = await mountWorker({ default: createWorker(g.io), deactivate }, { host: mockHost({}) })
+  await w2.request('qp.refresh', {})
+  const r2 = (await w2.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0], [0]] })) as { ok: boolean }
+  assert.equal(r2.ok, false)
+  await w.deactivate()
+  await w2.deactivate()
+})
+
+test('원격 질문 파일: v2 는 remote 가 있어야 받고, remote 가 틀리면 버린다', async () => {
+  for (const [file, kept] of [
+    [remoteInbox(2, { id: 'q_bad' }), 0],
+    [remoteInbox(2, null), 0],
+    [remoteInbox(1, null), 1],
+  ] as const) {
+    const f = fakeIo([file])
+    const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host: mockHost({}) })
+    await w.request('qp.refresh', {})
+    assert.equal(((w.host.data().storage.batches ?? []) as unknown[]).length, kept)
+    await w.deactivate()
+  }
+})

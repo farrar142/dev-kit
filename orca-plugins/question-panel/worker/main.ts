@@ -34,6 +34,8 @@ import {
   closeByLedger,
   isOwnAnswer,
   ledgerRecord,
+  remoteAnswers,
+  remoteLine,
   ledgerVia,
   parseLedger,
   type LedgerRecord,
@@ -52,6 +54,7 @@ import {
   type Batch,
   type JsonValue,
   type Picks,
+  type RemoteAnswer,
   type Route,
   type Texts,
 } from '../src/questions.ts'
@@ -146,10 +149,10 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
    * 보내기 전에 장부를 차지한다. 이미 다른 곳이 닫았으면 카드를 그 사유로 닫고 막는 결과를 돌려준다.
    * 장부를 쓸 수 없으면(폴더 권한 등) 로그만 남기고 막지 않는다(혼자서도 돈다).
    */
-  const claim = async (b: Batch, state: LedgerRecord['state']): Promise<Result | null> => {
+  const claim = async (b: Batch, state: LedgerRecord['state'], answers?: RemoteAnswer[]): Promise<Result | null> => {
     if (b.key === undefined) return null
     try {
-      if (await io.claimLedger(b.key, JSON.stringify(ledgerRecord(b.key, state, Date.now())))) {
+      if (await io.claimLedger(b.key, JSON.stringify(ledgerRecord(b.key, state, Date.now(), answers)))) {
         log(`장부: ${b.id}(${b.key}) 차지`)
 
         return null
@@ -479,7 +482,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         return { ok: false, reason: '이미 답했거나 없는 묶음입니다.' }
       }
       if (!complete(b, picks, texts)) return { ok: false, reason: '모든 질문에 답을 골라 주세요. 「기타」를 골랐으면 글을 2000자 안으로 써 주세요.' }
-      if (isMailbox(b) && b.closed === true) {
+      if (b.remote === undefined && isMailbox(b) && b.closed === true) {
         log(`묶음 ${id}: 채팅 세션 ${b.route.sessionId}이 Orca에 없음 — 보내지 않음`)
 
         return { ok: false, reason: '질문한 채팅 세션이 Orca에 없습니다. 이 카드는 「지우기」로 정리하세요.' }
@@ -492,6 +495,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       }
       inflight.add(k)
       try {
+        if (b.remote !== undefined) return await answerRemote(b, id, terminalId, picks, texts)
         const blocked = await claim(b, 'answered')
         if (blocked !== null) return blocked
         if (isMailbox(b)) {
@@ -524,6 +528,23 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       return { ok: false, reason: `워커 오류 — ${why}` }
     }
   })
+
+  /**
+   * 원격 질문 카드의 답(0.7.0): 터미널·메일함에 넣지 않는다(대장 세션 자신의 턴이 되면 안 된다). 답을 장부 기록에 담아
+   * 차지하면, 대장 세션의 switchboard 가 장부를 보다가 그 답을 Agent Mail 서버에 보낸다. 장부가 없으면(key 없음) 보낼 길이 없다.
+   */
+  const answerRemote = async (b: Batch, id: string, terminalId: string, picks: Picks, texts: Texts): Promise<Result> => {
+    if (b.key === undefined) return { ok: false, reason: '원격 질문인데 장부 key 가 없어 보낼 길이 없습니다(switchboard 를 올려 주세요).' }
+    const answers = remoteAnswers(b, picks, texts)
+    const blocked = await claim(b, 'answered', answers)
+    if (blocked !== null) return blocked
+    const line = remoteLine(b, answers)
+    const via = '대장 세션이 서버로'
+    await save(markSent(await load(), id, terminalId, line, via))
+    log(`묶음 ${id}: 원격 질문 ${b.remote?.id ?? '?'} 답을 장부에 남김(대장 세션 switchboard 가 서버에 보낸다)`)
+
+    return { ok: true, reason: '', via }
+  }
 
   /** 터미널 묶음의 답: 그 터미널에 한 줄로 넣는다. */
   const answerTerminal = async (b: Batch, id: string, terminalId: string, picks: Picks, texts: Texts): Promise<Result> => {
