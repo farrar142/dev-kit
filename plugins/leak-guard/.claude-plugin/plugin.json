@@ -1,0 +1,7 @@
+{
+  "name": "leak-guard",
+  "version": "0.1.0",
+  "description": "공개 저장소 유출 막기 — git commit·push·gh pr create/edit 직전에 나갈 추가분만 검사해 비밀 꼴·사용자 금지어가 있으면 막는 PreToolUse 훅",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}
