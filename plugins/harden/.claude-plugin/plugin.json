@@ -1,0 +1,7 @@
+{
+  "name": "harden",
+  "version": "0.1.0",
+  "description": "재발 방지 사다리 — 같은 실수를 규칙 문서 한 줄 대신 구조·정적 검사·시험·훅·스크립트로 막는 순서와 보고 형식",
+  "author": { "name": "farrar142" },
+  "repository": "https://github.com/farrar142/dev-kit"
+}
