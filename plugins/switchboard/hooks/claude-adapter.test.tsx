@@ -36,6 +36,16 @@ test('Claude 어댑터: compact 는 session.compact 로, 건너뜀은 done:false
   expect(await host.compact?.()).toEqual({ done: false, reason: 'nothing' })
 })
 
+test('Claude 어댑터: 받아들인 compact 가 끝났는데 훅 이벤트가 없었으면 완료를 한 번 알린다(#104)', async ($, on) => {
+  on('session.compact', () => ({ messages: [{ role: 'user', text: '요약', toolUses: [] }] }))
+  const emitter = createEmitter()
+  const seen: string[] = []
+  emitter.on(e => void seen.push(e.type))
+  const host = claudeHost(asSelf($), emitter, createMidTurnBox())
+  expect(await host.compact?.()).toEqual({ done: true })
+  expect(seen.filter(t => t === 'compact.complete').length).toBe(1)
+})
+
 test('Claude 어댑터: identity 는 본 세션으로 답한다', async $ => {
   const me = await claudeHost(asSelf($), createEmitter(), createMidTurnBox()).identity()
   expect(me.isMain).toBe(true)

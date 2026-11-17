@@ -163,9 +163,16 @@ export type FakeHost = AgentHost & {
   setUsage: (u: Usage) => void
   /** compact 가 돌려줄 값(기본 done). done 이면 compact.complete 이벤트를 곧 보낸다. */
   setCompactResult: (r: CompactResult) => void
+  /**
+   * 받아들인 compact 의 끝: complete(기본, 곧 compact.complete), silent(받아들였다고 하고 완료 이벤트 없음 —
+   * resume 직후 실제로 시작되지 않은 경우), hang(호출이 풀리지 않음).
+   */
+  setCompactBehavior: (b: CompactBehavior) => void
   /** 듣는 쪽 수. */
   listeners: () => number
 }
+
+export type CompactBehavior = 'complete' | 'silent' | 'hang'
 
 /**
  * 가짜 어댑터. 기능 플래그를 끄면 그 메서드도 없앤다(실제 어댑터가 기능을 못 줄 때와 같다).
@@ -185,6 +192,7 @@ export const fakeHost = (
   let failSubmit: string | undefined
   let usage: Usage = { tokens: 0 }
   let compactResult: CompactResult = { done: true }
+  let compactBehavior: CompactBehavior = 'complete'
   let running = false
   // 끼워 넣기는 Claude 처럼 다음 도구 호출에서야 붙고, 도구 호출 없이 턴이 끝나면 버려진다(false).
   let box: { text: string; done: (attached: boolean) => void }[] = []
@@ -220,6 +228,7 @@ export const fakeHost = (
     failNextSubmit: (reason = 'submit failed') => void (failSubmit = reason),
     setUsage: u => void (usage = u),
     setCompactResult: r => void (compactResult = r),
+    setCompactBehavior: b => void (compactBehavior = b),
     listeners: () => listeners.size,
     submitTurn: async text => {
       if (failSubmit !== undefined) {
@@ -242,7 +251,8 @@ export const fakeHost = (
       if (running) throw new Error('turn is running')
       compacts.push(instructions)
       const r = compactResult
-      if (r.done) clock.after(0, () => emit({ type: 'compact.complete' }))
+      if (r.done && compactBehavior === 'hang') return new Promise<CompactResult>(() => {})
+      if (r.done && compactBehavior === 'complete') clock.after(0, () => emit({ type: 'compact.complete' }))
 
       return r
     }

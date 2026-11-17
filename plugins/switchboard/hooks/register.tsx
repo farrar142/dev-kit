@@ -378,6 +378,7 @@ export const register: Register = on => {
     const mp = await mailProfilePath($)
     board = createSwitchboard(claudeHost($, emitter, box), {
       log: text => void $.ui.log(text),
+      warn: text => void $.ui.toast(text),
       permissions: { waitMs: permissionWaitConfig(pe.wait), bosses: bossRolesConfig(pe.bosses) },
       mail: {
         profilePath: mp.paths,

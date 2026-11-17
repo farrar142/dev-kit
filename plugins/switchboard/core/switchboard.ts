@@ -75,8 +75,15 @@ export type SwitchboardOptions = {
   stall?: Pick<StallOptions, 'retry'>
   /** 원격 권한 답(D8). waitMs 0 이면 끈다. bosses 는 오류 통지도 받는다. */
   permissions?: Pick<PermissionOptions, 'waitMs' | 'pollMs' | 'bosses'>
+  /**
+   * compact 가 끝나기를 기다리는 한도(ms, #104). 이 안에 완료 이벤트가 없거나 호출이 풀리지 않으면 compacting 을
+   * 풀고 기다리던 메일을 넣는다(그 메일 턴이 돌기 전에는 다시 걸지 않는다). 없으면 기본 5분.
+   */
+  compactTimeoutMs?: number
   /** 기록 한 줄(재시도·권한 등). */
   log?: (text: string) => void
+  /** 화면에 한 번 알릴 것(compact 시간 초과 등). 없으면 log 로. */
+  warn?: (text: string) => void
 }
 
 /** 멈춤 통지 메일(제목은 시스템 통지 머리로 시작: 받는 쪽 switchboard 가 본문 그대로 넣는다). */
@@ -112,6 +119,9 @@ export const holdConfig = (minutes: string | undefined): number => {
 
   return Math.round(Number(t) * 60_000)
 }
+
+/** compact 완료를 기다리는 기본 한도(5분). */
+export const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60_000
 
 /** 메일 전 compact 기본 기준(토큰). */
 export const DEFAULT_COMPACT_TOKENS = 200_000
@@ -186,7 +196,9 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     const out: PresenceReport = { state: st.activity }
     if (st.condition !== null) out.condition = st.condition
     try {
-      out.context_tokens = Math.max(0, Math.round((await host.usage()).tokens))
+      // 0 은 「모름」이다(resume 직후 등): 보내면 서버가 0.0k 로 보인다.
+      const t = Math.round((await host.usage()).tokens)
+      if (t > 0) out.context_tokens = t
     } catch {
       // 모르면 뺀다.
     }
@@ -234,7 +246,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     } catch {
       return 'ready'
     }
-    if (tokens < cfg.thresholdTokens || st.activity !== 'idle') return 'ready'
+    // 모르면(0·NaN) 판정하지 않는다.
+    if (!(tokens > 0) || tokens < cfg.thresholdTokens || st.activity !== 'idle') return 'ready'
     compactedForMail = true
     const r = await compact(cfg.instructions)
 
@@ -286,6 +299,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           break
         case 'compact.complete':
           st.activity = 'idle'
+          compactWatch?.cancel()
+          compactWatch = undefined
           break
         case 'input.change': {
           const was = st.typing
@@ -327,6 +342,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   }
 
   const stop = () => {
+    compactWatch?.cancel()
+    compactWatch = undefined
     permissions?.stop()
     permissions = undefined
     stall?.stop()
@@ -342,22 +359,63 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     return done
   }
 
+  /** 걸려 있는 compact 의 감시 타이머(완료 이벤트가 오면 끈다). */
+  let compactWatch: Timer | undefined
+  const compactTimeoutMs = Math.max(0, opts.compactTimeoutMs ?? DEFAULT_COMPACT_TIMEOUT_MS)
+  /**
+   * compact 가 한도 안에 끝나지 않았다(#104: resume 직후 받아들여지고도 시작되지 않음 등): compacting 을 풀고
+   * 화면에 한 번 알리고 메일함을 깨운다. compactedForMail 은 그대로라 그 메일 턴 전에는 다시 걸지 않는다.
+   */
+  const giveUpCompact = () => {
+    compactWatch = undefined
+    if (st.activity !== 'compacting') return
+    st.activity = 'idle'
+    const min = Math.round(compactTimeoutMs / 6_000) / 10
+    const text = `switchboard: compact 가 ${min}분 안에 끝나지 않아 기다리지 않고 메일을 넣는다(필요하면 /compact 를 손으로)`
+    log(text)
+    try {
+      ;(opts.warn ?? log)(text)
+    } catch {
+      // 알림이 실패해도 간다.
+    }
+    mailbox?.report()
+    mailbox?.kick()
+  }
   const compact = async (instructions?: string): Promise<CompactResult> => {
     if (!st.active) return { done: false, reason: 'inactive' }
     if (!capabilities(host).compact || host.compact === undefined) return { done: false, reason: 'unsupported' }
     if (st.activity !== 'idle') return { done: false, reason: st.activity }
     st.activity = 'compacting'
     mailbox?.report()
+    compactWatch?.cancel()
+    // 호출이 풀리지 않아도(hang) 한도에서 「거절」로 끝낸다. 완료 이벤트가 오지 않아도 같은 타이머가 푼다.
+    let timedOut: (r: CompactResult) => void = () => {}
+    const timeout = new Promise<CompactResult>(done => (timedOut = done))
+    const watch = host.services.clock.after(compactTimeoutMs, () => {
+      timedOut({ done: false, reason: 'timeout' })
+      if (compactWatch === watch) giveUpCompact()
+    })
+    compactWatch = watch
     try {
-      const r = await host.compact(instructions)
-      // 거절됐으면 완료 이벤트가 오지 않는다: 바로 되돌린다.
-      if (!r.done && st.activity === 'compacting') {
-        st.activity = 'idle'
-        mailbox?.report()
+      const r = await Promise.race([host.compact(instructions), timeout])
+      // 거절됐으면 완료 이벤트가 오지 않는다: 바로 되돌린다(시간 초과는 giveUpCompact 가 이미 풀었다).
+      if (!r.done) {
+        if (compactWatch === watch) {
+          watch.cancel()
+          compactWatch = undefined
+        }
+        if (st.activity === 'compacting') {
+          st.activity = 'idle'
+          mailbox?.report()
+        }
       }
 
       return r
     } catch (err) {
+      if (compactWatch === watch) {
+        watch.cancel()
+        compactWatch = undefined
+      }
       if (st.activity === 'compacting') {
         st.activity = 'idle'
         mailbox?.report()
@@ -366,6 +424,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       return { done: false, reason: err instanceof Error ? err.message : String(err) }
     }
   }
+
 
   const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [], role: null }
   const takeover = async (): Promise<TakeoverResult> =>

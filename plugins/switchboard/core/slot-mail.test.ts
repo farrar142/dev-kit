@@ -236,7 +236,7 @@ test('presence: 상태가 바뀔 때와 60초마다 heartbeat 로 상태·컨텍
   const a = await session(server, clock, { base: 'team/worker', machine: 'box-a', label: 'issue-79', parent: 'team/coordinator-1' })
   const reg = JSON.parse(server.slotBodies[0]!.body) as Record<string, unknown>
   expect(server.slotBodies[0]!.action).toBe('register')
-  expect(reg).toEqual({ machine: 'box-a', directory: '/work/repo', session_id: 'sess-box-a', label: 'issue-79', parent: 'team/coordinator-1', state: 'idle', context_tokens: 0 })
+  expect(reg).toEqual({ machine: 'box-a', directory: '/work/repo', session_id: 'sess-box-a', label: 'issue-79', parent: 'team/coordinator-1', state: 'idle' })
 
   a.host.setUsage({ tokens: 123_456 })
   a.host.emit({ type: 'turn.start' })
