@@ -16,6 +16,7 @@
 /plugin install idle-compact@dev-kit
 /plugin install context-cap@dev-kit
 /plugin install harden@dev-kit
+/plugin install leak-guard@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -78,6 +79,9 @@ plugins/
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
   harden/
     skills/harden/                 재발 방지 사다리: 구조→정적 검사→시험→훅→스크립트→산문, 실패 메시지·산문 줄 형식·보고 한 줄
+  leak-guard/                      공개 저장소 유출 막는 PreToolUse(Bash) 훅(Node)
+    hooks/leak-guard.js            git commit·push·gh pr create/edit 직전에 나갈 추가분만 내장 패턴+사용자 금지어로 검사
+    tests/                         임시 git 저장소·가짜 gh 시험(`node --test plugins/leak-guard/tests`, 리눅스·macOS)
 orca-plugins/
   question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다(0.5.2)
 ```
@@ -98,6 +102,7 @@ orca-plugins/
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
 | harden | `harden` | 같은 실수가 두 번째로 나왔다, 「재발 방지」「다시는 이러지 않게」「규칙에 추가해」「메모리에 적어 둬」 |
+| leak-guard | 훅만 | 설치하면 늘 켜진다. 공개 저장소에서 `git commit`·`git push`·`gh pr create`/`edit` 직전에만 검사한다. 아래 「leak-guard 쓰는 법」 |
 
 ## question-panel → switchboard 이전
 
@@ -128,6 +133,34 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - **중복 막기**: 세션별 상태 파일 `$TMPDIR/context-cap/<session_id>.json`(`CONTEXT_CAP_STATE_DIR`로 바꾼다).
 - 선의의 작업자를 멈추는 가드레일이지 보안 경계가 아니다(따옴표 안 명령 치환 등은 거르지 않는다).
 
+## leak-guard 쓰는 법
+
+공개 저장소로 나갈 내용에 비밀이나 내부 이름이 섞이면 Bash 도구 호출을 막는다(exit 2, 이유는 모델에게 간다). 저장소가 공개일 때만 검사하고(`gh repo view --json visibility`, 원격 URL별로 `~/.cache/leak-guard/visibility.json`에 하루 캐시, `LEAK_GUARD_TTL`초로 바꿈), `gh`로 판별이 안 되면 검사한다.
+
+| 명령 | 보는 것 |
+|---|---|
+| `git commit` | `git diff --cached`의 `+` 줄(`-a`·`--all`이면 `git diff`도), 명령 글(커밋 메시지) |
+| `git push` | 나갈 커밋들의 `+` 줄과 메시지. 기준은 업스트림, 없으면 원격 기본 브랜치, 그것도 없으면 원격에 없는 커밋. 중간 커밋에서 지운 값도 역사에 남으므로 걸린다 |
+| `gh pr create`·`gh pr edit` | 명령 글(제목·본문 인자, heredoc 포함), `--body-file`의 내용, create는 나갈 커밋들도 |
+
+패턴은 두 겹이다.
+
+1. 내장 일반 패턴: CGNAT 대역(100.64.0.0/10) IP, 개인 키 머리말, GitHub·Anthropic·OpenAI·AWS·Slack·Google·Stripe 토큰 꼴. <!-- leak-guard:allow -->
+2. 사용자 금지어 파일(저장소 밖): `LEAK_GUARD_PATTERNS`, 없으면 `$XDG_CONFIG_HOME/leak-guard/patterns.txt`(보통 `~/.config/leak-guard/patterns.txt`). 파일이 없으면 1만 쓴다.
+
+```
+# ~/.config/leak-guard/patterns.txt — 한 줄에 정규식 하나(JavaScript 문법, 대소문자 무시). # 로 시작하면 주석, 빈 줄 무시
+example\.internal
+\bbuild0[0-9]\b
+my-private-repo
+```
+
+- 막을 때는 `파일:줄 — 패턴 이름 [가린 값]`만 보인다. 사용자 패턴의 이름은 `patterns.txt:3`처럼 금지어 파일의 줄 번호다. 걸린 값 전체는 출력하지 않는다.
+- 금지어 파일의 정규식이 틀리면 고칠 줄을 알려 주며 막는다(조용히 건너뛰지 않는다).
+- 예외: 걸린 줄에 `leak-guard:allow`를 남기면 그 줄은 넘긴다(문서의 예시 IP처럼 정말 공개해도 되는 값). **이 표시는 그 줄을 공개 저장소에 그대로 내보낸다** — 내부 이름·토큰을 넘기는 데 쓰지 말고, 표시가 붙은 줄은 리뷰에서 본다. 표시는 저장소에 남아 누구나 볼 수 있으니 남용이 드러난다.
+- 금지어 목록 자체를 공개 저장소에 두지 않는다. 기계마다 저장소 밖에 두거나 비공개 저장소·동기화 폴더에서 링크한다.
+- 시험(`node --test plugins/leak-guard/tests`)은 가짜 `gh`가 셸 스크립트라 리눅스·macOS에서 돈다. 훅 자체는 Windows Git Bash에서도 돈다(`/c/...` 경로를 바꿔 읽는다).
+
 ## 소개 글
 
 왜 이렇게 만들었는지는 아래 글에 적었다.
@@ -138,6 +171,11 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — leak-guard 0.1.0: 공개 저장소 유출 막는 훅 (#86)
+
+- 새 플러그인. Bash의 `git commit`·`git push`·`gh pr create`/`edit` 직전에 나갈 추가분만 내장 비밀 패턴과 저장소 밖 사용자 금지어 파일로 검사해 걸리면 막는다. 공개 저장소에서만 검사하고 판별이 안 되면 검사한다. 아래 「leak-guard 쓰는 법」.
+- 시험 18건(걸림·안 걸림·비공개·캐시·gh 실패·금지어 파일 없음·정규식 오류·예외 표시·업스트림 있음/없음·원격 없음·PR 본문·body-file).
 
 ### 2026-11-17 — switchboard 0.5.0: 사람 입력 중·답한 직후 메일 보류 (#78)
 

@@ -52,6 +52,11 @@
       "name": "harden",
       "source": "./plugins/harden",
       "description": "재발 방지 사다리: 같은 실수가 다시 나오면 규칙 문서(CLAUDE.md·메모리·지시서)에 한 줄 더하기 전에 구조·정적 검사·시험·훅·스크립트 순으로 막을 장치를 고르고, 산문은 무엇·왜·지울 조건 한 줄로, 장치가 생기면 산문을 지운다"
+    },
+    {
+      "name": "leak-guard",
+      "source": "./plugins/leak-guard",
+      "description": "공개 저장소 유출 막는 PreToolUse 훅(node): git commit·git push·gh pr create/edit 직전에 나갈 추가분(diff + 줄·커밋 메시지·PR 제목·본문)만 내장 비밀 패턴과 저장소 밖 사용자 금지어 파일(~/.config/leak-guard/patterns.txt)로 검사해 걸리면 파일:줄과 패턴 이름만 알리고 막는다. 공개 저장소에서만, 예외는 줄의 leak-guard:allow 표시"
     }
   ]
 }
