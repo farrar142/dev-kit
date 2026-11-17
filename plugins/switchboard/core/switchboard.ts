@@ -88,6 +88,11 @@ export type SwitchboardOptions = {
    */
   holdAfterUserMs?: number
   /**
+   * 짧은 턴 기준(ms, #125). 사람이 보낸 턴의 시작(사람 입력 시각)~끝이 이 이상이면 끝난 뒤 읽기 보류를 걸지 않고 곧 메일을 넣는다
+   * (긴 작업 뒤에는 읽는 시간을 줄 까닭이 없다). 0 이면 기준 없음: 예전처럼 늘 보류한다. 없으면 기본 2분.
+   */
+  shortTurnMs?: number
+  /**
    * 입력 중 보류 상한(ms, #123). 사람이 마지막으로 입력창을 바꾼 뒤 이만큼 지나면 글이 남아 있어도 입력 중으로 보지 않는다
    * (자리를 비운 채 남은 글이 메일을 끝없이 막지 않게). 0 이면 상한 없음. 없으면 기본 5분.
    */
@@ -141,6 +146,17 @@ export const DEFAULT_HOLD_MS = 3 * 60_000
 export const holdConfig = (minutes: string | undefined): number => {
   const t = (minutes ?? '').trim()
   if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_HOLD_MS
+
+  return Math.round(Number(t) * 60_000)
+}
+
+/** 짧은 턴 기준 기본값(2분, #125). 사람 턴이 이보다 길면 끝난 뒤 읽기 보류를 걸지 않는다. */
+export const DEFAULT_SHORT_TURN_MS = 2 * 60_000
+
+/** 환경변수 글(분)로 짧은 턴 기준(ms)을 만든다. 비거나 숫자가 아니면 기본 2분, 0 이면 기준 없음(늘 보류). */
+export const shortTurnConfig = (minutes: string | undefined): number => {
+  const t = (minutes ?? '').trim()
+  if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_SHORT_TURN_MS
 
   return Math.round(Number(t) * 60_000)
 }
@@ -227,6 +243,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
   let compactedForMail = false
   const holdMs = Math.max(0, opts.holdAfterUserMs ?? DEFAULT_HOLD_MS)
+  const shortTurnMs = Math.max(0, opts.shortTurnMs ?? DEFAULT_SHORT_TURN_MS)
   const typingMs = Math.max(0, opts.typingLimitMs ?? DEFAULT_TYPING_MS)
   /** 마지막 턴이 끝난 시각(RFC3339, presence 용). */
   let lastTurnAt: string | undefined
@@ -247,6 +264,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   }
   /** 사람 턴이 들어갔고 아직 끝나지 않았다(끝나면 보류를 건다). */
   let userTurnOpen = false
+  /** 사람 턴을 연 입력의 시각(턴이 열린 동안만). 끝에서 길이를 잰다. */
+  let userTurnStart: Promise<number> | undefined
   /** 시간 보류가 걸려 있다. 타이머가 풀고 메일함을 깨운다. */
   let holding = false
   let holdTimer: Timer | undefined
@@ -278,6 +297,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   }
   /** 사람 입력: 그 턴이 도는 동안과 끝난 뒤 보류 시간 동안 일반 메일을 미룬다. */
   const noteUserInput = () => {
+    if (!userTurnOpen) userTurnStart = host.services.clock.now()
     userTurnOpen = true
     // 턴이 안 시작돼도(거절 등) 풀리도록 지금부터도 건다. 턴 끝에서 다시 센다.
     holdFor(holdMs)
@@ -346,7 +366,20 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           // 사람이 보낸 턴이 끝났다: 답을 읽는 동안 보류(메일함은 이 뒤에 턴 끝을 본다).
           if (userTurnOpen) {
             userTurnOpen = false
-            holdFor(holdMs)
+            const started = userTurnStart
+            userTurnStart = undefined
+            // 보류는 입력 때부터 걸려 있다. 길이를 잰 뒤 긴 턴이면 풀고(#125), 짧으면 끝난 때부터 다시 센다.
+            void Promise.all([started, host.services.clock.now()]).then(([a, b]) => {
+              // 그 사이 사람이 또 보냈으면 그 턴이 맡는다.
+              if (userTurnOpen) return
+              if (shortTurnMs > 0 && a !== undefined && b - a >= shortTurnMs) {
+                holdTimer?.cancel()
+                holding = false
+                mailbox?.kick()
+              } else {
+                holdFor(holdMs)
+              }
+            })
           }
           break
         case 'compact.complete':
@@ -388,7 +421,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         holdReason: () =>
           st.typing
             ? `입력창에 글이 있음(비우거나 보내면${typingMs > 0 ? `, 마지막 입력 ${typingMs / 60_000}분 뒤` : ''} 넣는다)`
-            : holding ? '사람 입력 뒤 보류(SWITCHBOARD_HOLD_MINUTES)' : null,
+            : holding ? '답 읽는 시간 보류(SWITCHBOARD_HOLD_MINUTES)' : null,
         activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
       })

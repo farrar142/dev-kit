@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { announce } from './mailbox'
 import { runTurn, setup } from './mailtest'
-import { DEFAULT_HOLD_MS, DEFAULT_TYPING_MS, holdConfig, typingConfig } from './switchboard'
+import { DEFAULT_HOLD_MS, DEFAULT_SHORT_TURN_MS, DEFAULT_TYPING_MS, holdConfig, shortTurnConfig, typingConfig } from './switchboard'
 import { flush } from './testing'
 
 const MIN = 60_000
@@ -184,4 +184,62 @@ test('입력 중(#123): typingConfig 는 분 글을 ms 로, 비거나 이상하�
   expect(typingConfig('10')).toBe(10 * MIN)
   expect(typingConfig(' 0.5 ')).toBe(30_000)
   expect(typingConfig('0')).toBe(0)
+})
+
+// #125 긴 작업 턴 뒤에는 읽는 시간을 줄 까닭이 없다: 사람 턴 시작~끝이 짧은 턴 기준 이상이면 보류 없이 곧 넣는다.
+test('읽기 보류(#125): 긴 턴(기준 2분 이상) 뒤에는 보류 없이 곧 메일을 넣는다', async () => {
+  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
+  host.emit({ type: 'input.submit', text: '오래 걸리는 일', origin: 'user' })
+  host.emit({ type: 'turn.start' })
+  const a = mail.send()
+  await host.clock.advance(2 * MIN)
+  host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('읽기 보류(#125): 짧은 턴(기준 미만) 뒤에는 보류를 유지한다', async () => {
+  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
+  host.emit({ type: 'input.submit', text: '짧은 질문', origin: 'user' })
+  host.emit({ type: 'turn.start' })
+  const a = mail.send()
+  await host.clock.advance(2 * MIN - 1)
+  host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(host.turns).toEqual([])
+  await host.clock.advance(3 * MIN - 1)
+  expect(host.turns).toEqual([])
+  await host.clock.advance(1)
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('읽기 보류(#125): 기준을 바꾸면 따른다(30초), 0 이면 기준 없음이라 긴 턴도 늘 보류한다', async () => {
+  const a30 = await setup({ board: { holdAfterUserMs: 3 * MIN, shortTurnMs: 30_000 } })
+  a30.host.emit({ type: 'input.submit', text: '하나', origin: 'user' })
+  a30.host.emit({ type: 'turn.start' })
+  const m1 = a30.mail.send()
+  await a30.host.clock.advance(30_000)
+  a30.host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(a30.host.turns).toEqual([announce([m1])])
+
+  const zero = await setup({ board: { holdAfterUserMs: 3 * MIN, shortTurnMs: 0 } })
+  zero.host.emit({ type: 'input.submit', text: '둘', origin: 'user' })
+  zero.host.emit({ type: 'turn.start' })
+  const m2 = zero.mail.send()
+  await zero.host.clock.advance(30 * MIN)
+  zero.host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(zero.host.turns).toEqual([])
+  await zero.host.clock.advance(3 * MIN)
+  expect(zero.host.turns).toEqual([announce([m2])])
+})
+
+test('읽기 보류 설정(#125): 분 글, 비거나 이상하면 기본 2분, 0 이면 기준 없음', () => {
+  expect(shortTurnConfig(undefined)).toBe(DEFAULT_SHORT_TURN_MS)
+  expect(DEFAULT_SHORT_TURN_MS).toBe(2 * MIN)
+  expect(shortTurnConfig('5')).toBe(5 * MIN)
+  expect(shortTurnConfig('0.5')).toBe(30_000)
+  expect(shortTurnConfig('0')).toBe(0)
+  expect(shortTurnConfig('곧')).toBe(DEFAULT_SHORT_TURN_MS)
 })

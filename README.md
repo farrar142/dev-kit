@@ -63,7 +63,7 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.11.2, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.11.3, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
@@ -183,6 +183,12 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.11.3: 긴 작업 턴 뒤에는 읽기 보류 없음 (#125)
+
+- 사람이 지시하고 세션이 오래 작업한 턴이 끝나도 메일이 「사람 입력 뒤 보류」로 3분 더 늦게 들어오던 것을 고친다. 사람 턴이 시작된 때(사람 입력 시각)부터 끝날 때까지가 `SWITCHBOARD_HOLD_SHORT_TURN_MINUTES`분(기본 2) 이상이면 끝난 뒤 읽기 보류를 걸지 않고 곧 메일을 넣는다. 짧은 턴(대화)은 예전처럼 `SWITCHBOARD_HOLD_MINUTES`분 동안 미룬다.
+- `SWITCHBOARD_HOLD_SHORT_TURN_MINUTES=0`은 「기준 없음」이다: 턴이 아무리 길어도 예전처럼 늘 보류한다(보류를 끄려면 `SWITCHBOARD_HOLD_MINUTES=0`).
+- 상태 글자를 「답 읽는 시간 보류(SWITCHBOARD_HOLD_MINUTES)」로 바꿔 입력 중 보류와 구분한다. 입력 중 보류·긴급 메일 규칙은 그대로다.
 
 ### 2026-11-17 — switchboard 0.11.2: 추천·recap을 입력으로 보지 않기 (#123)
 
@@ -318,7 +324,7 @@ my-private-repo
 
 ### 2026-11-17 — switchboard 0.5.0: 사람 입력 중·답한 직후 메일 보류 (#78)
 
-- spec #73의 D5. 입력창에 글이 있는 동안은 일반 메일 턴을 미루고, 글을 지우면 곧 넣는다. 사람이 보낸 턴이 끝나면 그때부터 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 끔) 동안도 미룬다(답을 읽는 동안). 보류가 풀리면 쌓인 메일을 한 줄로 넣는다. 긴급 메일은 보류를 따르지 않는다.
+- spec #73의 D5. 입력창에 글이 있는 동안은 일반 메일 턴을 미루고, 글을 지우면 곧 넣는다. 사람이 보낸 짧은 턴(`SWITCHBOARD_HOLD_SHORT_TURN_MINUTES`분 미만, 기본 2)이 끝나면 그때부터 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 끔) 동안도 미룬다(답을 읽는 동안). 긴 턴 뒤에는 미루지 않는다(0.11.3). 보류가 풀리면 쌓인 메일을 한 줄로 넣는다. 긴급 메일은 보류를 따르지 않는다.
 - 포트 이벤트 `input.submit`에 `origin`(user·plugin·other)을 실었다. Claude 어댑터에서는 모드 `prompt.submit`의 `origin.kind`가 `composer`·`bridge`일 때만 사람이다. 메일 알림 턴(origin plugin)은 사람 입력으로 치지 않는다.
 - 질문 패널에서 답하거나 「보내기」로 넣은 턴은 플러그인 origin이지만 사람이 한 일이다. 그래서 패널 포트의 `submitTurn`이 `noteUserInput()`을 불러 사람 입력으로 친다. 패널 답 턴과 메일 턴이 같은 입력 줄에서 겹치지 않는다.
 - 시험: mod 88건(보류 8건, 어댑터 1건 추가).

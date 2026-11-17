@@ -9,6 +9,7 @@ import {
   emitSubmit,
   exportRole,
   holdEnv,
+  shortTurnEnv,
   typingEnv,
   mailProfilePath,
   permissionEnv,
@@ -32,7 +33,7 @@ import {
   VIA_TEXT,
 } from '../core/questions'
 import type { Store } from '../core/questions'
-import { compactConfig, createSwitchboard, holdConfig, typingConfig } from '../core/switchboard'
+import { compactConfig, createSwitchboard, holdConfig, shortTurnConfig, typingConfig } from '../core/switchboard'
 import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
@@ -472,6 +473,7 @@ export const register: Register = on => {
       },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
       holdAfterUserMs: holdConfig(await holdEnv($)),
+      shortTurnMs: shortTurnConfig(await shortTurnEnv($)),
       typingLimitMs: typingConfig(await typingEnv($)),
     })
     await board.start().catch(() => false)

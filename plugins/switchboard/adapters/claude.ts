@@ -259,6 +259,15 @@ export async function holdEnv($: Self): Promise<string | undefined> {
   }
 }
 
+/** 짧은 턴 기준(분, #125): SWITCHBOARD_HOLD_SHORT_TURN_MINUTES(기본 2, 0 이면 기준 없음 = 늘 보류). */
+export async function shortTurnEnv($: Self): Promise<string | undefined> {
+  try {
+    return await $.env.get('SWITCHBOARD_HOLD_SHORT_TURN_MINUTES')
+  } catch {
+    return undefined
+  }
+}
+
 /** 입력 중 보류 상한(분, #123): SWITCHBOARD_TYPING_MINUTES(기본 5, 0 이면 상한 없음). */
 export async function typingEnv($: Self): Promise<string | undefined> {
   try {
