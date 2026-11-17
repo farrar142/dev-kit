@@ -1,0 +1,22 @@
+{
+  "delegate": {
+    "environment": "remote-1",
+    "model": "opus",
+    "my_mail_profile": "boss",
+    "report_to": "myorg/boss",
+    "repos": {
+      "myorg/app": {
+        "folder": "/srv/src/app",
+        "worker_role": "app/worker-1",
+        "worker_profile": "app-worker-1"
+      }
+    }
+  },
+  "update": {
+    "marketplace": "dev-kit",
+    "hosts": ["remote-1", "remote-2"],
+    "mail_profile": "boss",
+    "machines": { "local": "laptop", "remote-1": "build-box" },
+    "session_plugin": "switchboard"
+  }
+}
