@@ -15,6 +15,7 @@
 /plugin install security-recon@dev-kit
 /plugin install idle-compact@dev-kit
 /plugin install context-cap@dev-kit
+/plugin install harden@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -75,6 +76,8 @@ plugins/
   context-cap/                     세션 컨텍스트 상한 훅(Node, issue-worker 본 세션 또는 환경변수가 있을 때 켜짐)
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
+  harden/
+    skills/harden/                 재발 방지 사다리: 구조→정적 검사→시험→훅→스크립트→산문, 실패 메시지·산문 줄 형식·보고 한 줄
 orca-plugins/
   question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다(0.5.2)
 ```
@@ -94,6 +97,7 @@ orca-plugins/
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
+| harden | `harden` | 같은 실수가 두 번째로 나왔다, 「재발 방지」「다시는 이러지 않게」「규칙에 추가해」「메모리에 적어 둬」 |
 
 ## question-panel → switchboard 이전
 
@@ -134,6 +138,12 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — harden 0.1.0: 재발 방지 사다리 스킬 (#85)
+
+- 새 플러그인. 같은 실수가 반복되면 규칙 문서에 한 줄 더하기 전에 구조·정적 검사·시험·훅·스크립트·산문 여섯 칸을 위에서부터 따져 되는 첫 칸의 장치로 막는다.
+- 막는 장치의 실패 메시지는 원인과 고칠 법을 말하고, 산문 줄은 무엇·왜(출처)·지울 조건을 담으며, 장치가 생기면 그 산문을 같은 작업에서 지운다. 공개 저장소의 장치에는 일반 패턴만 두고 구체 금지어는 저장소 밖에 둔다.
+- 보고에 「재발 방지: <칸> — …」 한 줄.
 
 ### 2026-11-17 — switchboard 0.4.0: 긴급 메일 끼워 넣기 (#77)
 

@@ -47,6 +47,11 @@
       "name": "context-cap",
       "source": "./plugins/context-cap",
       "description": "세션 컨텍스트 상한 훅: claude --agent issue-worker 본 세션은 기본으로, 그 밖에는 환경변수 CONTEXT_CAP_SOFT·CONTEXT_CAP_HARD가 있는 세션에서만, SOFT를 넘으면 새 지시를 거절하고 지금 티켓을 마치라고 한 번 알리며, HARD를 넘으면 넘김 문서 쓰기와 보고 말고는 도구를 막는다"
+    },
+    {
+      "name": "harden",
+      "source": "./plugins/harden",
+      "description": "재발 방지 사다리: 같은 실수가 다시 나오면 규칙 문서(CLAUDE.md·메모리·지시서)에 한 줄 더하기 전에 구조·정적 검사·시험·훅·스크립트 순으로 막을 장치를 고르고, 산문은 무엇·왜·지울 조건 한 줄로, 장치가 생기면 산문을 지운다"
     }
   ]
 }
