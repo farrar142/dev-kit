@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, RenderSurface } from 'claude-code'
 
-import { claudeHost, createEmitter, createMidTurnBox, emitSubmit, wireClaudeEvents } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, emitSubmit, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { mcpLedger } from '../adapters/ledger'
 import {
@@ -312,9 +312,11 @@ export const register: Register = on => {
       name: 'questions-clear',
       description: '질문 패널에서 답한 묶음(보냄·대화창에서 답함)을 모두 지운다. 대기 중인 묶음은 남긴다',
     })
-    // 코어를 띄운다(D1: 세션 상태만 따라간다. 메일함은 D2부터).
+    // 코어를 띄운다: 세션 상태를 따라가고, AGENT_MAIL_PROFILE 이 있으면 메일함(D2)도 켠다.
     board?.stop()
-    board = createSwitchboard(claudeHost($, emitter, box))
+    board = createSwitchboard(claudeHost($, emitter, box), {
+      mail: { profilePath: await mailProfilePath($), log: text => void $.ui.log(text) },
+    })
     await board.start().catch(() => false)
     // 닫힘 장부를 본다: Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
     $.clock.every(SYNC_MS, () => void pollLedger($).catch(() => undefined))

@@ -4,6 +4,7 @@
 //  - compact·usage → $.session.compact·$.session.usage
 //  - 이벤트 → turn.start·turn.complete·prompt.change·prompt.submit·session.compact 훅(wireClaudeEvents)
 //  - services → $.http·$.clock·$.fs
+//  - 메일함 프로필 경로 → AGENT_MAIL_PROFILE·XDG_CONFIG_HOME·HOME(mailProfilePath)
 import type { Hook, On } from 'claude-code'
 
 import type { AgentHost, HostEvent, HttpReply } from '../core/host'
@@ -96,6 +97,26 @@ async function machineOf($: Self): Promise<string> {
     return (await $.env.get('SWITCHBOARD_MACHINE')) || ((await $.env.get('HOSTNAME')) ?? '')
   } catch {
     return ''
+  }
+}
+
+/**
+ * 메일함 프로필 경로: `AGENT_MAIL_PROFILE` 이 있으면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)/agent-mail/<이름>.json,
+ * 없으면 null(메일함 꺼짐). 파일 내용(토큰)은 코어가 fs 로 읽어 메모리에만 둔다.
+ */
+export async function mailProfilePath($: Self): Promise<string | null> {
+  try {
+    const name = (await $.env.get('AGENT_MAIL_PROFILE'))?.trim() ?? ''
+    // 이름에 경로 글자가 있으면 다른 파일을 읽게 되므로 받지 않는다.
+    if (name === '' || /[/\\]|^\.\.?$/.test(name)) return null
+    const xdg = (await $.env.get('XDG_CONFIG_HOME'))?.trim() ?? ''
+    const home = (await $.env.get('HOME'))?.trim() ?? ''
+    const base = xdg !== '' ? xdg : home !== '' ? `${home}/.config` : ''
+    if (base === '') return null
+
+    return `${base}/agent-mail/${name}.json`
+  } catch {
+    return null
   }
 }
 
