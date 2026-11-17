@@ -281,7 +281,7 @@ function BatchCard({ b }: { b: Batch }) {
           </Stack>
         ))}
         {failure === null ? null : <Callout tone="danger" title="보내지 못함">{failure}</Callout>}
-        {sending ? <Spinner label={isMailbox(b) ? '메일함에 보내는 중' : '터미널에 보내는 중'} /> : null}
+        {sending ? <Spinner label={b.remote !== undefined ? '대장 세션에 넘기는 중' : isMailbox(b) ? '메일함에 보내는 중' : '터미널에 보내는 중'} /> : null}
         <Row justify="end" gap="xs">
           {b.closed === true ? (
             <Button variant="ghost" size="sm" icon="delete" onPress={() => removeOne(b)}>

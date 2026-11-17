@@ -35,6 +35,7 @@ import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboar
 import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
+import type { RemoteSink } from '../core/remote-inbox'
 import { isRemoteId, localFallbackLine, remoteAskText, withdrawText } from '../core/remote-ask'
 import type { Http } from '../core/host'
 import type { QuestionPanelBatch } from '../types'
@@ -119,7 +120,35 @@ const panelOf = ($: Self) =>
     host: panelHost($),
     ledger: mcpLedger($),
     notify: text => $.ui.toast(text),
+    // 원격 묶음(대장 세션, #112)의 답은 세션 턴이 아니라 서버로 간다.
+    remote: {
+      answer: async (id, answers) =>
+        board === undefined ? { kind: 'failed', reason: '교환대가 꺼져 있음' } : board.answerRemote(id, answers),
+    },
+    log: text => void $.ui.log(text),
   })
+
+/**
+ * 원격 질문 대장 쪽(#112): 코어가 끌어온 서버 질문을 이 세션의 질문 패널에 올리고 닫는다.
+ * 올린 묶음은 장부 도구(sync offer)로 Orca 질문 패널 폴더에도 남긴다(Orca 세션일 때만 서버가 쓴다).
+ */
+const remoteSink = ($: Self): RemoteSink => ({
+  offer: async q => {
+    const now = await $.clock.now()
+    const sid = await $.session.id().catch(() => '')
+    const b = await panelOf($).addRemote({ q, sessionId: sid, now })
+    if (b === null || b.remote === undefined || b.key === undefined) return
+    await mcpLedger($).sync({ offer: { id: b.id, key: b.key, questions: q.questions, remote: b.remote } })
+    $.ui.toast(`원격 질문 ${b.id}(${q.asker || '?'}): ${q.questions[0]?.question ?? ''}`)
+    if (panelMode(await $.session.surfaces()) === 'panel') void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+  },
+  close: async q => {
+    await panelOf($).closeRemote(q.id, q.status === 'withdrawn' ? 'remote-withdrawn' : 'remote-answered')
+  },
+  prune: async open => {
+    await panelOf($).pruneRemote(open)
+  },
+})
 
 // 질문 카드와 「보내기」 칸을 그리는 함수들: pane, 도구 줄, /questions 출력 줄이 같이 쓴다.
 type RenderEvent = Parameters<Hook<'ui.render'>>[1]
@@ -144,8 +173,9 @@ function kit($: Self, e: RenderEvent) {
       return (
         <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
           <Text dimColor wrap="wrap">
-            {batch.via === undefined ? '보냄' : VIA_TEXT[batch.via]} · {batch.id} · {clock(batch.createdAt)} · 질문{' '}
-            {batch.questions.length}개
+            {batch.via === undefined ? (batch.remote === undefined ? '보냄' : '서버에 답함') : VIA_TEXT[batch.via]} · {batch.id} ·{' '}
+            {clock(batch.createdAt)} · 질문 {batch.questions.length}개
+            {batch.remote === undefined ? '' : ` · 원격 질문 · ${batch.remote.asker || '?'}`}
           </Text>
           <Button key={`delsent:${batch.id}`} label="기록 지우기" onPress={() => removeSent(batch.id)} />
         </Box>
@@ -178,6 +208,7 @@ function kit($: Self, e: RenderEvent) {
       <Box key={`b:${batch.id}`} flexDirection="column" marginBottom={1}>
         <Text weight="bold" wrap="wrap">
           묶음 {batch.id} <Text dimColor>{clock(batch.createdAt)}</Text>
+          {batch.remote !== undefined && <Text dimColor> · 원격 질문 · 묻는 역할 {batch.remote.asker || '?'}</Text>}
         </Text>
         {batch.questions.map((q, qi) => (
           <Box key={`q:${batch.id}:${qi}`} flexDirection="column" marginTop={1}>
@@ -422,6 +453,8 @@ export const register: Register = on => {
       log: text => void $.ui.log(text),
       warn: text => void $.ui.toast(text),
       permissions: { waitMs: permissionWaitConfig(pe.wait), bosses: bossRolesConfig(pe.bosses) },
+      // 대장 역할 세션이면 서버 질문을 끌어와 이 패널에 올린다(#112).
+      remoteQuestions: { sink: remoteSink($) },
       mail: {
         profilePath: mp.paths,
         ...(mp.problem === undefined ? {} : { profileProblem: mp.problem }),

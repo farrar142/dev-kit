@@ -31,13 +31,21 @@ export type QuestionPanelBatch = {
   /** 이 묶음을 올린 도구 호출의 tool_use_id(0.3.0부터; 그 전 묶음은 없음) */
   toolUseId?: string
   /** 어떻게 닫혔나: chat이면 사용자가 대화창에 글로 답함(0.4.0부터), dismissed면 답 없이 닫음(0.8.0부터); 없으면 패널에서 보냄 */
-  via?: 'chat' | 'dismissed' | 'orca' | 'orca-dismissed'
+  via?: 'chat' | 'dismissed' | 'orca' | 'orca-dismissed' | 'remote-answered' | 'remote-withdrawn' | 'remote-taken'
   /**
    * 닫힘 장부 key `<세션 ID>~q<N>~<만든 시각>`(0.9.0부터). Orca 질문 패널과 이 묶음을 잇는다. 없으면(옛 묶음) 장부를 안 쓴다.
    * via orca: Orca 질문 패널에서 답함, orca-dismissed: Orca 패널에서 답 없이 닫음(장부에서 읽음).
    */
   key?: string
+  /**
+   * 원격 질문(switchboard 0.11.0, 대장 세션): Agent Mail 서버 질문을 끌어와 올린 묶음. 답은 세션 턴이 아니라 서버(POST answer)로 간다.
+   * via remote-answered: 다른 곳(대시보드·다른 대장)에서 답함, remote-withdrawn: 묻는 쪽이 거둠, remote-taken: 보냈더니 이미 답함·거둠(409).
+   */
+  remote?: QuestionPanelRemote
 }
+
+/** 원격 질문 손잡이: 서버 id(`q_` + 32 hex)와 묻는 역할. */
+export type QuestionPanelRemote = { id: string; asker: string }
 
 declare module 'claude-code' {
   interface PluginState {

@@ -23,6 +23,8 @@ import {
   parseRunCurrent,
   parseSendResult,
   routeLabel,
+  ledgerRecord,
+  remoteAnswers,
   whereOf,
   workspaceNameFrom,
   closedIdsOf,
@@ -376,4 +378,22 @@ test('sameAsk: 훅과 질문 파일의 같은 묶음 — key 가 둘 다 있으�
   assert.equal(sameAsk([{ ...base, status: 'sent' }], base), undefined)
   assert.ok(sameAsk([{ ...base, status: 'sent', key: 's~q2~1' }], { ...base, key: 's~q2~1' }))
   assert.equal(sameAsk([{ ...base, key: 's~q2~1' }], { ...base, key: 's~q2~2' }), undefined)
+})
+
+test('원격 질문(0.7.0): 카드 경로 표시와 서버 모양 답', () => {
+  const b = batchFromInbox(
+    {
+      v: 2,
+      id: 'q4',
+      questions: [{ question: 'Q', header: 'H', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }],
+      session: { terminal: 'term_1' },
+      remote: { id: `q_${'b'.repeat(32)}`, asker: 'team/worker-2' },
+    },
+    0,
+  )!
+  assert.equal(routeLabel(b), '원격 질문 · team/worker-2')
+  assert.deepEqual(remoteAnswers(b, [[1]], ['']), [{ selected: ['B'] }])
+  assert.deepEqual(remoteAnswers(b, [[-1]], [' 글 ']), [{ selected: [], other: '글' }])
+  assert.deepEqual(ledgerRecord('s~q4~1', 'answered', 3, [{ selected: ['B'] }]).answers, [{ selected: ['B'] }])
+  assert.equal('answers' in ledgerRecord('s~q4~1', 'answered', 3), false)
 })

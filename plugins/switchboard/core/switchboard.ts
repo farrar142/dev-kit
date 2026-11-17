@@ -8,6 +8,10 @@ import type { Mailbox, MailboxOptions, MailboxState, SlotConfig } from './mailbo
 import { createPermissions } from './permission'
 import type { PermissionAnswer, PermissionAsk, PermissionOptions, Permissions } from './permission'
 import { createRemoteAsk } from './remote-ask'
+import { createRemoteInbox } from './remote-inbox'
+import type { RemoteInbox, RemoteInboxOptions, RemoteSink } from './remote-inbox'
+import type { RemoteAnswer } from './remote-questions'
+import type { RemoteAnswerOutcome } from './questions'
 import type { RemoteAsk, RemoteAskResult, WithdrawResult } from './remote-ask'
 import type { PresenceReport, TakeoverResult } from './slot'
 import type { QuestionPanelQuestion } from '../types'
@@ -66,6 +70,8 @@ export type Switchboard = {
   askRemote: (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }) => Promise<RemoteAskResult>
   /** 서버 질문을 거둔다(resolve). 메일함이 꺼져 있으면 실패. */
   withdrawRemote: (id: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<WithdrawResult>
+  /** 원격 질문(#112, 대장 세션): 패널 답을 서버로 보낸다. 끌어오기가 꺼져 있으면 failed. */
+  answerRemote: (id: string, answers: readonly RemoteAnswer[]) => Promise<RemoteAnswerOutcome>
 }
 
 export type SwitchboardOptions = {
@@ -90,6 +96,10 @@ export type SwitchboardOptions = {
    * 풀고 기다리던 메일을 넣는다(그 메일 턴이 돌기 전에는 다시 걸지 않는다). 없으면 기본 5분.
    */
   compactTimeoutMs?: number
+  /**
+   * 원격 질문 대장 쪽(#112). 있으면 메일함 역할이 대장(permissions.bosses)일 때 서버 질문을 끌어와 sink(질문 패널)에 올린다.
+   */
+  remoteQuestions?: { sink: RemoteSink } & Pick<RemoteInboxOptions, 'timeoutS' | 'retry' | 'idleMs'>
   /** 기록 한 줄(재시도·권한 등). */
   log?: (text: string) => void
   /** 화면에 한 번 알릴 것(compact 시간 초과 등). 없으면 log 로. */
@@ -158,6 +168,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   let stall: Stall | undefined
   let permissions: Permissions | undefined
   let remote: { ask: RemoteAsk; off: () => void } | undefined
+  let inbox: RemoteInbox | undefined
   /** 원격 권한 답을 기다리는 건수(그동안 presence 는 blocked:permission_request). */
   let permWaiting = 0
   let stallCondition: string | null = null
@@ -349,6 +360,12 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       permissions = createPermissions(host, mailbox, { ...opts.permissions, log })
       const ask = createRemoteAsk(mailbox, { log })
       remote = { ask, off: mailbox.onNotice(ask.noticeText) }
+      const rq = opts.remoteQuestions
+      if (rq !== undefined && mailbox.state().status !== 'off') {
+        const { sink, ...rest } = rq
+        inbox = createRemoteInbox(host, mailbox, { ...rest, sink, bosses: opts.permissions?.bosses ?? [], log })
+        inbox.start()
+      }
     }
 
     return true
@@ -361,6 +378,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     permissions = undefined
     remote?.off()
     remote = undefined
+    inbox?.stop()
+    inbox = undefined
     stall?.stop()
     stall = undefined
     const done = mailbox?.stop() ?? Promise.resolve()
@@ -480,5 +499,15 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     }
   }
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover, askPermission, askRemote, withdrawRemote }
+  const answerRemote = async (id: string, answers: readonly RemoteAnswer[]): Promise<RemoteAnswerOutcome> => {
+    const r = inbox
+    if (!st.active || r === undefined) return { kind: 'failed', reason: '원격 질문 끌어오기가 꺼져 있음' }
+    try {
+      return await r.answer(id, answers)
+    } catch {
+      return { kind: 'failed', reason: '서버에 닿지 않음' }
+    }
+  }
+
+  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover, askPermission, askRemote, withdrawRemote, answerRemote }
 }

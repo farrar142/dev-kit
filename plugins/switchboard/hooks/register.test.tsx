@@ -900,3 +900,81 @@ test('원격 질문: resolve 에 서버 id 를 주면 거두기(withdraw)를 부
   expect(hits.some(h => h.method === 'POST' && h.url === `http://mail.test/api/questions/${RID}/withdraw`)).toBe(true)
   expect(textOf(ran)).toContain(`원격 질문 ${RID}을 거뒀다`)
 })
+
+// 원격 질문 대장 쪽(#112): 대장 역할 세션은 서버 질문을 끌어와 이 패널에 올리고, 패널 답은 서버로 보낸다(세션 턴 아님).
+const BID = `q_${'d'.repeat(32)}`
+
+async function setupBoss($: any, on: any, bosses: string) {
+  const hits: { url: string; method: string; body?: string }[] = []
+  on('env.get', (_: any, e: any) => ({
+    value: ({ AGENT_MAIL_PROFILE: 'sbboss', AGENT_MAIL_CONFIG_DIR: '/cfg', SWITCHBOARD_BOSS_ROLES: bosses } as Record<string, string>)[e.name],
+  }))
+  on('fs.exists', (_: any, e: any) => ({ value: e.path === '/cfg/sbboss.json' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path === '/cfg/sbboss.json' ? JSON.stringify({ endpoint: 'http://mail.test', role: 'team/lead', token: 'tok' }) : '' }))
+  const view = (status: string) => ({
+    id: BID,
+    asker: 'team/worker-2',
+    created_at: '',
+    status,
+    questions: [{ header: 'DB', question: '원격으로 물은 DB?', options: [{ label: 'Postgres', description: '' }, { label: 'SQLite', description: '' }], multiSelect: false }],
+    answers: null,
+    answered_by: '',
+    answered_at: null,
+    withdrawn_at: null,
+    seq: 3,
+    can_answer: status === 'pending',
+  })
+  on('http.fetch', (_: any, e: any) => {
+    const url = String(e.url)
+    const method = e.init?.method ?? 'GET'
+    hits.push({ url, method, ...(typeof e.init?.body === 'string' ? { body: e.init.body } : {}) })
+    const reply = (status: number, body: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(body) } })
+    if (url.includes('/api/slots/register')) return reply(200, { role: 'team/lead-1', base: 'team/lead', number: 1, other_active: 0, reclaimed: false })
+    if (url.includes('/api/slots/')) return reply(200, {})
+    if (url.includes('/api/events/poll')) return reply(200, { events: [], cursor: 0 })
+    if (url === 'http://mail.test/api/questions?status=pending') return reply(200, { questions: [view('pending')] })
+    if (url === 'http://mail.test/api/questions?limit=1') return reply(200, { questions: [view('pending')] })
+    // 긴 대기는 이 시험에서 실패로 돌려 루프가 쉬게 한다.
+    if (url.startsWith('http://mail.test/api/questions/poll')) return reply(503, { error: 'busy' })
+    if (url === `http://mail.test/api/questions/${BID}/answer` && method === 'POST') return reply(200, { ...view('answered'), answered_by: 'team/lead-1' })
+
+    return reply(404, { error: 'not found' })
+  })
+  const submitted = await setup($, on)
+
+  return { hits, submitted }
+}
+
+// mod 타입 환경에는 DOM·node 전역 타입이 없다.
+const nap = (ms: number) =>
+  new Promise<void>(r => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => unknown }).setTimeout(r, ms))
+
+const until = async (ok: () => Promise<boolean> | boolean) => {
+  for (let i = 0; i < 100; i++) {
+    if (await ok()) return true
+    await nap(5)
+  }
+
+  return false
+}
+
+test('원격 질문 대장: 서버 질문이 패널에 묻는 역할과 함께 뜨고, 답은 서버로 가며 세션에는 넣지 않는다', async ($, on) => {
+  const { hits, submitted } = await setupBoss($, on, 'team/lead')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' } as any)
+  expect(await until(async () => (await ui.find({ type: 'Text', text: /원격으로 물은 DB/ })) !== undefined)).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /묻는 역할 team\/worker-2/ })).toBeDefined()
+  await ui.press({ key: 'o:q1:0:1' })
+  await ui.press({ key: 'done:q1' })
+  expect(await until(() => hits.some(h => h.method === 'POST' && h.url.endsWith(`/${BID}/answer`)))).toBe(true)
+  const post = hits.find(h => h.method === 'POST' && h.url.endsWith(`/${BID}/answer`))!
+  expect(JSON.parse(post.body ?? '{}')).toEqual({ answers: [{ selected: ['SQLite'] }] })
+  expect(submitted).toEqual([])
+  expect(await until(async () => (await ui.find({ type: 'Text', text: /서버에 답함/ })) !== undefined)).toBe(true)
+  await ui.unmount()
+})
+
+test('원격 질문 대장: 대장 역할이 아니면 서버 질문을 끌어오지 않는다', async ($, on) => {
+  const { hits } = await setupBoss($, on, 'team/other')
+  await nap(50)
+  expect(hits.some(h => h.url.includes('/api/questions'))).toBe(false)
+})

@@ -94,6 +94,7 @@ export const SYNC = {
     properties: {
       close: { type: 'object', description: '닫을 묶음 { key, state: answered|dismissed, by: claude|chat }' },
       keys: { type: 'array', items: { type: 'string' }, description: '닫혔는지 볼 묶음 key들' },
+      offer: { type: 'object', description: '원격 질문 묶음을 Orca 질문 패널 폴더에 남긴다 { id, key, questions, remote: { id, asker } }' },
     },
   },
 }
@@ -132,6 +133,8 @@ const plainBlock = questions => {
 /** Orca 질문 패널 플러그인(orca-plugins/question-panel)과 같은 폴더·모양이다. */
 export const ORCA_INBOX_PARTS = ['.question-panel', 'orca-inbox']
 export const ORCA_INBOX_VERSION = 1
+/** 원격 질문 파일(switchboard 0.11.0, Orca 질문 패널 0.7.0+만 읽는다). */
+export const ORCA_INBOX_REMOTE_VERSION = 2
 export const ORCA_NOTE =
   'Orca 사이드바 「질문」 패널로도 답할 수 있습니다(패널에서 고른 답은 「[질문 패널 답] 묶음 ID」 오케스트레이션 메일로 옵니다). 목록에 없는 답은 패널의 「기타」로 글을 써서 보낼 수 있습니다.'
 
@@ -330,6 +333,47 @@ const STATES = new Set(['answered', 'dismissed'])
 const BYS = new Set(['claude', 'orca', 'chat'])
 export const ledgerName = key => `${key}.json`
 
+/** 원격 질문 답(서버 모양) 목록. 모양이 틀리면 null(0.11.0). */
+const REMOTE_ID = /^q_[0-9a-f]{32}$/
+export const parseAnswers = v => {
+  if (!Array.isArray(v) || v.length === 0 || v.length > 4) return null
+  const out = []
+  for (const a of v) {
+    if (a === null || typeof a !== 'object' || !Array.isArray(a.selected) || a.selected.some(x => typeof x !== 'string')) return null
+    out.push(typeof a.other === 'string' && a.other.trim() !== '' ? { selected: a.selected, other: a.other.trim() } : { selected: a.selected })
+  }
+
+  return out
+}
+
+/**
+ * 원격 질문(switchboard 0.11.0): 대장 세션이 끌어온 서버 질문 묶음을 Orca 질문 패널 폴더에 남긴다(평소 질문 파일 + remote).
+ * Orca 카드의 답은 세션에 넣지 않고 장부 기록의 answers 로 돌아온다. Orca 세션이 아니면 남기지 않는다(false).
+ */
+export const offerToOrca = (offer, ctx) => {
+  const target = orcaTarget(ctx?.env)
+  const id = batchIds(offer?.id)[0]
+  const rid = str(offer?.remote?.id)
+  const questions = offer?.questions
+  if (target === null || id === undefined || !REMOTE_ID.test(rid) || !isKey(offer?.key)) return false
+  if (!Array.isArray(questions) || questions.length === 0) return false
+  try {
+    const remote = { id: rid, asker: str(offer.remote.asker) }
+    const base =
+      target.chat !== undefined
+        ? inboxEntry({ id, questions, chat: target.chat, runId: null, cwd: ctx.cwd, now: ctx.now, key: offer.key })
+        : terminalInboxEntry({ id, questions, term: target.term, cwd: ctx.cwd, now: ctx.now, key: offer.key })
+    // v 2: remote 를 모르는 옛 Orca 질문 패널(0.6.x)은 이 파일을 버린다(읽으면 답을 대장 터미널에 넣어 버린다).
+    ctx.write(ctx.inboxDir, `${id}-${target.slug}.json`, JSON.stringify({ ...base, v: ORCA_INBOX_REMOTE_VERSION, remote }))
+
+    return true
+  } catch (err) {
+    ctx.warn?.(`Orca 질문 패널 폴더에 원격 질문을 남기지 못함: ${err instanceof Error ? err.message : String(err)}`)
+
+    return false
+  }
+}
+
 /** 장부 기록 하나. state: 답함·답 없이 닫음, by: 어디서(claude = Claude Code 패널, orca = Orca 패널, chat = 대화창 글). */
 export const ledgerRecord = ({ key, state, by, now }) => ({ v: 1, key, id: key.split('~')[1], state, by, at: now })
 
@@ -344,7 +388,9 @@ export const parseRecord = (text, key) => {
   if (j === null || typeof j !== 'object' || j.v !== 1 || j.key !== key) return null
   if (!STATES.has(j.state) || !BYS.has(j.by) || typeof j.at !== 'number') return null
 
-  return { v: 1, key, id: key.split('~')[1], state: j.state, by: j.by, at: j.at }
+  const answers = j.by === 'orca' && j.state === 'answered' ? parseAnswers(j.answers) : null
+
+  return { v: 1, key, id: key.split('~')[1], state: j.state, by: j.by, at: j.at, ...(answers === null ? {} : { answers }) }
 }
 
 /**
@@ -366,6 +412,7 @@ export const callSync = (args, ctx) => {
       out.claimed = ctx.claim(ctx.ledgerDir, ledgerName(c.key), JSON.stringify(rec))
       if (!out.claimed) out.holder = parseRecord(ctx.readText(ctx.ledgerDir, ledgerName(c.key)), c.key)
     }
+    if (args?.offer !== undefined && args.offer !== null) out.offered = offerToOrca(args.offer, ctx)
     const keys = [...new Set(Array.isArray(args?.keys) ? args.keys.filter(isKey) : [])].slice(0, 200)
     for (const key of keys) {
       const rec = parseRecord(ctx.readText(ctx.ledgerDir, ledgerName(key)), key)
