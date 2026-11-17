@@ -33,7 +33,7 @@ plugins/
     skills/issue-track/            조율자: 큐·모델 고르기·지시서·확인·토큰 측정·최적화 반영
       scripts/wait-ci.py           PR head 커밋의 상태·check-runs를 배경에서 기다렸다가 한 번만 알린다(종료 코드로 결과: 0 성공 / 1 실패 / 2 병합·닫힘 / 3 시간 초과 / 4 PR 없음 / 5 검사 없음)
       scripts/wait-deploy.py       병합 뒤 Jenkins 배포 빌드(병합 시각 뒤 첫 빌드)가 끝날 때까지 기다렸다가 한 번만 알린다(0 성공 / 1 실패 / 3 시간 초과 / 4 조회 불가 / 5 빌드 안 생김)
-      reference/agent-mail.md      다른 터미널 작업자의 보고 경로: Agent Mail 역할 주소, `AGENT_MAIL_PROFILE` 환경변수, 대기 스크립트(2026-11-13에 Orca orchestration 메일함에서 바뀜)
+      reference/agent-mail.md      다른 터미널 작업자의 보고 경로: Agent Mail 역할 주소, `SWITCHBOARD_PROFILE` 환경변수(옛 `AGENT_MAIL_PROFILE`도 받는다), 대기 스크립트(2026-11-13에 Orca orchestration 메일함에서 바뀜)
       scripts/ci_common.py         두 스크립트가 함께 쓰는 Jenkins 자격·기본 URL 찾기·콘솔 발췌
       tests/                       스크립트 단위 시험(`python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests`)
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
@@ -243,6 +243,10 @@ my-private-repo
 - `tool.call` 훅으로 `AskUserQuestion`을 막고, 이유로 「`mcp__plugin_switchboard_qp__ask`로 같은 질문을 올려라(입력 모양이 같다). 급한 확인이면 header를 `급함`으로 시작해 다시 불러라」를 돌려준다.
 - 통과: 질문 하나라도 `header`가 `급함`으로 시작할 때, qp 서버가 붙지 않은 세션(`$.mcp.connect('qp')`가 연결 아님), `SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1`.
 - 시험: mod 154건(가드 시험 4건 추가).
+
+### 2026-11-18 — issue-track 0.8.2: SWITCHBOARD_* 새 이름 우선 (#132)
+
+- 문서의 명령 예시를 `SWITCHBOARD_PROFILE=<프로필> agent-mail …`로 바꿨다(옛 `AGENT_MAIL_PROFILE`도 받는다, 같은 CLI가 `switchboard`로도 깔린다). `update-plugins.py`는 `SWITCHBOARD_PROFILE`(옛 CLI용으로 `AGENT_MAIL_PROFILE`도 같은 값)로 부르고 환경에서 `SWITCHBOARD_ROLE`·`AGENT_MAIL_ROLE`을 뺀다.
 
 ### 2026-11-17 — issue-track 0.8.1: update-plugins Windows 로캘·원격 PATH (#115)
 
