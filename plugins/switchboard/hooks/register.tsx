@@ -375,12 +375,15 @@ export const register: Register = on => {
     const compactBeforeMail = compactConfig(ce.tokens, ce.instructions)
     const se = await slotEnv($)
     const pe = await permissionEnv($)
+    const mp = await mailProfilePath($)
     board = createSwitchboard(claudeHost($, emitter, box), {
       log: text => void $.ui.log(text),
       permissions: { waitMs: permissionWaitConfig(pe.wait), bosses: bossRolesConfig(pe.bosses) },
       mail: {
-        profilePath: await mailProfilePath($),
+        profilePath: mp.paths,
+        ...(mp.problem === undefined ? {} : { profileProblem: mp.problem }),
         log: text => void $.ui.log(text),
+        warn: text => void $.ui.toast(text),
         slot: {
           ...(se.label === undefined ? {} : { label: se.label }),
           ...(se.parent === undefined ? {} : { parent: se.parent }),

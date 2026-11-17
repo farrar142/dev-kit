@@ -313,6 +313,9 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         ...mail,
         ...(slot === undefined ? {} : { slot: { ...slot, presence } }),
         isIdle: () => st.active && st.activity === 'idle' && !held(),
+        // 턴·compact 는 곧 끝나므로 남기지 않는다. 사람 쪽 보류만 까닭을 남긴다.
+        holdReason: () =>
+          st.typing ? '입력창에 글이 있음(비우거나 보내면 넣는다)' : holding ? '사람 입력 뒤 보류(SWITCHBOARD_HOLD_MINUTES)' : null,
         activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
       })

@@ -60,10 +60,11 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.1, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
+    core/profile.ts                프로필 위치(0.8.1): agent-mail CLI와 같은 규칙(`AGENT_MAIL_CONFIG_DIR` → Windows `%APPDATA%`·macOS `~/Library/Application Support`·그 밖 `XDG_CONFIG_HOME` → `~/.config`, 홈은 `HOME` → `USERPROFILE`, 옛 `~/.config/agent-mail`은 뒤 후보)
     core/slot.ts                   번호 역할·presence(0.6.0): /api/slots/register로 `<역할>-N`을 받고(같은 기계·폴더면 원래 번호), 상태가 바뀔 때·60초마다 heartbeat에 presence를 싣고(404면 다시 register), 단일 역할 -2 경고, takeover, 끌 때 release
     core/stall.ts                  멈춤 감지(0.8.0): 턴 실패 종류별 재시도(30초부터 두 배, 10분 상한, 8번), 안 풀리는 오류·권한 창·입력 대기를 presence 상태(`error:<종류>`·`blocked:<종류>`)와 한 번의 통지로
     core/permission.ts             원격 권한 답(0.8.0): 요청을 /api/permissions 에 올리고 서버 긴 대기로 답을 기다린다. 부모·대장 base가 아닌 답은 버리고, 시간 안에 답이 없거나 답할 쪽이 없으면(409) 화면 창으로
@@ -176,6 +177,13 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.8.1: Windows 프로필 경로와 연결 전 메일 (#97)
+
+- 프로필 위치를 agent-mail CLI와 같은 규칙으로 정한다: `AGENT_MAIL_CONFIG_DIR`이 있으면 그 폴더 바로 아래, 없으면 Go `os.UserConfigDir()`와 같이 Windows `%APPDATA%`(없으면 `<홈>\AppData\Roaming`), macOS `~/Library/Application Support`, 그 밖 `$XDG_CONFIG_HOME`(없으면 `~/.config`) 아래 `agent-mail/<이름>.json`. 이름 `default`는 `config.json`. 홈은 `HOME` → `USERPROFILE`(Windows의 Claude 프로세스에는 `HOME`이 없어 0.8.0까지는 조용히 메일함을 건너뛰었다). CLI 자리에 없으면 옛 자리 `~/.config/agent-mail`도 본다.
+- `AGENT_MAIL_PROFILE`이 있는데 프로필을 못 찾거나 못 읽거나 이름이 틀리면 토스트와 기록 줄로 한 번 알린다(전에는 기록 줄만, Windows에서는 그마저 없었다).
+- 연결 전 pending 메일: 처음 잇거나 다시 이을 때 밀려 있던 일반 메일을 「밀려 있던 일반 메일 N통(#…)을 넣는다」로 남기고 넣는다(전과 같은 미룸·compact 관문). 입력 중·사람 입력 뒤 보류로 미루면 「일반 메일 N통(#…) 미룸 — <까닭>」을 까닭이 바뀔 때 한 번 남긴다. 서버는 커서 없는 긴 대기에 그 역할의 pending 전부를 주므로 서버 변경은 없다.
+- 시험: mod 140건(경로 규칙 14·후보·알림 5·연결 전 배달 5 추가).
 
 ### 2026-11-17 — leak-guard 0.2.0: 나가는 내용만 검사 (#94)
 

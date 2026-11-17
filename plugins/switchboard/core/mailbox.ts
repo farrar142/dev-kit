@@ -30,12 +30,24 @@ export type CallIo = { http?: Pick<Http, 'fetch'>; timeoutMs?: number }
 export type OutMail = { to: string; subject: string; body: string; key?: string }
 
 export type MailboxOptions = {
-  /** 프로필 파일의 절대 경로. null 이면(AGENT_MAIL_PROFILE 없음) 메일함은 꺼진다. */
-  profilePath: string | null
+  /**
+   * 프로필 파일의 절대 경로(여럿이면 앞에서부터 있는 것). null 이면 메일함은 꺼진다
+   * (AGENT_MAIL_PROFILE 없음, 또는 profileProblem).
+   */
+  profilePath: string | readonly string[] | null
+  /** AGENT_MAIL_PROFILE 은 있는데 위치를 못 정했다: 켤 때 warn·log 로 한 번 알린다. */
+  profileProblem?: string
+  /** 사람이 꼭 봐야 할 한 줄(토스트 등): 프로필을 못 찾음·못 읽음. 없으면 log 만. */
+  warn?: (text: string) => void
   /** 지금 일반 메일 턴을 넣어도 되는가(세션이 유휴인가, 사용자 보류가 없는가). */
   isIdle: () => boolean
   /** 세션의 날 상태(긴급 메일이 쓴다: 바쁘면 끼워 넣고, 유휴면 새 턴, compact 중이면 끝난 뒤). 없으면 isIdle 로 짐작한다. */
   activity?: () => 'idle' | 'busy' | 'compacting'
+  /**
+   * 일반 메일을 지금 넣지 못하는 까닭(입력 중·보류·바쁨 등). null 이면 넣을 수 있다. 미룬 메일이 있을 때
+   * 까닭이 바뀌면 log 로 한 줄 남긴다(조용히 묶여 있지 않게). 없으면 남기지 않는다.
+   */
+  holdReason?: () => string | null
   /** 연결 상태가 바뀔 때 한 줄. 토큰은 절대 담지 않는다. */
   log?: (text: string) => void
   /**
@@ -158,6 +170,13 @@ export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): 
 /** 알림 글. */
 export const announce = (ids: readonly number[]) =>
   `Agent Mail ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(agent-mail read <ID>).`
+
+/** 로그용 ID 줄: 앞 5개만. */
+const ids = (xs: readonly number[]) => {
+  const sorted = [...xs].sort((a, b) => a - b)
+
+  return sorted.slice(0, 5).map(i => `#${i}`).join(', ') + (sorted.length > 5 ? ` 외 ${sorted.length - 5}` : '')
+}
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -357,7 +376,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     if (!reply.ok) return fail(`HTTP ${reply.status}`)
     const body = parsePoll(reply.text)
     if (body === null) return fail('응답 모양이 틀림')
-    if (status !== 'live') log(`switchboard 메일함: ${role ?? p.role} 구독 중`)
+    const connecting = status !== 'live'
+    if (connecting) log(`switchboard 메일함: ${role ?? p.role} 구독 중`)
     status = 'live'
     if (!notified) {
       notified = true
@@ -373,6 +393,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       else queued.push(e.id)
     }
     if (body.cursor > (cursor ?? -1)) cursor = body.cursor
+    // (다시) 이었을 때 밀려 있던 일반 메일: 몇 통인지 남긴다(연결 전 메일이 들어가는지 화면에서 보이게).
+    if (connecting && queued.length > 0) log(`switchboard 메일함: 밀려 있던 일반 메일 ${queued.length}통(${ids(queued)})을 넣는다`)
     void deliverUrgent()
     kick()
     // 받은 것이 있으면 곧바로 다음 대기(뒤에 더 있을 수 있다), 비었으면 잠깐 쉬고.
@@ -525,6 +547,21 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     }
   }
 
+  /** 마지막으로 남긴 보류 까닭(같은 까닭은 한 번만). */
+  let lastHeld: string | null = null
+  const noteHeld = () => {
+    if (queued.length === 0 || opts.holdReason === undefined) return
+    let why: string | null
+    try {
+      why = opts.holdReason()
+    } catch {
+      return
+    }
+    if (why === null || why === lastHeld) return
+    lastHeld = why
+    log(`switchboard 메일함: 일반 메일 ${queued.length}통(${ids(queued)}) 미룸 — ${why}`)
+  }
+
   const gate = async (): Promise<'ready' | 'wait'> => {
     try {
       return (await opts.beforeDeliver?.()) ?? 'ready'
@@ -574,7 +611,13 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   const kick = () => {
     // 긴급이 넣어지는 중이면 일반은 그 뒤에(입력 줄 순서: 긴급 → 일반).
     if (urgentBusy || urgentQ.length > 0) return
-    if (delivering || awaitingTurn || profile === null || !opts.isIdle()) return
+    if (delivering || awaitingTurn || profile === null) return
+    if (!opts.isIdle()) {
+      noteHeld()
+
+      return
+    }
+    lastHeld = null
     // 입력 줄 순서: 일반 메일 → 시스템 통지.
     if (queued.length === 0) {
       if (noticeQ.length > 0) deliverNotices(profile)
@@ -626,13 +669,30 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
 
   const start = async () => {
     if (profile !== null) return true
-    if (opts.profilePath === null) return false
-    const loaded = await loadProfile(host.services.fs, opts.profilePath)
-    if ('error' in loaded) {
-      log(`switchboard 메일함 꺼짐: ${loaded.error}`)
+    const disabled = (why: string) => {
+      // AGENT_MAIL_PROFILE 이 있는데 조용히 꺼지면 안 된다: 화면에도 한 번.
+      const line = `switchboard 메일함 꺼짐: ${why}`
+      log(line)
+      try {
+        opts.warn?.(line)
+      } catch {
+        // 알리기 실패가 시작을 막지 않는다.
+      }
 
       return false
     }
+    if (opts.profilePath === null) return opts.profileProblem === undefined ? false : disabled(opts.profileProblem)
+    const paths = typeof opts.profilePath === 'string' ? [opts.profilePath] : [...opts.profilePath]
+    if (paths.length === 0) return false
+    let loaded: MailProfile | { error: string } = { error: `프로필 없음: ${paths.join(', ')}` }
+    for (const path of paths) {
+      const r = await loadProfile(host.services.fs, path)
+      // 없는 파일만 다음 후보로 넘어간다. 있는데 못 읽거나 틀리면 그 까닭을 알린다.
+      if ('error' in r && r.error.startsWith('프로필 없음')) continue
+      loaded = r
+      break
+    }
+    if ('error' in loaded) return disabled(loaded.error)
     profile = loaded
     role = loaded.role
     status = 'connecting'
