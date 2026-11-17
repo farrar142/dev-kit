@@ -358,7 +358,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       })
       await mailbox.start().catch(() => false)
       permissions = createPermissions(host, mailbox, { ...opts.permissions, log })
-      const ask = createRemoteAsk(mailbox, { log })
+      // 대장 쪽(아래 inbox)이 켜지는 세션만 대장 판정을 준다: 참조 질문 메일을 패널에 맡기고 세션에 넣지 않는다(#120).
+      const ask = createRemoteAsk(mailbox, { log, ...(opts.remoteQuestions === undefined ? {} : { bosses: opts.permissions?.bosses ?? [] }) })
       remote = { ask, off: mailbox.onNotice(ask.noticeText) }
       const rq = opts.remoteQuestions
       if (rq !== undefined && mailbox.state().status !== 'off') {

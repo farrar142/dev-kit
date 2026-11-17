@@ -7,10 +7,15 @@
 //  - 답 메일: 서버가 묻는 역할 앞으로 보내는 시스템 메일(`agent-mail/system`, 제목 `[질문 답] <id> …`, task_id = id).
 //    이 역할이 물은 질문인지는 이 세션이 올린 id 목록, 없으면(compact·재시작 뒤) GET /api/questions/{id} 의 asker base 로 본다.
 //    참조(watcher) 사본(다른 역할의 질문)은 손대지 않는다(평소 시스템 통지 그대로). 답 글은 보기(view)의 문항·답으로 만든다.
+//  - 대장 세션(#120): 원격 질문 대장 쪽이 켜지는 세션(bosses 를 받았고 지금 역할이 그 목록에 든다)은 참조 메일
+//    「[질문] q_…」「[질문 답] q_…」(이 역할이 물은 질문의 답이 아닌 것)을 세션에 넣지 않고 read 로만 표시한다 — 같은 질문이
+//    대장 패널에 이미 뜬다(패널이 정본). 이 역할이 물은 질문의 답은 대장이어도 위처럼 넣는다.
 import type { QuestionPanelQuestion } from '../types'
-import type { CallIo, Mailbox, MailEvent } from './mailbox'
+import { DROP_NOTICE } from './mailbox'
+import type { CallIo, Mailbox, MailEvent, NoticeDrop } from './mailbox'
 import { baseOf } from './permission'
-import { answerMailId, createQuestionsApi, isRemoteId, remoteAnswerText, toRemoteItems } from './remote-questions'
+import { isBossRole } from './remote-inbox'
+import { answerMailId, createQuestionsApi, isRemoteId, questionMailId, remoteAnswerText, toRemoteItems } from './remote-questions'
 import type { QuestionsApi } from './remote-questions'
 
 /** ask 결과: 서버 질문이면 그 id, 로컬이면 까닭(메일함이 꺼져 시도하지 않았으면 null). */
@@ -22,15 +27,24 @@ export type WithdrawResult = { ok: true } | { ok: false; status: number | null; 
 export type RemoteAsk = {
   ask: (questions: readonly QuestionPanelQuestion[], io?: CallIo) => Promise<RemoteAskResult>
   withdraw: (id: string, io?: CallIo) => Promise<WithdrawResult>
-  /** 메일함 시스템 통지 가로채기(onNotice 에 단다): 이 역할이 물은 질문의 답 메일이면 넣을 글, 아니면 null. */
-  noticeText: (e: MailEvent, body: string) => Promise<string | null>
+  /**
+   * 메일함 시스템 통지 가로채기(onNotice 에 단다): 이 역할이 물은 질문의 답 메일이면 넣을 글, 대장 세션의 참조 메일이면
+   * DROP_NOTICE, 아니면 null.
+   */
+  noticeText: (e: MailEvent, body: string) => Promise<string | null | NoticeDrop>
   api: QuestionsApi
 }
 
 /** 이 세션이 올린 서버 질문 id 를 이만큼 기억한다(그 밖은 서버에 묻는다). */
 export const REMEMBER_IDS = 100
 
-export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: { log?: (text: string) => void } = {}): RemoteAsk => {
+export type RemoteAskOptions = {
+  log?: (text: string) => void
+  /** 대장 역할 목록(원격 질문 대장 쪽이 켜질 때만 준다). 지금 역할이 여기 들면 참조 메일을 넣지 않는다(#120). */
+  bosses?: readonly string[]
+}
+
+export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: RemoteAskOptions = {}): RemoteAsk => {
   const api = createQuestionsApi(mail.call)
   const log = (t: string) => {
     try {
@@ -86,7 +100,11 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: { l
     return { ok: false, status: r.status, reason }
   }
 
-  const noticeText = async (e: MailEvent, body: string): Promise<string | null> => {
+  const boss = () => isBossRole(mail.state().role, opts.bosses ?? [])
+
+  const noticeText = async (e: MailEvent, body: string): Promise<string | null | NoticeDrop> => {
+    // 새 질문 참조 메일: 대장 세션이면 패널이 정본이라 넣지 않는다.
+    if (questionMailId(e) !== null) return boss() ? DROP_NOTICE : null
     const id = answerMailId(e)
     if (id === null) return null
     const known = mine.includes(id)
@@ -95,7 +113,7 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: { l
     const role = mail.state().role ?? ''
     // 이 역할(base)이 물은 질문인가: 이 세션이 올렸거나, 서버 보기의 asker 가 같은 base 다. 참조 사본은 여기서 빠진다.
     const owned = known || (view !== null && role !== '' && baseOf(view.asker) === baseOf(role))
-    if (!owned) return null
+    if (!owned) return boss() ? DROP_NOTICE : null
     if (view !== null && view.status === 'answered' && view.answers !== null) return remoteAnswerText(view)
     // 보기를 못 읽었다(끊김 등): 서버가 쓴 본문(문항별 「질문 = 고른 것」)을 그대로 같은 머리로 넣는다.
     const lines = body
