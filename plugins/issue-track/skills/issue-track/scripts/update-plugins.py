@@ -56,6 +56,7 @@ def run_cmd(host: str, argv: list[str], cwd: str | None = None) -> Result:
     env = os.environ.copy()
     # 부른 세션의 역할이 설정의 프로필과 어긋나면 agent-mail이 거절한다.
     env.pop("AGENT_MAIL_ROLE", None)
+    env.pop("SWITCHBOARD_ROLE", None)
     if host == LOCAL:
         full, run_cwd = argv, cwd
     else:
@@ -294,7 +295,8 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
         machines = {LOCAL: hostname(), **cfg.get("machines", {})}
         argv_s = ["agent-mail", "status", "--json"]
         if cfg.get("mail_profile"):
-            argv_s = ["env", f"AGENT_MAIL_PROFILE={cfg['mail_profile']}", *argv_s]
+            argv_s = ["env", f"SWITCHBOARD_PROFILE={cfg['mail_profile']}",
+                      f"AGENT_MAIL_PROFILE={cfg['mail_profile']}", *argv_s]  # 뒤쪽은 옛 CLI용
         r = run(LOCAL, argv_s)
         print()
         try:

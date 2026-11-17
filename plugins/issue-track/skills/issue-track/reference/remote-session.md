@@ -21,17 +21,17 @@
 2. **작업자 세션** — Orca CLI로 원격 환경에 띄운다(Orca 실행 파일 고르기는 `orca-cli` 스킬; Linux에서 Orca 터미널 밖이면 `orca-ide`).
    ```bash
    orca terminal create --environment <environment> --worktree path:<folder> --title '<저장소>#<이슈>' \
-     --command 'cd <folder> && AGENT_MAIL_PROFILE=<worker_profile> claude --model <model> --name "<저장소>#<이슈> <제목>"' --json
+     --command 'cd <folder> && SWITCHBOARD_PROFILE=<worker_profile> claude --model <model> --name "<저장소>#<이슈> <제목>"' --json
    orca terminal wait --environment <environment> --terminal <handle> --for tui-idle --timeout-ms 120000 --json
    ```
-   응답의 터미널 `handle`(`term_…`)을 적어 둔다 — 닫을 때만 쓴다. 지시서에는 넣지 않는다. switchboard 플러그인이 켜진 세션은 `AGENT_MAIL_PROFILE`의 역할로 메일을 구독하므로 tui-idle이면 받을 준비가 된 것이다.
+   응답의 터미널 `handle`(`term_…`)을 적어 둔다 — 닫을 때만 쓴다. 지시서에는 넣지 않는다. switchboard 플러그인이 켜진 세션은 `SWITCHBOARD_PROFILE`(옛 이름 `AGENT_MAIL_PROFILE`)의 역할로 메일을 구독하므로 tui-idle이면 받을 준비가 된 것이다.
 3. **지시서** — 파일로 써서 메일로 보낸다. 작업자 세션은 switchboard가 메일로 깨운다.
    ```bash
-   AGENT_MAIL_PROFILE=<my_mail_profile> agent-mail send --to <worker_role> --task <저장소>-<이슈> \
+   SWITCHBOARD_PROFILE=<my_mail_profile> agent-mail send --to <worker_role> --task <저장소>-<이슈> \
      --subject '[<저장소>-<이슈>] <제목>' --body-file <지시서 파일>
    ```
    지시서는 [SKILL.md](../SKILL.md) 「2. 지시서」 틀을 따르고, 끝에 보고 길을 박는다: **「PR을 열면 한 통, 끝나면(병합·정리 뒤, 막혀 멈출 때도) 이 메일에 `agent-mail reply <ID>`로 보고하고 `complete <ID>`. 보고에는 PR 번호·병합 SHA·시험·남은 것.」**
-4. **착수 확인** — 몇 분 뒤 `AGENT_MAIL_PROFILE=<my_mail_profile> agent-mail outbox`에서 그 메일이 pending → read로 바뀌었는지 본다. 10분 넘게 pending이면 `orca terminal read --environment <environment> --terminal <handle> --json`으로 화면 꼬리를 한 번 읽는다(권한 창·로그인·메일 구독 실패가 흔하다). 그 뒤의 기다림은 [agent-mail.md](agent-mail.md) 「조율자: 받기」 — 화면 폴링이 아니라 메일 대기.
+4. **착수 확인** — 몇 분 뒤 `SWITCHBOARD_PROFILE=<my_mail_profile> agent-mail outbox`에서 그 메일이 pending → read로 바뀌었는지 본다. 10분 넘게 pending이면 `orca terminal read --environment <environment> --terminal <handle> --json`으로 화면 꼬리를 한 번 읽는다(권한 창·로그인·메일 구독 실패가 흔하다). 그 뒤의 기다림은 [agent-mail.md](agent-mail.md) 「조율자: 받기」 — 화면 폴링이 아니라 메일 대기.
 5. **보고가 오면** — 읽고 결과를 확인한다(PR 병합·이슈 닫힘을 `gh`로 직접). 끝난 보고면 세션을 닫는다.
    ```bash
    orca terminal close --environment <environment> --terminal <handle> --tab --json

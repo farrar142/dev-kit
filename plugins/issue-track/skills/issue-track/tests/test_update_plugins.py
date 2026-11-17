@@ -140,7 +140,7 @@ class UpdatePlugins(unittest.TestCase):
         self.assertIn("app/coordinator", stale)
         for role in ("app/worker-1", "app/worker-2", "x/elsewhere"):
             self.assertNotIn(role, stale)
-        self.assertIn(("local", ("env", "AGENT_MAIL_PROFILE=boss", "agent-mail", "status", "--json"), None),
+        self.assertIn(("local", ("env", "SWITCHBOARD_PROFILE=boss", "AGENT_MAIL_PROFILE=boss", "agent-mail", "status", "--json"), None),
                       fake.calls)
 
     def test_stale_check_prefers_local_scope_install_for_its_folder(self):
@@ -192,6 +192,25 @@ class UpdatePlugins(unittest.TestCase):
         finally:
             up.subprocess.run = orig
         self.assertEqual(calls[0][-1], 'PATH="$HOME/.local/bin:$PATH" claude plugin list --json')
+
+    def test_role_env_removed_from_child_env(self):
+        envs = []
+
+        class P:
+            returncode, stdout, stderr = 0, "", ""
+
+        orig_run, orig_env = up.subprocess.run, dict(os.environ)
+        up.subprocess.run = lambda argv, **kw: envs.append(kw["env"]) or P()
+        os.environ["AGENT_MAIL_ROLE"] = "x/worker-1"
+        os.environ["SWITCHBOARD_ROLE"] = "x/worker-1"
+        try:
+            up.run_cmd("local", ["claude", "plugin", "list", "--json"])
+        finally:
+            up.subprocess.run = orig_run
+            os.environ.clear()
+            os.environ.update(orig_env)
+        self.assertNotIn("AGENT_MAIL_ROLE", envs[0])
+        self.assertNotIn("SWITCHBOARD_ROLE", envs[0])
 
     def test_remote_claude_setting_used_only_for_remote_hosts(self):
         calls = []
