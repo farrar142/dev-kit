@@ -1,7 +1,7 @@
 // Claude 어댑터 시험(얕게): 포트 호출이 모드 API로 이어지는지만 본다.
 import { expect, test } from 'claude-code/testing'
 
-import { claudeHost, createEmitter, createMidTurnBox, submitOrigin } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, permissionSummary, submitOrigin } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 
 // 시험의 $ 는 플러그인 $ 의 일부만 가진 Engine 이다(clock·session.usage 등이 없다). 어댑터가 쓰는 것만 부른다.
@@ -69,4 +69,12 @@ test('Claude 어댑터: 제출 origin 은 composer·bridge 만 사람이고 플�
   expect(submitOrigin('plugin')).toBe('plugin')
   expect(submitOrigin('task-notification')).toBe('other')
   expect(submitOrigin(undefined)).toBe('other')
+})
+
+test('Claude 어댑터: 권한 요약은 셸 명령·파일 경로·주소를 고르고, 서브에이전트 요청이면 종류를 붙인다', () => {
+  expect(permissionSummary('Bash', { command: 'git push', description: '올리기' })).toBe('git push — 올리기')
+  expect(permissionSummary('Edit', { file_path: '/w/a.ts', old_string: 'x' })).toBe('/w/a.ts')
+  expect(permissionSummary('WebFetch', { url: 'https://example.com', prompt: 'p' }, 'errand')).toBe('[errand] https://example.com')
+  expect(permissionSummary('mcp__x__y', { a: 1 })).toBe('{"a":1}')
+  expect(permissionSummary('Bash', { command: 'x'.repeat(2000) }).length).toBe(600)
 })

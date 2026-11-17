@@ -60,11 +60,13 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.7.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
     core/slot.ts                   번호 역할·presence(0.6.0): /api/slots/register로 `<역할>-N`을 받고(같은 기계·폴더면 원래 번호), 상태가 바뀔 때·60초마다 heartbeat에 presence를 싣고(404면 다시 register), 단일 역할 -2 경고, takeover, 끌 때 release
+    core/stall.ts                  멈춤 감지(0.8.0): 턴 실패 종류별 재시도(30초부터 두 배, 10분 상한, 8번), 안 풀리는 오류·권한 창·입력 대기를 presence 상태(`error:<종류>`·`blocked:<종류>`)와 한 번의 통지로
+    core/permission.ts             원격 권한 답(0.8.0): 요청을 /api/permissions 에 올리고 서버 긴 대기로 답을 기다린다. 부모·대장 base가 아닌 답은 버리고, 시간 안에 답이 없거나 답할 쪽이 없으면(409) 화면 창으로
     core/mailtest.ts               시험 도우미: 가짜 Agent Mail 서버(긴 대기 계약)와 메일함을 켠 코어 준비
     core/questions.ts              질문 패널 상태(쌓기·고르기·완료·답 없이 닫기·대화창 답·장부 읽기). 저장은 Store 포트, 보내기는 submitTurn, 장부는 선택 어댑터 LedgerLink
     core/testing.ts                시험 틀: 가짜 어댑터(fakeHost)·가짜 시계(advance)·가짜 http(경로 처리기·SSE 밀기/끊기)·가짜 fs
@@ -98,7 +100,7 @@ orca-plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`(열려 있으면 닫는 토글; `/questions close`는 늘 닫음, 0.8.0+)·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
-| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear`·`/switchboard-takeover` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다. 세션을 `AGENT_MAIL_PROFILE=<프로필>`로 띄우면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)`/agent-mail/<프로필>.json`의 역할로 메일함을 구독해, 새 pending 메일을 턴이 끝난 뒤 「Agent Mail #12, #13 을 읽고 처리하라」 새 턴으로 넣는다(메일 상태는 pending 그대로, 0.2.0). 프로필이 없으면 메일함은 꺼진다. 메일을 넣기 전에 유휴이고 컨텍스트가 `SWITCHBOARD_COMPACT_TOKENS`(기본 `200k`, `0`·`off`면 끔) 이상이면 compact부터 하고 끝난 뒤 넣는다. 요약 지시문은 `SWITCHBOARD_COMPACT_INSTRUCTIONS`(0.3.0). 긴급 메일(`priority=urgent`)은 본문을 실행 중인 턴의 다음 도구 호출 결과 뒤에 끼워 넣고(유휴면 새 턴), 넣는 즉시 read로 표시한다(2000자 넘는 본문은 자르고 `agent-mail read <ID>`를 붙인다, 0.4.0). 입력창에 글이 있는 동안과 사람이 보낸 턴(질문 패널 답 포함)이 끝난 뒤 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 시간 보류 끔)은 일반 메일 턴을 미룬다. 긴급은 미루지 않는다(0.5.0). 연결할 때 기계·폴더로 번호(`<역할>-1`, `-2` …)를 받아 그 주소로 구독하므로 같은 프로필 세션이 둘이어도 번호 없이 온 메일은 `-1`만 받는다. 상태가 바뀔 때와 60초마다 presence(상태·컨텍스트 토큰·마지막 턴·`SWITCHBOARD_LABEL`·`SWITCHBOARD_PARENT`)를 보고한다. `boss`·`coordinator`(`SWITCHBOARD_SINGLE_ROLES`)가 `-2` 이상을 받으면 토스트로 경고하고, `/switchboard-takeover`로 `-1`을 가져온다(0.6.0). `SWITCHBOARD_PARENT`(부모 역할 주소)가 있으면 처음 연결될 때 부모에게 「연결됨(주소·라벨·기계·폴더)」 시스템 통지를 보내고, 받은 시스템 통지(제목 `[switchboard] `)는 ID 대신 본문 그대로 일반 메일 뒤에 넣는다. 띄우는 쪽이 `label:<기반 역할>/<라벨>`(예: `label:flow/worker/22`) 앞으로 미리 보낸 지시서는 `SWITCHBOARD_LABEL`이 그 라벨인 세션이 연결되자마자 받는다(0.7.0) |
+| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear`·`/switchboard-takeover` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다. 세션을 `AGENT_MAIL_PROFILE=<프로필>`로 띄우면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)`/agent-mail/<프로필>.json`의 역할로 메일함을 구독해, 새 pending 메일을 턴이 끝난 뒤 「Agent Mail #12, #13 을 읽고 처리하라」 새 턴으로 넣는다(메일 상태는 pending 그대로, 0.2.0). 프로필이 없으면 메일함은 꺼진다. 메일을 넣기 전에 유휴이고 컨텍스트가 `SWITCHBOARD_COMPACT_TOKENS`(기본 `200k`, `0`·`off`면 끔) 이상이면 compact부터 하고 끝난 뒤 넣는다. 요약 지시문은 `SWITCHBOARD_COMPACT_INSTRUCTIONS`(0.3.0). 긴급 메일(`priority=urgent`)은 본문을 실행 중인 턴의 다음 도구 호출 결과 뒤에 끼워 넣고(유휴면 새 턴), 넣는 즉시 read로 표시한다(2000자 넘는 본문은 자르고 `agent-mail read <ID>`를 붙인다, 0.4.0). 입력창에 글이 있는 동안과 사람이 보낸 턴(질문 패널 답 포함)이 끝난 뒤 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 시간 보류 끔)은 일반 메일 턴을 미룬다. 긴급은 미루지 않는다(0.5.0). 연결할 때 기계·폴더로 번호(`<역할>-1`, `-2` …)를 받아 그 주소로 구독하므로 같은 프로필 세션이 둘이어도 번호 없이 온 메일은 `-1`만 받는다. 상태가 바뀔 때와 60초마다 presence(상태·컨텍스트 토큰·마지막 턴·`SWITCHBOARD_LABEL`·`SWITCHBOARD_PARENT`)를 보고한다. `boss`·`coordinator`(`SWITCHBOARD_SINGLE_ROLES`)가 `-2` 이상을 받으면 토스트로 경고하고, `/switchboard-takeover`로 `-1`을 가져온다(0.6.0). `SWITCHBOARD_PARENT`(부모 역할 주소)가 있으면 처음 연결될 때 부모에게 「연결됨(주소·라벨·기계·폴더)」 시스템 통지를 보내고, 받은 시스템 통지(제목 `[switchboard] `)는 ID 대신 본문 그대로 일반 메일 뒤에 넣는다. 띄우는 쪽이 `label:<기반 역할>/<라벨>`(예: `label:flow/worker/22`) 앞으로 미리 보낸 지시서는 `SWITCHBOARD_LABEL`이 그 라벨인 세션이 연결되자마자 받는다(0.7.0). 턴이 `rate_limit`·`overloaded`·`server_error`로 멈추면 30초부터 두 배(10분 상한, 8번까지) 뒤 「이어서 하라」 턴을 넣고, 다른 오류는 부모와 `SWITCHBOARD_BOSS_ROLES`(쉼표 목록)에, 권한 창·입력 대기는 부모에게 한 번 알린다. 권한 창이 뜰 도구 호출은 먼저 부모·대장에게 요청을 올려 `SWITCHBOARD_PERMISSION_WAIT_SECONDS`초(기본 120, `0`이면 끔) 안에 온 답을 한 번만 쓰고, 없으면 평소 화면 창으로 넘긴다. Bash 자식 프로세스에는 `AGENT_MAIL_ROLE=<번호 역할>`을 넘긴다(0.8.0) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -181,6 +183,17 @@ my-private-repo
 - 읽지 못하거나 설명이 안 되는 트리거는 전처럼 명령 글 전체를 본다. `bash -c`·`eval`·`bash <<EOF`는 안을 다시 나눈다.
 - 막을 때 위치 이름이 `명령:N`에서 `커밋 메시지:N`·`PR 제목·본문:N`으로 바뀌었다(전체를 볼 때만 `명령:N`).
 - 시험: 24건(오탐 재현·인용 방식별 메시지·`-F` 파일·diff·PR 본문·fail-closed 6건 추가).
+
+### 2026-11-17 — switchboard 0.8.0: 멈춤 감지와 원격 권한 답 (#81)
+
+- spec #73의 D8. 서버 계약 6(#24)을 따른다. heartbeat가 끊긴 세션(offline)과 연결되지 않은 라벨은 서버가 알리고, mod는 그 시스템 메일(`agent-mail/system`)을 0.7.0의 시스템 통지 길로 본문 그대로 넣는다.
+- 멈춤: `StopFailure`가 `rate_limit`·`overloaded`·`server_error`면 30초부터 두 배씩(10분 상한) 기다려 「이어서 하라」 턴을 넣는다. 8번을 넘기거나 다른 종류(`billing_error` 등)면 재시도 없이 presence 상태를 `error:<종류>`로 두고 부모와 대장(`SWITCHBOARD_BOSS_ROLES`)에게 한 번 알린다(오류 본문은 싣지 않는다). 사람이 그새 턴을 넣으면 재시도는 거둔다. 권한 창·입력 대기 알림(`Notification`)은 `blocked:<종류>`로 두고 부모에게 한 번 알린다.
+- presence 상태: 지금 서버는 `idle`·`busy`·`compacting`만 받는다(그 밖은 400). 400이면 그 세션은 자세한 상태 없이 셋만 보고한다. 서버가 `error:`·`blocked:`를 받게 되면 고칠 것 없이 보인다.
+- 원격 권한 답: `PermissionRequest` 훅이 요청(도구·짧은 요약)을 `/api/permissions`에 올리고 `SWITCHBOARD_PERMISSION_WAIT_SECONDS`초 기다린다. 답은 요청 때 정해진 부모 base나 대장만 유효하다(서버가 정하고, mod도 요청자 base·남의 답은 버린다). 시간 안에 답이 없거나, 만료됐거나, 답할 쪽이 없으면(409: 부모가 없거나 같은 base이고 서버 `AGENT_MAIL_BOSS_ROLES`도 없음) 평소 화면 창으로 넘어간다. 답은 한 번만 쓰고 「항상 허용」 규칙은 만들지 않는다. 답 알림(urgent, task_id = 요청 id)은 세션에 넣지 않는다.
+- 훅 예산: 모드 훅은 10초 예산이 있고, 예산은 `$` 응답을 기다리는 동안만 멈춘다. 처음에는 시계 타이머로 기다렸더니 10초 뒤 화면 창이 뜨고 늦게 온 허락은 버려졌다(실제로 켜 봄). 그래서 기다림을 그 훅의 `$.http`로 거는 서버 긴 대기로 바꿨다.
+- 번호 역할: 연결해 번호를 받으면 `AGENT_MAIL_ROLE=<번호 역할>`을 Bash 자식에 넘긴다. 세션 안의 `agent-mail read/complete`가 번호 주소로 돌아 D7의 「번호 역할 메일이 pending으로 남음」이 닫힌다. 정상 종료(`session.end`)에는 번호를 release 해 offline 통지가 나지 않게 한다.
+- 실제로 켜 봄(Haiku 두 세션, 같은 base의 부모·자식, 운영 서버): 자식 셸의 `AGENT_MAIL_ROLE`이 번호 역할이었고, 번호 주소로 온 메일을 자식이 read·complete 하자 complete가 됐다. 연결·권한 창 기다림·offline 통지가 부모 세션에 본문 그대로 들어갔다. 같은 base 부모라 권한 요청은 409로 바로 화면 창으로 넘어갔다.
+- 시험: mod 116건(멈춤 5건, 권한·메일 11건, 요약 1건 추가).
 
 ### 2026-11-17 — switchboard 0.7.0: 연결 통지와 라벨 메일 (#80)
 

@@ -1,7 +1,21 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, RenderSurface } from 'claude-code'
 
-import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, holdEnv, mailProfilePath, slotEnv, wireClaudeEvents } from '../adapters/claude'
+import {
+  claudeHost,
+  createEmitter,
+  createMidTurnBox,
+  compactEnv,
+  emitSubmit,
+  exportRole,
+  holdEnv,
+  mailProfilePath,
+  permissionEnv,
+  permissionSummary,
+  slotEnv,
+  wireClaudeEvents,
+  wireStallEvents,
+} from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { mcpLedger } from '../adapters/ledger'
 import {
@@ -18,6 +32,7 @@ import {
 } from '../core/questions'
 import type { Store } from '../core/questions'
 import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboard'
+import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
 import type { QuestionPanelBatch } from '../types'
@@ -316,6 +331,30 @@ export const pollLedger = ($: Self) => panelOf($).poll()
 export const register: Register = on => {
   // 포트 이벤트(턴·입력·compact)를 코어로 넘긴다. 관찰만 하므로 세션 흐름은 그대로다.
   wireClaudeEvents(on, emitter, box)
+  // 멈춤 감지(D8): API 오류 멈춤·사람 기다림을 코어로.
+  wireStallEvents(on, emitter)
+  // 정상 종료(/exit·/clear 등): 번호 역할을 release 한다. 안 하면 lease 가 끝날 때 서버가 부모에게 offline 통지를 보낸다.
+  on('session.end', async ($, e, next) => {
+    const b = board
+    board = undefined
+    await b?.stop()
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  // 원격 권한 답(D8): 창이 뜨기 전에 부모·대장에게 묻는다. 시간 안에 답이 없으면 창으로(next). 그 한 건에만, 규칙은 더하지 않는다.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const b = board
+    if (b === undefined) return next(e)
+    // 기다림은 이 훅의 `$.http` 긴 대기로 한다: 훅 예산(10초)은 `$` 응답을 기다리는 동안 멈춘다.
+    const ans = await b.askPermission(
+      { tool: e.tool_name, summary: permissionSummary(e.tool_name, e.tool_input, e.agent_type) },
+      { http: { fetch: async (url, init) => { const r = await $.http.fetch(url, init); return { status: r.status, ok: r.ok, headers: r.headers, text: r.text } } } },
+    )
+    if (ans === null) return next(e)
+    if (ans.decision === 'allow') return { decision: { behavior: 'allow' } }
+
+    return { decision: { behavior: 'deny', message: `${ans.by} 가 원격으로 거절했다${ans.note === undefined ? '' : `: ${ans.note}`}` } }
+  }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -331,11 +370,14 @@ export const register: Register = on => {
       description: '이 세션이 Agent Mail 역할의 -1 번호를 가져온다(번호 없이 온 메일을 받는다). 지금 -1 은 다른 번호로 밀린다',
     })
     // 코어를 띄운다: 세션 상태를 따라가고, AGENT_MAIL_PROFILE 이 있으면 메일함(D2)도 켠다.
-    board?.stop()
+    void board?.stop()
     const ce = await compactEnv($)
     const compactBeforeMail = compactConfig(ce.tokens, ce.instructions)
     const se = await slotEnv($)
+    const pe = await permissionEnv($)
     board = createSwitchboard(claudeHost($, emitter, box), {
+      log: text => void $.ui.log(text),
+      permissions: { waitMs: permissionWaitConfig(pe.wait), bosses: bossRolesConfig(pe.bosses) },
       mail: {
         profilePath: await mailProfilePath($),
         log: text => void $.ui.log(text),
@@ -344,6 +386,8 @@ export const register: Register = on => {
           ...(se.parent === undefined ? {} : { parent: se.parent }),
           singleRoles: singleRolesConfig(se.singles),
           warn: text => void $.ui.toast(text),
+          // 세션의 Bash 가 `agent-mail read/ack/complete` 를 번호 메일함으로 하게(D8).
+          onRole: role => void exportRole($, role),
         },
       },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),

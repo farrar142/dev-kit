@@ -8,8 +8,12 @@ import type { AgentHost, Timer } from './host'
 
 export type PresenceState = 'idle' | 'busy' | 'compacting'
 
-/** heartbeat 에 실을 그때그때의 presence. 모르는 칸은 빼면 서버가 이전 값을 둔다. */
-export type PresenceReport = { state: PresenceState; context_tokens?: number; last_turn_at?: string }
+/**
+ * heartbeat 에 실을 그때그때의 presence. 모르는 칸은 빼면 서버가 이전 값을 둔다.
+ * condition(D8)은 `error:<종류>`·`blocked:<종류>` 처럼 state 보다 자세한 상태다. 있으면 state 칸에 이것을 싣고,
+ * 서버가 400(아는 상태가 idle·busy·compacting 뿐, #73 서버 계약 4)이면 그 뒤로는 state 만 싣는다.
+ */
+export type PresenceReport = { state: PresenceState; condition?: string; context_tokens?: number; last_turn_at?: string }
 
 /** 이 세션을 가리키는 식별자(서버가 같은 기계·폴더를 같은 세션으로 본다). */
 export type SlotIdentity = { machine: string; directory: string; sessionId: string; label?: string; parent?: string }
@@ -43,8 +47,8 @@ export type Slot = {
   /** 상태가 바뀌었다: 곧 heartbeat 로 보고한다(돌고 있으면 그 뒤에 한 번 더). */
   report: () => void
   takeover: () => Promise<TakeoverResult>
-  /** 주기를 멈추고 lease 를 바로 끝낸다. */
-  stop: () => void
+  /** 주기를 멈추고 lease 를 바로 끝낸다. release 요청이 끝나면(실패해도) 풀린다. */
+  stop: () => Promise<void>
   grant: () => SlotGrant | null
 }
 
@@ -117,6 +121,10 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   let dirty = false
   let warnedFor: string | null = null
   let failing = false
+  /** 서버가 condition 을 state 로 받지 않았다(400): 이 slot 에서는 state 만 싣는다. */
+  let plainOnly = false
+  /** 마지막 요청 몸에 condition 을 실었다. */
+  let sentCondition = false
 
   const body = async (action: Action): Promise<string> => {
     const id = opts.identity
@@ -128,6 +136,7 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
       try {
         const p = await opts.presence()
         b.state = p.state
+        if (!plainOnly && p.condition !== undefined && p.condition !== '' && p.condition !== p.state) b.state = p.condition
         if (p.context_tokens !== undefined && Number.isInteger(p.context_tokens) && p.context_tokens >= 0) b.context_tokens = p.context_tokens
         if (p.last_turn_at !== undefined) b.last_turn_at = p.last_turn_at
       } catch {
@@ -135,10 +144,25 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
       }
     }
 
+    sentCondition = action !== 'release' && b.state !== undefined && !['idle', 'busy', 'compacting'].includes(String(b.state))
+
     return JSON.stringify(b)
   }
 
+  /** 요청 하나. condition 을 실었는데 400 이면 state 만 실어 한 번 더(그 뒤로도 state 만). */
   const call = async (action: Action): Promise<Reply> => {
+    const r = await call1(action)
+    if (r.kind === 'status' && r.status === 400 && sentCondition && !plainOnly) {
+      plainOnly = true
+      say(opts.log, 'switchboard slot: 서버가 자세한 상태(error:·blocked:)를 받지 않아 idle·busy·compacting 만 보고한다')
+
+      return call1(action)
+    }
+
+    return r
+  }
+
+  const call1 = async (action: Action): Promise<Reply> => {
     const a = opts.auth
     let timer: Timer | undefined
     try {
@@ -258,14 +282,14 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     return r.grant.displaced === undefined ? { ok: true, role: r.grant.role } : { ok: true, role: r.grant.role, displaced: r.grant.displaced }
   }
 
-  const stop = () => {
+  const stop = async (): Promise<void> => {
     if (stopped) return
     stopped = true
     tick?.cancel()
     tick = undefined
     if (grant !== null) {
       grant = null
-      void call('release')
+      await call('release')
     }
   }
 

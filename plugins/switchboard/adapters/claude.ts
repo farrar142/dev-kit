@@ -6,6 +6,8 @@
 //  - services → $.http·$.clock·$.fs
 //  - 메일함 프로필 경로 → AGENT_MAIL_PROFILE·XDG_CONFIG_HOME·HOME(mailProfilePath)
 //  - 메일 전 compact 설정 → SWITCHBOARD_COMPACT_TOKENS·SWITCHBOARD_COMPACT_INSTRUCTIONS(compactEnv)
+//  - 멈춤(D8) → classic.StopFailure(stop.failure)·classic.Notification(notification)·도구 호출 끝(tool.complete)
+//  - 원격 권한 설정 → SWITCHBOARD_PERMISSION_WAIT_SECONDS·SWITCHBOARD_BOSS_ROLES(permissionEnv), 요약 → permissionSummary
 import type { Hook, On } from 'claude-code'
 
 import type { AgentHost, HostEvent, HttpReply } from '../core/host'
@@ -92,10 +94,71 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
   // injectMidTurn: 본 세션 도구 호출이 끝나면 쌓인 글을 결과의 context 로 붙인다.
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
+    if (e.agentId === undefined) emitter.emit({ type: 'tool.complete' })
     if (e.agentId !== undefined || box.size() === 0 || r.deny !== undefined) return r
 
     return { ...r, context: [...(r.context ?? []), ...box.take()] }
   }).catch(($, e, next) => next(e))
+}
+
+/**
+ * 멈춤(D8): 본 세션의 API 오류 멈춤과 사람 기다림 알림을 포트 이벤트로. 오류 본문(error_details)·알림 글은 넘기지 않는다.
+ */
+export function wireStallEvents(on: On, emitter: Emitter): void {
+  on('classic.StopFailure', ($, e, next) => {
+    if (e.agent_id === undefined) emitter.emit({ type: 'stop.failure', kind: e.error })
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  on('classic.Notification', ($, e, next) => {
+    if (e.agent_id === undefined) emitter.emit({ type: 'notification', kind: e.notification_type })
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * 권한 요청의 짧은 요약(서버 500바이트 한도는 코어가 자른다). 셸은 명령, 파일 도구는 경로, 웹은 주소,
+ * 그 밖은 입력 JSON 앞부분. 서브에이전트의 요청이면 그 종류를 앞에 붙인다.
+ */
+export const permissionSummary = (tool: string, input: unknown, agentType?: string): string => {
+  const pick = (k: string) => (isObj(input) && typeof input[k] === 'string' ? (input[k] as string) : undefined)
+  let s: string
+  if (tool === 'Bash' || tool === 'PowerShell') s = pick('command') ?? ''
+  else if (pick('file_path') !== undefined) s = pick('file_path') ?? ''
+  else if (pick('url') !== undefined) s = pick('url') ?? ''
+  else if (pick('path') !== undefined) s = pick('path') ?? ''
+  else {
+    try {
+      s = JSON.stringify(input) ?? ''
+    } catch {
+      s = ''
+    }
+  }
+  const desc = pick('description')
+  const head = agentType === undefined || agentType === '' ? '' : `[${agentType}] `
+
+  return `${head}${s}${desc !== undefined && desc !== s ? ` — ${desc}` : ''}`.slice(0, 600)
+}
+
+/** 원격 권한 답 설정 글: SWITCHBOARD_PERMISSION_WAIT_SECONDS(기본 120, 0 이면 끔)·SWITCHBOARD_BOSS_ROLES(쉼표 목록). */
+export async function permissionEnv($: Self): Promise<{ wait: string | undefined; bosses: string | undefined }> {
+  try {
+    return { wait: await $.env.get('SWITCHBOARD_PERMISSION_WAIT_SECONDS'), bosses: await $.env.get('SWITCHBOARD_BOSS_ROLES') }
+  } catch {
+    return { wait: undefined, bosses: undefined }
+  }
+}
+
+/** 번호 역할을 자식 프로세스(세션의 Bash 등)에 넘긴다: `agent-mail read/ack/complete` 가 번호 메일함 기준으로 돈다(D8). */
+export async function exportRole($: Self, role: string): Promise<void> {
+  try {
+    await $.env.set('AGENT_MAIL_ROLE', role)
+  } catch {
+    // 못 넘겨도 메일함은 간다.
+  }
 }
 
 /** 사용자 제출을 포트 이벤트로(prompt.submit 훅은 질문 패널도 쓰므로 register 가 이것을 부른다). */
