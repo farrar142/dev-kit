@@ -44,6 +44,7 @@ import {
   parseRunCurrent,
   parseSendResult,
   routeLabel,
+  sameAsk,
   complete,
   patchBatch,
   markSent,
@@ -273,6 +274,13 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
 
       return
     }
+    // 터미널 탭 세션(switchboard 0.8.3+)은 질문 파일로도 온다. 이미 받았으면 두 번 올리지 않는다.
+    const dup = sameAsk(await load(), b)
+    if (dup !== undefined) {
+      log(`hook: 묶음 ${b.id}(terminal ${b.terminalId})는 질문 파일로 이미 받아 버림`)
+
+      return
+    }
     const info = await whereInfo(b.terminalId, b.workspaceId)
     await save(addBatch(await load(), { ...b, ...info }))
     log(
@@ -397,7 +405,8 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
       if (files.length === 0) return
       // 이미 있는 묶음(보낸 것 포함)과 지운 묶음은 다시 넣지 않는다. 파일 지우기가 실패해 같은 파일이
       // 남아 있어도 보낸 카드가 대기로 되살아나 또 보내는 일이 없게.
-      const have = new Set((await load()).map(dismissKey))
+      const current = await load()
+      const have = new Set(current.map(dismissKey))
       const gone = new Set((await loadDismissed()).map(d => d.key))
       const added: Batch[] = []
       const closes: { terminalId: string; ids: string[]; at: number; name: string }[] = []
@@ -415,10 +424,13 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
         else if (gone.has(dismissKey(b))) log(`inbox ${f.name}: 지운 묶음 ${b.id}이라 다시 띄우지 않고 버림`)
         else if (have.has(dismissKey(b))) {
           // 이미 받은 묶음 — 파일만 다시 지운다.
+        } else if (sameAsk([...current, ...added], b) !== undefined) {
+          log(`inbox ${f.name}: 터미널 ${b.terminalId} 의 ${b.id}는 훅으로 이미 받아 버림`)
         } else {
           have.add(dismissKey(b))
-          added.push(b)
-          log(`inbox: 채팅 묶음 ${b.id} 저장(질문 ${b.questions.length}개, ${routeLabel(b)}, cli ${isMailbox(b) ? (b.route.cli ?? 'PATH의 orca') : '-'})`)
+          // 터미널 묶음은 훅 길과 같이 터미널 제목·workspace 이름을 적는다(카드에 보인다).
+          added.push(isMailbox(b) ? b : { ...b, ...(await whereInfo(b.terminalId, b.workspaceId)) })
+          log(`inbox: ${isMailbox(b) ? '채팅' : '터미널'} 묶음 ${b.id} 저장(질문 ${b.questions.length}개, ${routeLabel(b)}, cli ${isMailbox(b) ? (b.route.cli ?? 'PATH의 orca') : '-'})`)
         }
         await io.removeInbox(f.name).catch(err => log(`inbox ${f.name} 지우기 실패: ${describeError(err)}`))
       }

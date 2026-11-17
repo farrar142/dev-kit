@@ -9,7 +9,7 @@ import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ASK, callAsk, callResolve, callSync, echoOn, handle, inboxEntry, ORCA_NOTE, orcaChat, parseRunId, RESOLVE } from './ask.mjs'
+import { ASK, callAsk, callResolve, callSync, echoOn, handle, inboxEntry, ORCA_NOTE, ORCA_TERMINAL_NOTE, orcaChat, orcaTerminal, parseRunId, RESOLVE } from './ask.mjs'
 import { claimFile, pruneLedger, readTextFile } from './orca.mjs'
 
 const Q = [
@@ -139,6 +139,67 @@ test('터미널 세션·mod 없는 세션은 남기지 않고, 쓰기 실패는 
   }
   assert.equal(callAsk({ questions: Q, panel_result: '질문 묶음 q3' }, broken.ctx).content[0].text, '질문 묶음 q3')
   assert.deepEqual(broken.warns, ['Orca 질문 패널 폴더에 남기지 못함: EACCES'])
+})
+
+const TERM_ENV = {
+  ORCA_TERMINAL_HANDLE: 'term_aaaa-1111',
+  ORCA_WORKSPACE_ID: 'ws-1::/home/me/app',
+  ORCA_PANE_KEY: 'tab-1:pane-1',
+  ORCA_USER_DATA_PATH: '/home/me/.config/orca',
+}
+
+test('Orca 터미널 탭 세션이면 터미널 handle 로 질문 파일을 남기고(Run 은 읽지 않는다), 터미널 안내를 붙인다', () => {
+  const f = fakeCtx(TERM_ENV)
+  f.ctx.runCurrent = () => {
+    throw new Error('터미널 세션은 run-current 를 부르지 않는다')
+  }
+  const { content } = callAsk({ questions: Q, panel_result: '질문 묶음 q5를 쌓았다.', panel_key: KEY }, f.ctx)
+  assert.equal(content[0].text, `질문 묶음 q5를 쌓았다.\n\n${ORCA_TERMINAL_NOTE}`)
+  assert.deepEqual(f.writes, [
+    {
+      dir: '/home/me/.question-panel/orca-inbox',
+      name: 'q5-term_aaaa-1111.json',
+      entry: {
+        v: 1,
+        id: 'q5',
+        key: KEY,
+        createdAt: 7,
+        questions: Q,
+        session: { terminal: 'term_aaaa-1111' },
+        workspaceId: 'ws-1::/home/me/app',
+        cwd: '/home/me/app',
+      },
+    },
+  ])
+  assert.deepEqual(f.warns, [])
+})
+
+test('터미널 탭 세션의 닫힘(resolve·panel_closed)은 handle 로 닫힘 파일을 남긴다', () => {
+  const f = fakeCtx(TERM_ENV)
+  callResolve({ id: 'q5', panel_result: '닫았다.' }, f.ctx)
+  callAsk({ questions: Q, panel_result: '질문 묶음 q6를 쌓았다.', panel_closed: ['q4'] }, f.ctx)
+  assert.deepEqual(
+    f.writes.map(w => [w.name, w.entry.session]),
+    [
+      ['closed-term_aaaa-1111-7-q5.json', { terminal: 'term_aaaa-1111' }],
+      ['closed-term_aaaa-1111-7-q4.json', { terminal: 'term_aaaa-1111' }],
+      ['q6-term_aaaa-1111.json', { terminal: 'term_aaaa-1111' }],
+    ],
+  )
+  assert.deepEqual(f.writes[0].entry, { v: 1, kind: 'closed', ids: ['q5'], session: { terminal: 'term_aaaa-1111' }, at: 7 })
+})
+
+test('터미널 탭 판정: 채팅 세션이 먼저고, handle 모양이 틀리면 남기지 않는다', () => {
+  assert.deepEqual(orcaTerminal(TERM_ENV), { terminal: 'term_aaaa-1111', workspaceId: 'ws-1::/home/me/app' })
+  assert.deepEqual(orcaTerminal({ ORCA_TERMINAL_HANDLE: 'term_x' }), { terminal: 'term_x', workspaceId: null })
+  assert.equal(orcaTerminal({ ...TERM_ENV, ...CHAT_ENV }), null)
+  assert.equal(orcaTerminal({ ORCA_TERMINAL_HANDLE: '../evil' }), null)
+  assert.equal(orcaTerminal({}), null)
+  // 채팅 환경에 handle 이 같이 있어도 채팅 길(Run 메일)로 간다
+  const both = fakeCtx({ ...TERM_ENV, ...CHAT_ENV })
+  callAsk({ questions: Q, panel_result: '질문 묶음 q3' }, both.ctx)
+  assert.equal(both.writes[0].name, 'q3-sess_1.json')
+  assert.deepEqual(both.writes[0].entry.session, { id: 'sess_1', runId: 'run_xxxx' })
 })
 
 test('채팅 세션 판정과 run-current 읽기', () => {

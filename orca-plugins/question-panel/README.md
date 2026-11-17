@@ -26,6 +26,18 @@ Claude(Orca 터미널) ── qp ask ──▶ question-panel mod: 묶음 q3 을
 - 줄에 `q3`이 들어 있어 Claude Code 쪽 `prompt.submit` 훅이 그 묶음을 「대화창에서 답함」 처리하고 장부에 `answered by chat`을 남기려 한다. 이 패널이 이미 장부를 차지한 뒤라 그 시도는 지고(③), 닫힘 기록의 주인은 바뀌지 않는다.
 - 터미널이 답을 받지 않으면(닫힘) 차지를 거두고 묶음을 대기로 남기며 패널에 경고를 띄운다.
 
+### ①-b 터미널 탭 세션의 질문 파일 (0.6.0, switchboard 0.8.3+)
+
+```
+Claude(Orca 터미널 탭) ── qp ask ──▶ switchboard MCP 서버: ORCA_TERMINAL_HANDLE 이 있고 채팅 세션이 아니면
+        q3 의 질문·key·session:{terminal: term_…}·workspaceId 를 ~/.question-panel/orca-inbox/q3-term_….json 에 남김
+워커: 폴더를 읽어 터미널 묶음(route 없음, terminalId = 그 handle)으로 저장 → 답은 ①과 같이 terminal.sendText
+```
+
+- 훅(①)이 오는 환경에서는 같은 질문이 훅과 파일로 두 번 온다. 먼저 온 쪽만 남긴다: key 가 둘 다 있으면 key 로, 없으면 같은 터미널·같은 q 번호·아직 대기 중·만든 시각 10분 안일 때 같은 묶음으로 본다(`sameAsk`).
+- 대화창에서 닫힌 묶음(`resolve`·`panel_closed`)은 `{v:1, kind:'closed', ids, session:{terminal}, at}` 닫힘 파일로 와서 그 터미널의 묶음만 닫는다.
+- 대장 Windows 세션에서 터미널 탭의 질문이 이 패널에 뜨지 않던 것(#102) 때문에 더했다. 훅이 왜 안 왔는지는 아직 모른다 — 폴더 길은 훅과 무관하게 닿는다.
+
 ### ② 채팅 세션 (0.4.0)
 
 ```
@@ -57,6 +69,7 @@ mod: 대기 묶음이 있으면 2초마다 sync ──────────�
 | 세션 | 질문 카드 | 답 넣기 | 근거 |
 | --- | --- | --- | --- |
 | Orca 터미널에서 도는 Claude Code(question-panel 0.6.0+) | 됨(MCP 도구라 훅을 탐) | 경로는 있음(`terminal.sendText`) | 아래 「0.3.0 — 풀림」 |
+| Orca 터미널 탭의 Claude Code + switchboard 0.8.3+ | 됨(훅 + 질문 폴더, 0.6.0) | 됨(`terminal.sendText`) | 위 「①-b」 |
 | Orca 채팅 UI(stream-json, `ORCA_STRUCTURED_SESSION=1`, question-panel 0.6.1+) | 됨(MCP 서버가 폴더에 남김) | 됨(오케스트레이션 메일함, `orca` CLI) | 아래 「채팅 세션(0.4.0)」 |
 | SSH·WSL 호스트의 에이전트 | 안 됨 | — | Orca 문서: 도구 훅은 SSH·WSL에 아직 없다 |
 
@@ -103,6 +116,12 @@ orca plugin open local.question-panel --panel questions --json
 확인: Orca 터미널에서 Claude Code(question-panel 0.6.1+ 설치)를 띄우고 질문 도구를 부르게 한다 → 「질문」 패널에 카드 → 고르고 「답 보내기」 → 그 터미널에 `[질문 패널 답 q1] …` 줄이 들어가 Claude가 이어서 답한다.
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
+
+## 0.6.0 — 터미널 탭 세션의 질문 파일 (#102)
+
+- 질문 폴더 파일이 `session:{id}`(채팅) 말고 `session:{terminal: term_…}`(터미널 탭)도 받는다. 묶음은 터미널 묶음(route 없음)이라 답은 `terminal.sendText`로 그 터미널에, 포커스 밖이면 `workspaceId`로 그 workspace 를 연다(①과 같은 길).
+- 닫힘 파일도 `session:{terminal}`을 받는다. 훅과 파일이 같은 묶음을 두 번 올리지 않는다(위 「①-b」).
+- 시험: 67건(터미널 질문 파일·닫힘·중복 막기 5건 추가). work Linux Orca 1.4.254 터미널 탭에서 switchboard 가 쓴 실제 파일을 `batchFromInbox`가 터미널 묶음으로 읽고, 그 답 줄을 `orca terminal send`로 넣어 세션이 받는 것까지 봤다(이 기계 Orca 런타임에는 플러그인 서비스가 없어 패널 카드는 Windows에서 본다).
 
 ## 0.5.0 — 닫힘 장부: 한쪽에서 답하면 다른 패널도 닫힌다 (#64)
 
@@ -201,7 +220,7 @@ mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5�
 ## 시험
 
 ```sh
-orca plugin test orca-plugins/question-panel --json    # 시험 62건(0.5.2; 2026-11-17 이 기계에서는 Orca 시험 하네스가 없어 못 돌림)
+orca plugin test orca-plugins/question-panel --json    # 시험 67건(0.6.0; 2026-11-17 이 기계에서는 Orca 시험 하네스가 없어 못 돌림)
 node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·장부 sync·stdio 포함) 17건
 # orca CLI 가 orcad-artifacts 의 orca-test-register.mjs 를 못 찾으면(리눅스 설치에서 봄) node 로 바로:
 # node --import <Orca 설치>/resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test src/*.test.ts* worker/*.test.ts

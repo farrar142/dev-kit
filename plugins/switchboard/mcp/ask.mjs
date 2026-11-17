@@ -135,7 +135,7 @@ export const ORCA_INBOX_VERSION = 1
 export const ORCA_NOTE =
   'Orca 사이드바 「질문」 패널로도 답할 수 있습니다(패널에서 고른 답은 「[질문 패널 답] 묶음 ID」 오케스트레이션 메일로 옵니다). 목록에 없는 답은 패널의 「기타」로 글을 써서 보낼 수 있습니다.'
 
-/** Orca 채팅 세션(stream-json)이면 세션 정보, 아니면 null. 터미널 세션은 Orca 훅이 질문을 가져간다. */
+/** Orca 채팅 세션(stream-json)이면 세션 정보, 아니면 null. 터미널 탭 세션은 orcaTerminal. */
 export const orcaChat = env => {
   const sessionId = str(env?.ORCA_AGENT_SESSION_ID).trim()
   if (str(env?.ORCA_STRUCTURED_SESSION) === '' || sessionId === '') return null
@@ -146,6 +146,42 @@ export const orcaChat = env => {
     userData: str(env.ORCA_USER_DATA_PATH).trim() || null,
   }
 }
+
+export const ORCA_TERMINAL_NOTE =
+  'Orca 사이드바 「질문」 패널로도 답할 수 있습니다(패널에서 고른 답은 이 터미널에 「[질문 패널 답 묶음 ID] …」 글로 들어옵니다). 목록에 없는 답은 패널의 「기타」로 글을 써서 보낼 수 있습니다.'
+
+/**
+ * Orca 터미널 탭 세션이면 그 터미널 handle 과 workspace, 아니면 null(0.8.3).
+ * 채팅 세션(orcaChat)이 먼저다. 답은 Orca 질문 패널이 terminal.sendText 로 이 터미널에 넣는다.
+ */
+export const orcaTerminal = env => {
+  if (orcaChat(env) !== null) return null
+  const terminal = str(env?.ORCA_TERMINAL_HANDLE).trim()
+  if (!/^term_[A-Za-z0-9_-]{1,120}$/.test(terminal)) return null
+
+  return { terminal, workspaceId: str(env.ORCA_WORKSPACE_ID).trim() || null }
+}
+
+/** 이 세션이 Orca 질문 패널 폴더에 남길 곳: 채팅이면 세션, 터미널 탭이면 handle. 파일 이름 조각도 준다. */
+const orcaTarget = env => {
+  const chat = orcaChat(env)
+  if (chat !== null) return { chat, slug: chat.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_') }
+  const term = orcaTerminal(env)
+
+  return term === null ? null : { term, slug: term.terminal }
+}
+
+/** 터미널 탭 세션의 질문 파일 하나(Orca 질문 패널 0.6.0 batchFromInbox 가 읽는 모양). */
+export const terminalInboxEntry = ({ id, questions, term, cwd, now, key }) => ({
+  v: ORCA_INBOX_VERSION,
+  id,
+  ...(isKey(key) ? { key } : {}),
+  createdAt: now,
+  questions,
+  session: { terminal: term.terminal },
+  workspaceId: term.workspaceId,
+  cwd,
+})
 
 /** mod가 만든 결과 글의 「질문 묶음 q3」. */
 export const batchIdOf = text => text.match(/질문 묶음 (q\d+)/)?.[1] ?? null
@@ -185,31 +221,36 @@ export const inboxEntry = ({ id, questions, chat, runId, cwd, now, key }) => ({
   cwd,
 })
 
-/** 채팅 세션이면 질문을 Orca 질문 패널 폴더에 남긴다. 남겼으면 true. 실패는 stderr 에 남기고 false. */
+/**
+ * 채팅 세션·터미널 탭 세션이면 질문을 Orca 질문 패널 폴더에 남긴다. 남겼으면 붙일 안내 글, 아니면 null.
+ * 실패는 stderr 에 남기고 null.
+ */
 export const toOrca = (questions, text, ctx, key) => {
-  const chat = orcaChat(ctx.env)
+  const target = orcaTarget(ctx.env)
   const id = batchIdOf(text)
-  if (chat === null || id === null || !Array.isArray(questions) || questions.length === 0) return false
+  if (target === null || id === null || !Array.isArray(questions) || questions.length === 0) return null
   try {
-    const runId = ctx.runCurrent(chat)
-    const name = `${id}-${chat.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}.json`
-    const entry = inboxEntry({ id, questions, chat, runId, cwd: ctx.cwd, now: ctx.now, key })
+    const name = `${id}-${target.slug}.json`
+    const entry =
+      target.chat !== undefined
+        ? inboxEntry({ id, questions, chat: target.chat, runId: ctx.runCurrent(target.chat), cwd: ctx.cwd, now: ctx.now, key })
+        : terminalInboxEntry({ id, questions, term: target.term, cwd: ctx.cwd, now: ctx.now, key })
     ctx.write(ctx.inboxDir, name, JSON.stringify(entry))
 
-    return true
+    return target.chat !== undefined ? ORCA_NOTE : ORCA_TERMINAL_NOTE
   } catch (err) {
     ctx.warn?.(`Orca 질문 패널 폴더에 남기지 못함: ${err instanceof Error ? err.message : String(err)}`)
 
-    return false
+    return null
   }
 }
 
-/** 닫힘 파일 하나(Orca 질문 패널 closeFromInbox 가 읽는 모양, 0.6.3). */
-export const closedEntry = ({ ids, chat, now }) => ({
+/** 닫힘 파일 하나(Orca 질문 패널 closeFromInbox 가 읽는 모양, 0.6.3). 터미널 탭이면 `session:{terminal}`(0.8.3). */
+export const closedEntry = ({ ids, chat, term, now }) => ({
   v: ORCA_INBOX_VERSION,
   kind: 'closed',
   ids,
-  session: { id: chat.sessionId },
+  session: chat !== undefined ? { id: chat.sessionId } : { terminal: term.terminal },
   at: now,
 })
 
@@ -218,12 +259,12 @@ export const closedEntry = ({ ids, chat, now }) => ({
  * 채팅 세션에는 Orca 훅이 오지 않아, 이것이 없으면 Orca 카드가 열린 채 남아 또 답이 간다.
  */
 export const closedToOrca = (ids, ctx) => {
-  const chat = orcaChat(ctx?.env)
+  const target = orcaTarget(ctx?.env)
   const list = batchIds(ids)
-  if (chat === null || list.length === 0) return false
+  if (target === null || list.length === 0) return false
   try {
-    const name = `closed-${chat.sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${ctx.now}-${list.join('_')}.json`
-    ctx.write(ctx.inboxDir, name, JSON.stringify(closedEntry({ ids: list, chat, now: ctx.now })))
+    const name = `closed-${target.slug}-${ctx.now}-${list.join('_')}.json`
+    ctx.write(ctx.inboxDir, name, JSON.stringify(closedEntry({ ids: list, chat: target.chat, term: target.term, now: ctx.now })))
 
     return true
   } catch (err) {
@@ -239,12 +280,12 @@ export const callAsk = (args, ctx) => {
   // mod 가 붙인 panel_closed: 그새 대화창 글로 답해 닫힌 묶음들. Orca 카드도 닫는다.
   if (ctx !== undefined) closedToOrca(args?.panel_closed, ctx)
   if (typeof prepared === 'string' && prepared !== '') {
-    const sent = ctx !== undefined && toOrca(args?.questions, prepared, ctx, args?.panel_key)
+    const note = ctx === undefined ? null : toOrca(args?.questions, prepared, ctx, args?.panel_key)
     // mod가 넘긴 옛 결과(블록을 옮겨 적게 하는 글). QUESTION_PANEL_ECHO=1일 때만 그것을 돌려준다.
     const echo = str(args?.panel_echo)
     const text = echo !== '' && echoOn(ctx?.env) ? echo : prepared
 
-    return { content: [{ type: 'text', text: sent ? `${text}\n\n${ORCA_NOTE}` : text }] }
+    return { content: [{ type: 'text', text: note !== null ? `${text}\n\n${note}` : text }] }
   }
   const questions = Array.isArray(args?.questions) ? args.questions : []
   if (questions.length === 0) return { isError: true, content: [{ type: 'text', text: 'questions가 비었다.' }] }
