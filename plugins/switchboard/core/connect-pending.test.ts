@@ -30,10 +30,10 @@ test('연결 전 pending: 입력창에 글이 있으면 미루고 그 까닭을 
   host.emit({ type: 'input.change', text: '쓰는 중' })
   const a = mail.send()
   const b = mail.send()
-  await host.clock.advance(5 * MIN)
+  await host.clock.advance(4 * MIN)
   expect(host.turns).toEqual([])
   const held = logs.filter(l => l.includes('미룸'))
-  expect(held).toEqual(['switchboard 메일함: 일반 메일 2통(#1, #2) 미룸 — 입력창에 글이 있음(비우거나 보내면 넣는다)'])
+  expect(held).toEqual(['switchboard 메일함: 일반 메일 2통(#1, #2) 미룸 — 입력창에 글이 있음(비우거나 보내면, 마지막 입력 5분 뒤 넣는다)'])
 
   host.emit({ type: 'input.change', text: '' })
   await flush()

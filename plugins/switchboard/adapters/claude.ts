@@ -90,8 +90,10 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
 
     return r
   }).catch(($, e, next) => next(e))
+  // 기록 불러오기·되돌리기만 사람이 친 글이다. 플러그인 채우기·엔진 쓰기(prefill·받아들인 완성 등)·지우기는 아니다(#123).
+  // 다음 답 추천(prompt.suggest)과 「※ recap:」은 입력창을 바꾸지 않아 여기로 오지 않는다(재현으로 확인).
   on('prompt.change', ($, e, next) => {
-    emitter.emit({ type: 'input.change', text: e.text })
+    emitter.emit({ type: 'input.change', text: e.text, by: changeBy(e.origin.kind) })
 
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -179,6 +181,9 @@ export const emitSubmit = (emitter: Emitter, text: string, originKind?: string) 
 export const submitOrigin = (kind: string | undefined): 'user' | 'plugin' | 'other' =>
   kind === 'composer' || kind === 'bridge' ? 'user' : kind === 'plugin' ? 'plugin' : 'other'
 
+/** 모드 prompt.change 의 origin.kind → 포트 by. history(기록 불러오기)·undo(되돌리기)만 사람이 친 글이다. */
+export const changeBy = (kind: string): 'person' | 'other' => (kind === 'history' || kind === 'undo' ? 'person' : 'other')
+
 /**
  * 기계 이름: 모드 API에는 없어 SWITCHBOARD_MACHINE, 없으면 HOSTNAME(bash 는 보통 내보내지 않는다),
  * 그것도 없으면 /etc/hostname 을 읽는다($.env.get 은 글자 그대로의 이름만 받는다). 번호 역할(D6)은 이 이름과
@@ -249,6 +254,15 @@ export async function compactEnv($: Self): Promise<{ tokens: string | undefined;
 export async function holdEnv($: Self): Promise<string | undefined> {
   try {
     return await $.env.get('SWITCHBOARD_HOLD_MINUTES')
+  } catch {
+    return undefined
+  }
+}
+
+/** 입력 중 보류 상한(분, #123): SWITCHBOARD_TYPING_MINUTES(기본 5, 0 이면 상한 없음). */
+export async function typingEnv($: Self): Promise<string | undefined> {
+  try {
+    return await $.env.get('SWITCHBOARD_TYPING_MINUTES')
   } catch {
     return undefined
   }

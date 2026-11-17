@@ -9,6 +9,7 @@ import {
   emitSubmit,
   exportRole,
   holdEnv,
+  typingEnv,
   mailProfilePath,
   permissionEnv,
   permissionSummary,
@@ -31,7 +32,7 @@ import {
   VIA_TEXT,
 } from '../core/questions'
 import type { Store } from '../core/questions'
-import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboard'
+import { compactConfig, createSwitchboard, holdConfig, typingConfig } from '../core/switchboard'
 import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
@@ -471,6 +472,7 @@ export const register: Register = on => {
       },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
       holdAfterUserMs: holdConfig(await holdEnv($)),
+      typingLimitMs: typingConfig(await typingEnv($)),
     })
     await board.start().catch(() => false)
     // 다시 뜰 때(reload·resume) 입력창에 이미 글이 있으면 입력 중으로 시작한다.

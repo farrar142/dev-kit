@@ -1,7 +1,7 @@
 // Claude 어댑터 시험(얕게): 포트 호출이 모드 API로 이어지는지만 본다.
 import { expect, test } from 'claude-code/testing'
 
-import { claudeHost, createEmitter, createMidTurnBox, permissionSummary, submitOrigin } from '../adapters/claude'
+import { changeBy, claudeHost, wireClaudeEvents, createEmitter, createMidTurnBox, permissionSummary, submitOrigin } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 
 // 시험의 $ 는 플러그인 $ 의 일부만 가진 Engine 이다(clock·session.usage 등이 없다). 어댑터가 쓰는 것만 부른다.
@@ -87,4 +87,21 @@ test('Claude 어댑터: 권한 요약은 셸 명령·파일 경로·주소를 �
   expect(permissionSummary('WebFetch', { url: 'https://example.com', prompt: 'p' }, 'errand')).toBe('[errand] https://example.com')
   expect(permissionSummary('mcp__x__y', { a: 1 })).toBe('{"a":1}')
   expect(permissionSummary('Bash', { command: 'x'.repeat(2000) }).length).toBe(600)
+})
+
+test('Claude 어댑터: prompt.change 는 기록 불러오기·되돌리기만 사람 입력이다(#123)', () => {
+  expect(changeBy('history')).toBe('person')
+  expect(changeBy('undo')).toBe('person')
+  for (const k of ['plugin', 'engine', 'app', 'clear', 'unknown-kind']) expect(changeBy(k)).toBe('other')
+})
+
+test('Claude 어댑터: 다음 답 추천(prompt.suggest)은 입력 이벤트를 내지 않는다(#123)', async ($, on) => {
+  const emitter = createEmitter()
+  const seen: unknown[] = []
+  emitter.on(e => void seen.push(e))
+  wireClaudeEvents(on, emitter, createMidTurnBox())
+  // 시험 엔진에는 추천을 그리는 쪽이 없어 보여 줬다고 답하는 끝을 단다.
+  on('prompt.suggest', () => ({ isShown: true }))
+  await $.prompt.suggest({ text: '응, 옮겨 줘' } as any)
+  expect(seen).toEqual([])
 })
