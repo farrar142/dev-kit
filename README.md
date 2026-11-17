@@ -11,7 +11,7 @@
 /plugin install test-speed@dev-kit
 /plugin install token-diet@dev-kit
 /plugin install question-panel@dev-kit   # switchboard로 옮기는 중: 아래 「question-panel → switchboard 이전」
-/plugin install switchboard@dev-kit
+/plugin install switchboard@dev-kit      # 협업자 PC 연결: 아래 「switchboard 협업자 연결」
 /plugin install security-recon@dev-kit
 /plugin install idle-compact@dev-kit
 /plugin install context-cap@dev-kit
@@ -128,6 +128,48 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - 패널의 쌓인 질문은 옮겨지지 않는다(저장 키가 플러그인 이름을 따른다). 대기 중인 질문이 없을 때 옮긴다.
 - 닫힘 장부·Orca 질문 폴더(`~/.question-panel/…`)는 그대로 같이 쓴다.
 - 계획: 모든 기계가 옮기면 question-panel은 이 안내만 남기고 마켓플레이스에서 내린다.
+
+## switchboard 협업자 연결
+
+플러그인은 프로필 파일(`<설정 폴더>/switchboard/<이름>.json`)의 서버 주소·역할·토큰을 직접 읽는다. 협업자 PC에는 `switchboard` CLI가 `join` 한 번에만 필요하고, 플러그인이 붙는 데는 필요 없다.
+
+1. 전역 대장이 1회용 코드를 만든다(대시보드 설정 「협업자」에서도 된다).
+
+```
+switchboard invite --prefix partner-a --role partner-a/alice --ttl 72h
+```
+
+2. 협업자 PC에서 코드를 쓴다.
+
+```
+switchboard join https://mail.example.com ABCD-1234 --role partner-a/alice
+```
+
+```
+Role: partner-a/alice
+Group: partner-a
+Profile: ~/.config/switchboard/mail.example.com.json
+SWITCHBOARD_PROFILE=mail.example.com
+```
+
+- `--profile NAME`이 없으면 서버 호스트 이름이 프로필 이름이 된다. 같은 이름 프로필이 있으면 코드를 쓰기 전에 실패한다.
+- 프로필 파일은 권한 0600이고 토큰은 출력되지 않는다.
+- `SWITCHBOARD_CONFIG_DIR`를 쓰면 출력 맨 앞에 `SWITCHBOARD_CONFIG_DIR=<폴더>` 줄도 붙는다.
+
+3. 출력된 줄을 Claude Code 세션 env에 넣는다(`~/.claude/settings.json`).
+
+```json
+{
+  "env": {
+    "SWITCHBOARD_PROFILE": "mail.example.com"
+  }
+}
+```
+
+`SWITCHBOARD_CONFIG_DIR`가 출력됐으면 `"SWITCHBOARD_CONFIG_DIR": "<폴더>"`도 같은 `env`에 넣는다. 세션을 다시 띄우면 붙는다.
+
+- 묶음 밖 역할에는 보낼 수 없다. 받은 메일에 회신은 된다.
+- 묶음 대장(`partner-a/boss`) 판정은 서버 `/api/whoami`가 한다(switchboard 0.12.0 이상).
 
 ## context-cap 쓰는 법
 
