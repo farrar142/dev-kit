@@ -60,12 +60,12 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.1, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.2, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
     core/profile.ts                프로필 위치(0.8.1): agent-mail CLI와 같은 규칙(`AGENT_MAIL_CONFIG_DIR` → Windows `%APPDATA%`·macOS `~/Library/Application Support`·그 밖 `XDG_CONFIG_HOME` → `~/.config`, 홈은 `HOME` → `USERPROFILE`, 옛 `~/.config/agent-mail`은 뒤 후보)
-    core/slot.ts                   번호 역할·presence(0.6.0): /api/slots/register로 `<역할>-N`을 받고(같은 기계·폴더면 원래 번호), 상태가 바뀔 때·60초마다 heartbeat에 presence를 싣고(404면 다시 register), 단일 역할 -2 경고, takeover, 끌 때 release
+    core/slot.ts                   번호 역할·presence(0.6.0): /api/slots/register로 `<역할>-N`을 받고(같은 기계·폴더면 원래 번호, 그 폴더를 다른 세션이 쥐고 있으면 세션 표지를 붙여 다음 번호), 상태가 바뀔 때·60초마다 heartbeat에 presence를 싣고(404면 다시 register), 단일 역할 -2 경고, takeover, 끌 때 release
     core/stall.ts                  멈춤 감지(0.8.0): 턴 실패 종류별 재시도(30초부터 두 배, 10분 상한, 8번), 안 풀리는 오류·권한 창·입력 대기를 presence 상태(`error:<종류>`·`blocked:<종류>`)와 한 번의 통지로
     core/permission.ts             원격 권한 답(0.8.0): 요청을 /api/permissions 에 올리고 서버 긴 대기로 답을 기다린다. 부모·대장 base가 아닌 답은 버리고, 시간 안에 답이 없거나 답할 쪽이 없으면(409) 화면 창으로
     core/mailtest.ts               시험 도우미: 가짜 Agent Mail 서버(긴 대기 계약)와 메일함을 켠 코어 준비
@@ -177,6 +177,14 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.8.2: 같은 폴더 두 세션의 번호, 입력 중 보류 (#99, #100)
+
+- 번호 역할: 서버는 (base, 기계, 폴더)로 번호를 되찾아 주므로 같은 기계·폴더의 두 번째 세션이 첫 세션의 번호를 가져갔다. 이제 번호를 받기 전에 `GET /api/slots`로 살아 있는 줄을 보고, 같은 기계·폴더를 다른 세션 id가 쥐고 있으면 폴더 뒤에 세션 표지(` #<세션 id 앞 8자>`)를 붙여 등록해 다음 번호를 받는다. 같은 세션(resume)은 같은 표지라 원래 번호를 되찾는다. 서버 계약은 그대로다(서버가 identity에 session_id를 넣어 주면 표지는 필요 없다).
+- 입력 중 보류: 이 CLI 판에서 사람이 치는 글자·붙여 넣기는 `prompt.edit`로 오고 `prompt.change`는 기록 불러오기·지우기·채우기에만 온다. 0.5.0부터 `prompt.change`만 들어 입력창에 글이 있어도 일반 메일이 들어갔다. 이제 `prompt.edit`도 듣고, 다시 뜰 때(reload·resume) `$.prompt.read()`로 입력창을 읽어 시작한다. urgent는 그대로 바로 넣는다.
+- 실제로 켜 봄(Linux, Haiku): 같은 폴더 두 세션이 -2·-3을 받았고, 강제 종료 뒤 `--resume`한 세션은 원래 번호로 돌아왔다(정상 종료는 번호를 release 하므로 다시 뜨면 그때 비어 있는 번호). 입력창에 글을 둔 채 보낸 메일은 「미룸 — 입력창에 글이 있음」으로 미뤘다가 글을 지우자 들어갔다.
+- 시험 메모: work의 `~/.bashrc`에 `alias claude='claude --dangerously-skip-permissions'`가 있어 권한 창 시험은 `command claude`로 띄운다. 플러그인을 local 범위로 켤 때는 `claude plugin install --scope local`을 쓴다.
+- 시험: mod 144건(같은 폴더 두 세션·resume 4건 추가).
 
 ### 2026-11-17 — switchboard 0.8.1: Windows 프로필 경로와 연결 전 메일 (#97)
 

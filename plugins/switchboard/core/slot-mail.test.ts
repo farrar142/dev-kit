@@ -51,6 +51,18 @@ const fakeServer = (clock: FakeClock) => {
   }
 
   const attach = (host: FakeHost) => {
+    // 목록(GET /api/slots): lease 가 살아 있는 줄. 동작 경로(/api/slots/…)는 아래 처리기가 먼저 맞는다.
+    host.http.route(`${EP}/api/slots`, async ({ init }: { url: string; init: HttpInit }) => {
+      if (legacy) return { status: 404, text: '404 page not found' }
+      if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
+      const base = (init.headers['X-Agent-Mail-Role'] ?? '').replace(/-\d+$/, '')
+      const now = await clock.now()
+      const out = rows
+        .filter(r => r.base === base && live(r, now))
+        .map(r => ({ ...view(r, now), ...(typeof r.presence.session_id === 'string' ? { session_id: r.presence.session_id } : {}) }))
+
+      return { text: JSON.stringify(out) }
+    })
     host.http.route(`${EP}/api/slots/`, async ({ url, init }: { url: string; init: HttpInit }) => {
       if (legacy) return { status: 404, text: '404 page not found' }
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
@@ -136,9 +148,9 @@ const fakeServer = (clock: FakeClock) => {
 const session = async (
   server: ReturnType<typeof fakeServer>,
   clock: FakeClock,
-  o: { base: string; machine: string; cwd?: string; label?: string; parent?: string; singleRoles?: readonly string[] },
+  o: { base: string; machine: string; cwd?: string; sessionId?: string; label?: string; parent?: string; singleRoles?: readonly string[] },
 ) => {
-  const host = fakeHost({ clock, identity: { machine: o.machine, cwd: o.cwd ?? '/work/repo', sessionId: `sess-${o.machine}` } })
+  const host = fakeHost({ clock, identity: { machine: o.machine, cwd: o.cwd ?? '/work/repo', sessionId: o.sessionId ?? `sess-${o.machine}` } })
   host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role: o.base, token: TOKEN }))
   server.attach(host)
   const logs: string[] = []
@@ -304,4 +316,51 @@ test('slot API 가 없는 옛 서버면 프로필 역할 그대로 구독하고,
   await clock.advance(HEARTBEAT_MS)
   expect(a.board.mail().role).toBe('team/worker-1')
   expect((await a.board.takeover()).ok).toBe(true)
+})
+
+test('slot: 같은 기계·폴더의 두 번째 세션은 첫 세션의 번호를 뺏지 않고 다음 번호를 받는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  const a = await session(server, clock, { base: 'team/coordinator', machine: 'box-a', sessionId: 'aaaaaaaa-1111' })
+  const b = await session(server, clock, { base: 'team/coordinator', machine: 'box-a', sessionId: 'bbbbbbbb-2222' })
+  expect(a.board.mail().role).toBe('team/coordinator-1')
+  expect(b.board.mail().role).toBe('team/coordinator-2')
+  expect(b.logs).toContain('switchboard slot: 같은 기계·폴더를 다른 세션(team/coordinator-1)이 쓰고 있어 따로 번호를 받는다')
+  expect(await server.online()).toEqual(['team/coordinator-1@box-a:/work/repo', 'team/coordinator-2@box-a:/work/repo #bbbbbbbb'])
+
+  // 두 번째를 닫아도 첫 세션은 -1 그대로(heartbeat 가 이어진다).
+  await b.board.stop()
+  await clock.advance(HEARTBEAT_MS * 4)
+  expect(a.board.mail().role).toBe('team/coordinator-1')
+  expect(await server.online()).toEqual(['team/coordinator-1@box-a:/work/repo'])
+})
+
+test('slot: 같은 세션이 다시 뜨면(resume) 원래 번호를 되찾는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  const a = await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'aaaaaaaa-1111' })
+  expect(a.board.mail().role).toBe('team/worker-1')
+  // 죽은 채(release 없이, lease 는 살아 있음) 같은 세션 id 로 다시 뜬다: 자기 줄이므로 같은 번호.
+  const again = await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'aaaaaaaa-1111' })
+  expect(again.board.mail().role).toBe('team/worker-1')
+  expect(again.logs.some(l => l.includes('따로 번호'))).toBe(false)
+})
+
+test('slot: 두 번째 세션도 resume 하면 그 세션 표지로 원래 번호(-2)를 되찾는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'aaaaaaaa-1111' })
+  const b = await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'bbbbbbbb-2222' })
+  expect(b.board.mail().role).toBe('team/worker-2')
+  // 첫 세션이 살아 있는 동안 두 번째가 죽었다가(release 없이) 같은 id 로 다시 뜬다.
+  const again = await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'bbbbbbbb-2222' })
+  expect(again.board.mail().role).toBe('team/worker-2')
+})
+
+test('slot: 같은 기계·폴더에 다른 세션이 없으면 폴더 그대로 등록한다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  const a = await session(server, clock, { base: 'team/worker', machine: 'box-a', sessionId: 'aaaaaaaa-1111' })
+  expect(a.board.mail().role).toBe('team/worker-1')
+  expect(server.slotBodies.filter(x => x.action === 'register').map(x => (JSON.parse(x.body) as { directory: string }).directory)).toEqual(['/work/repo'])
 })

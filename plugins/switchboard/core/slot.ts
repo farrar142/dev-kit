@@ -2,6 +2,7 @@
 // 상태가 바뀔 때와 60초마다 heartbeat 로 lease 를 늘리며 presence(상태·컨텍스트 토큰·마지막 턴 등)를 싣는다.
 //  - 서버 계약: #73 댓글 「서버 계약 3: slot·lease(#20)」「서버 계약 4: presence(#21)」.
 //  - 같은 기계·폴더로 다시 뜨면 서버가 원래 번호를 돌려준다(reclaimed). heartbeat 404 → 다시 register.
+//  - 같은 기계·폴더를 지금 다른 세션이 쥐고 있으면(GET /api/slots 의 session_id) 폴더에 세션 표지를 붙여 다음 번호를 받는다.
 //  - 단일 역할(boss·coordinator 등)인데 -2 이상을 받으면 경고한다. takeover 로 -1 을 가져올 수 있다.
 //  - 토큰은 요청 머리(Authorization)에만 싣는다. 몸·기록·경고 어디에도 넣지 않는다.
 import type { AgentHost, Timer } from './host'
@@ -100,6 +101,9 @@ const parseGrant = (text: string): GrantReply | null => {
   return g
 }
 
+/** 같은 기계·폴더의 두 번째 세션이 서버에 싣는 폴더: 세션마다 다르고, 같은 세션(resume)이면 같다. */
+export const sessionDirectory = (dir: string, sessionId: string) => `${dir} #${sessionId.slice(0, 8)}`
+
 type Action = 'register' | 'heartbeat' | 'takeover' | 'release'
 type Reply = { kind: 'ok'; grant: GrantReply } | { kind: 'status'; status: number } | { kind: 'error' }
 
@@ -126,9 +130,44 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   /** 마지막 요청 몸에 condition 을 실었다. */
   let sentCondition = false
 
+  /**
+   * 서버에 싣는 폴더. 서버는 (base, 기계, 폴더)로 번호를 되찾아 주므로, 같은 기계·폴더를 지금 다른 세션이 쥐고 있으면
+   * 폴더 뒤에 세션 표지(` #<세션 id 앞 8자>`)를 붙여 따로 번호를 받는다. 처음 번호를 받기 전에 한 번 정하고 그 뒤로 둔다.
+   */
+  let directory = opts.identity.directory
+  let picked = false
+  const pickDirectory = async () => {
+    if (picked) return
+    picked = true
+    const id = opts.identity
+    if (id.sessionId === '') return
+    const a = opts.auth
+    let timer: Timer | undefined
+    try {
+      const r = await Promise.race([
+        http.fetch(`${a.endpoint}/api/slots`, { method: 'GET', headers: { Authorization: `Bearer ${a.token}`, 'X-Agent-Mail-Role': a.role } }),
+        new Promise<null>(done => void (timer = clock.after(SLOT_TIMEOUT_MS, () => done(null)))),
+      ]).finally(() => timer?.cancel())
+      if (r === null || !r.ok) return
+      const rows: unknown = JSON.parse(r.text)
+      if (!Array.isArray(rows)) return
+      const holder = rows.find((v: unknown): v is { number?: unknown; session_id?: unknown } => {
+        if (typeof v !== 'object' || v === null) return false
+        const o = v as Record<string, unknown>
+
+        return o.machine === id.machine && o.directory === id.directory && typeof o.session_id === 'string' && o.session_id !== '' && o.session_id !== id.sessionId
+      })
+      if (holder === undefined) return
+      directory = sessionDirectory(id.directory, id.sessionId)
+      say(opts.log, `switchboard slot: 같은 기계·폴더를 다른 세션(${typeof holder.number === 'number' ? `${a.role}-${holder.number}` : '?'})이 쓰고 있어 따로 번호를 받는다`)
+    } catch {
+      // 목록을 못 받으면(옛 서버·끊김) 전처럼 폴더 그대로.
+    }
+  }
+
   const body = async (action: Action): Promise<string> => {
     const id = opts.identity
-    const b: Record<string, string | number> = { machine: id.machine, directory: id.directory }
+    const b: Record<string, string | number> = { machine: id.machine, directory }
     if (id.sessionId !== '') b.session_id = id.sessionId
     if (id.label !== undefined && id.label !== '') b.label = id.label
     if (id.parent !== undefined && id.parent !== '') b.parent = id.parent
@@ -213,6 +252,8 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   }
 
   const register = async (): Promise<SlotGrant | null> => {
+    await pickDirectory()
+    if (stopped) return null
     const r = await call('register')
     if (stopped) return null
     if (r.kind === 'ok') {
