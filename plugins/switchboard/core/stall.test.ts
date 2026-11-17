@@ -110,10 +110,20 @@ test('기다림: 권한 창·입력 대기는 blocked:<종류> 로 두고 부모
   expect(stall.state().condition).toBe(null)
   await ev({ type: 'notification', kind: 'auth_success' })
   expect(stall.state().condition).toBe(null)
+  await ev({ type: 'notification', kind: 'elicitation_dialog' })
+  expect(stall.state().condition).toBe('blocked:elicitation_dialog')
+  expect(notices.at(-1)).toEqual({ kind: 'blocked', what: 'elicitation_dialog' })
+  expect(notices.length).toBe(2)
+})
+
+test('쉬는 세션: 턴이 끝난 뒤 idle_prompt 는 막힘이 아니다(idle 로 남고 부모 알림 없음)', async () => {
+  const { stall, notices, conditions, ev } = make()
+  await ev({ type: 'turn.start' })
   await ev({ type: 'turn.complete' })
   await ev({ type: 'notification', kind: 'idle_prompt' })
-  expect(notices.at(-1)).toEqual({ kind: 'blocked', what: 'idle_prompt' })
-  expect(notices.length).toBe(2)
+  expect(stall.state().condition).toBe(null)
+  expect(notices).toEqual([])
+  expect(conditions.filter(c => c !== null)).toEqual([])
 })
 
 test('재시도 간격 계산: 기본은 30초부터 두 배, 10분 상한', () => {

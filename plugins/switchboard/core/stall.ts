@@ -1,7 +1,7 @@
 // 멈춤 감지(D8): 턴이 API 오류로 멈추거나 사람을 기다리면 알아서 이어 가거나 위에 알린다.
 //  - 저절로 풀릴 수 있는 오류(rate_limit·overloaded·server_error)는 간격을 두 배씩 늘려(상한 있음) 「이어서 하라」 턴을 넣는다.
 //    정한 횟수를 넘거나 그 밖의 오류는 condition 을 `error:<종류>` 로 두고 부모·대장에게 한 번 알린다(오류 본문은 안 넣는다).
-//  - 사람을 기다리는 알림(권한 창·입력 대기 등)은 condition 을 `blocked:<종류>` 로 두고 부모에게 한 번 알린다.
+//  - 사람을 기다리는 알림(권한 창·입력 양식 등; 쉬는 세션의 idle_prompt 는 제외)은 condition 을 `blocked:<종류>` 로 두고 부모에게 한 번 알린다.
 //  - 다음 턴이 문제없이 돌면(그 턴에 오류가 없으면) 횟수와 「알렸음」을 지운다. 사람이 그새 턴을 넣으면 재시도는 거둔다.
 //  - 심장박동 끊김(offline)과 라벨 미연결 통지는 서버가 한다(#73 서버 계약 6).
 import type { AgentHost, HostEvent, Timer } from './host'
@@ -14,8 +14,8 @@ export const RETRY_BASE_MS = 30_000
 export const RETRY_CAP_MS = 10 * 60_000
 /** 이만큼 이어서 실패하면 안 풀리는 오류로 보고 알린다. */
 export const RETRY_MAX_TRIES = 8
-/** 알리지 않는 알림 종류(사람을 기다리는 것이 아니다). */
-export const QUIET_NOTIFICATIONS = ['auth_success'] as const
+/** 알리지 않는 알림 종류(사람을 기다리는 것이 아니다. idle_prompt 는 사람이 친 턴 뒤 60초마다 오는 쉬는 신호). */
+export const QUIET_NOTIFICATIONS = ['auth_success', 'idle_prompt'] as const
 
 export type StallNotice = {
   /** error: 안 풀리는 오류(부모와 대장), blocked: 사람을 기다림(부모). */
