@@ -14,13 +14,47 @@ export const PROFILE = '/home/u/.config/agent-mail/worker.json'
 
 /** 가짜 Agent Mail: 계약(#73 댓글)의 긴 대기를 흉내 낸다. pending 만, id 오름차순, after 보다 큰 것만. */
 export const fakeMail = (host: FakeHost) => {
-  const mails: { id: number; status: 'pending' | 'read'; priority: string }[] = []
+  const mails: { id: number; status: 'pending' | 'read'; priority: string; body: string }[] = []
+  /** 서버에 들어온 읽음 처리(POST …/read, GET 메일 하나). */
+  const reads: number[] = []
+  /** true 면 긴급 이벤트에 본문을 싣지 않는다(본문을 따로 받아 오는 길 시험). */
+  let omitBody = false
   let waiters: (() => void)[] = []
   let down = false
   let nextId = 1
   const polls: { after: number | null; timeout: number }[] = []
   const pending = (after: number | null) =>
-    mails.filter(m => m.status === 'pending' && (after === null || m.id > after)).map(m => ({ id: m.id, sender: 'team/lead', subject: `s${m.id}`, priority: m.priority }))
+    mails
+      .filter(m => m.status === 'pending' && (after === null || m.id > after))
+      .map(m => ({
+        id: m.id,
+        sender: 'team/lead',
+        subject: `s${m.id}`,
+        priority: m.priority,
+        // 계약: body 는 urgent 일 때만.
+        ...(m.priority === 'urgent' && !omitBody ? { body: m.body } : {}),
+      }))
+
+  host.http.route(`${EP}/api/messages/`, ({ url, init }: { url: string; init: HttpInit }) => {
+    if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
+    const m = /\/api\/messages\/(\d+)(\/read)?$/.exec(url)
+    const mail = m === null ? undefined : mails.find(x => x.id === Number(m[1]))
+    if (mail === undefined || m === null) return { status: 404, text: 'not found' }
+    if ((init.method ?? 'GET') === 'GET' && m[2] === undefined) {
+      reads.push(mail.id)
+      mail.status = 'read'
+
+      return { text: JSON.stringify({ id: mail.id, body: mail.body, priority: mail.priority, status: 'read' }) }
+    }
+    if (init.method === 'POST' && m[2] === '/read') {
+      reads.push(mail.id)
+      mail.status = 'read'
+
+      return { text: JSON.stringify({ id: mail.id, status: 'read' }) }
+    }
+
+    return { status: 405, text: 'method' }
+  })
 
   host.http.route(`${EP}/api/events/poll`, async ({ url, init }: { url: string; init: HttpInit }) => {
     if (down) throw new Error(`connect ECONNREFUSED (headers ${JSON.stringify(init.headers)})`)
@@ -48,9 +82,12 @@ export const fakeMail = (host: FakeHost) => {
 
   return {
     polls,
-    send: (priority = 'normal') => {
+    reads,
+    status: (id: number) => mails.find(x => x.id === id)?.status,
+    setOmitBody: (v: boolean) => void (omitBody = v),
+    send: (priority = 'normal', body = '') => {
       const id = nextId++
-      mails.push({ id, status: 'pending', priority })
+      mails.push({ id, status: 'pending', priority, body })
       const w = waiters
       waiters = []
       for (const done of w) done()

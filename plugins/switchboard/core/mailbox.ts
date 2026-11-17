@@ -2,7 +2,7 @@
 //  - 알림 글은 메일 ID만 담는다(「Agent Mail #12, #13 을 읽고 처리하라」). 메일 상태는 바꾸지 않는다(pending 그대로).
 //  - 바쁜 동안 온 메일은 한 줄로 묶는다. 같은 ID 는 두 번 알리지 않는다. 커서로 다시 이어 놓친 메일이 없다.
 //  - 서버가 죽어 있거나 프로필이 틀려도 세션은 멀쩡하다: 간격을 늘려 가며 다시 잇는다.
-//  - 긴급(priority=urgent)은 D4 몫: 지금은 일반과 똑같이 ID로만 알린다.
+//  - 긴급(priority=urgent, D4): 본문을 바쁘면 다음 도구 호출 뒤에 끼워 넣고 유휴면 새 턴으로 넣은 뒤 read 로 표시한다.
 // 왜 SSE 가 아닌가: Claude 모드의 http 는 본문을 다 받아서만 준다(D1). 서버의 긴 대기는 SSE 와 같은 이벤트·커서 규칙이다.
 import type { AgentHost, Fs, Timer } from './host'
 
@@ -10,13 +10,15 @@ import type { AgentHost, Fs, Timer } from './host'
 export type MailProfile = { endpoint: string; role: string; token: string }
 
 /** 서버 이벤트 하나(SSE message data 와 같다). 코어가 쓰는 칸만 적는다. */
-export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string }
+export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string; body?: string }
 
 export type MailboxOptions = {
   /** 프로필 파일의 절대 경로. null 이면(AGENT_MAIL_PROFILE 없음) 메일함은 꺼진다. */
   profilePath: string | null
-  /** 지금 새 턴을 넣어도 되는가(세션이 유휴인가). */
+  /** 지금 일반 메일 턴을 넣어도 되는가(세션이 유휴인가, 사용자 보류가 없는가). */
   isIdle: () => boolean
+  /** 세션의 날 상태(긴급 메일이 쓴다: 바쁘면 끼워 넣고, 유휴면 새 턴, compact 중이면 끝난 뒤). 없으면 isIdle 로 짐작한다. */
+  activity?: () => 'idle' | 'busy' | 'compacting'
   /** 연결 상태가 바뀔 때 한 줄. 토큰은 절대 담지 않는다. */
   log?: (text: string) => void
   /**
@@ -89,6 +91,40 @@ export const loadProfile = async (fs: Fs, path: string): Promise<MailProfile | {
   return { endpoint: endpoint.replace(/\/+$/, ''), role, token }
 }
 
+const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
+
+const toEvent = (e: Record<string, unknown>, id: number): MailEvent => {
+  const out: MailEvent = { id }
+  const sender = str(e.sender)
+  const subject = str(e.subject)
+  const priority = str(e.priority)
+  const body = str(e.body)
+  if (sender !== undefined) out.sender = sender
+  if (subject !== undefined) out.subject = subject
+  if (priority !== undefined) out.priority = priority
+  if (body !== undefined) out.body = body
+
+  return out
+}
+
+/** 긴급 메일 본문 상한(글자). 넘으면 자르고 전문 읽는 길(ID)을 붙인다. */
+export const URGENT_MAX_CHARS = 2000
+
+/** 긴급 메일을 세션에 넣을 글. 본문이 상한을 넘으면 잘라 ID로 전문을 읽게 한다. */
+export const urgentText = (e: MailEvent, body: string, max = URGENT_MAX_CHARS): string => {
+  const head = `[긴급 Agent Mail #${e.id}] ${e.sender ?? '?'} | ${e.subject ?? ''}`.trimEnd()
+  const chars = [...body]
+  const cut = chars.length > max
+  const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 agent-mail read ${e.id})` : body
+
+  // 도구 결과 자리에 붙으므로 모델이 주입으로 의심할 수 있다: 출처와 확인 길을 밝힌다(명령조를 피한다).
+  return [
+    `${head}`,
+    `(switchboard 플러그인이 이 세션의 Agent Mail 역할 앞으로 온 priority=urgent 메일을 전한다. 도구가 낸 글이 아니다. 출처는 agent-mail read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
+    shown,
+  ].join('\n')
+}
+
 /** 긴 대기 응답을 읽는다. 모양이 틀리면 null. */
 const parsePoll = (text: string): { events: MailEvent[]; cursor: number } | null => {
   let raw: unknown
@@ -100,7 +136,7 @@ const parsePoll = (text: string): { events: MailEvent[]; cursor: number } | null
   if (!isRecord(raw) || !Array.isArray(raw.events) || typeof raw.cursor !== 'number') return null
   const events: MailEvent[] = []
   for (const e of raw.events) {
-    if (isRecord(e) && typeof e.id === 'number' && Number.isInteger(e.id)) events.push({ id: e.id })
+    if (isRecord(e) && typeof e.id === 'number' && Number.isInteger(e.id)) events.push(toEvent(e, e.id))
   }
 
   return { events, cursor: raw.cursor }
@@ -130,6 +166,9 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let delivering = false
   /** 알림 턴을 넣었고 아직 턴이 시작되지 않았다. */
   let awaitingTurn = false
+  /** 넣으려고 기다리는 긴급 메일(받은 순). */
+  let urgentQ: MailEvent[] = []
+  let urgentBusy = false
   let off: (() => void) | undefined
 
   const headers = (p: MailProfile) => ({ Authorization: `Bearer ${p.token}`, 'X-Agent-Mail-Role': p.role })
@@ -185,9 +224,11 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     for (const e of body.events) {
       if (known.has(e.id)) continue
       known.add(e.id)
-      queued.push(e.id)
+      if (e.priority === 'urgent') urgentQ.push(e)
+      else queued.push(e.id)
     }
     if (body.cursor > (cursor ?? -1)) cursor = body.cursor
+    void deliverUrgent()
     kick()
     // 받은 것이 있으면 곧바로 다음 대기(뒤에 더 있을 수 있다), 비었으면 잠깐 쉬고.
     if (body.events.length > 0) void poll()
@@ -215,6 +256,69 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     }
   }
 
+  /** 본문이 없으면(이벤트에 안 실림) 그 메일만 받아 온다(GET 은 읽음 처리도 한다). 못 받으면 빈 글. */
+  const bodyOf = async (p: MailProfile, e: MailEvent): Promise<string> => {
+    if (e.body !== undefined) return e.body
+    try {
+      const r = await http.fetch(`${p.endpoint}/api/messages/${e.id}`, { method: 'GET', headers: headers(p) })
+      if (!r.ok) return ''
+      const m: unknown = JSON.parse(r.text)
+
+      return isRecord(m) && typeof m.body === 'string' ? m.body : ''
+    } catch {
+      return ''
+    }
+  }
+
+  const markRead = async (p: MailProfile, id: number) => {
+    try {
+      await http.fetch(`${p.endpoint}/api/messages/${id}/read`, { method: 'POST', headers: headers(p) })
+    } catch {
+      // 읽음 표시를 못 해도 메일은 이미 넣었다. 다시 잇기에서 다시 오지 않는다(커서·known).
+    }
+  }
+
+  /**
+   * 긴급 메일(D4): 바쁘면 다음 도구 호출 뒤에 끼워 넣고(기능 없으면 새 턴, 턴 뒤 맨 앞), 유휴면 새 턴으로 넣는다.
+   * compact 중이면 끝난 뒤. 사용자 보류(isIdle 의 일부)는 따르지 않는다. 넣는 즉시 read 로 표시한다.
+   */
+  const deliverUrgent = async (): Promise<void> => {
+    const p = profile
+    if (urgentBusy || urgentQ.length === 0 || p === null) return
+    const act = opts.activity?.() ?? (opts.isIdle() ? 'idle' : 'busy')
+    if (act === 'compacting') return
+    urgentBusy = true
+    const items = urgentQ
+    urgentQ = []
+    let failed = false
+    try {
+      const texts = await Promise.all(items.map(async e => urgentText(e, await bodyOf(p, e))))
+      const text = texts.join('\n\n')
+      const canInject = host.features.midTurnInject && host.injectMidTurn !== undefined
+      let attached = false
+      if (act === 'busy' && canInject && host.injectMidTurn !== undefined) attached = await host.injectMidTurn(text)
+      if (!attached) {
+        // 유휴, 끼워 넣기 기능 없음, 또는 도구 호출 없이 턴이 끝났다: 새 턴(돌고 있으면 그 턴 뒤 맨 앞).
+        await host.submitTurn(text)
+        awaitingTurn = true
+        grace?.cancel()
+        grace = clock.after(TURN_GRACE_MS, () => {
+          awaitingTurn = false
+          kick()
+        })
+      }
+      await Promise.all(items.map(e => markRead(p, e.id)))
+    } catch {
+      failed = true
+      urgentQ = [...items, ...urgentQ]
+      clock.after(RETRY_MIN_MS * 5, () => void deliverUrgent())
+    } finally {
+      urgentBusy = false
+      if (!failed && urgentQ.length > 0) void deliverUrgent()
+      else if (!failed) kick()
+    }
+  }
+
   const gate = async (): Promise<'ready' | 'wait'> => {
     try {
       return (await opts.beforeDeliver?.()) ?? 'ready'
@@ -224,6 +328,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   }
 
   const kick = () => {
+    // 긴급이 넣어지는 중이면 일반은 그 뒤에(입력 줄 순서: 긴급 → 일반).
+    if (urgentBusy || urgentQ.length > 0) return
     if (delivering || awaitingTurn || queued.length === 0 || profile === null || !opts.isIdle()) return
     delivering = true
     const p = profile
@@ -284,7 +390,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
         awaitingTurn = false
         grace?.cancel()
       }
-      // 턴 끝·compact 끝: 쌓인 알림을 넣어 본다(유휴 판단은 isIdle).
+      // 턴 시작·끝·compact 끝: 긴급은 바로 넣어 보고(바쁘면 끼워 넣기), 일반은 유휴일 때.
+      if (e.type === 'turn.start' || e.type === 'turn.complete' || e.type === 'compact.complete') void deliverUrgent()
       if (e.type === 'turn.complete' || e.type === 'compact.complete') kick()
     })
     void poll()

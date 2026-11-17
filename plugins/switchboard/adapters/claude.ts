@@ -36,19 +36,24 @@ export const createEmitter = () => {
 
 export type Emitter = ReturnType<typeof createEmitter>
 
-/** 다음 도구 호출 결과에 붙일 글(injectMidTurn). 붙이면 기다리던 쪽을 푼다. */
+/**
+ * 다음 도구 호출 결과에 붙일 글(injectMidTurn). 붙이면 기다리던 쪽을 true 로 푼다.
+ * 턴이 도구 호출 없이 끝나면 expire 가 남은 글을 버리고 false 로 푼다(다음 턴의 엉뚱한 도구 결과에 붙지 않게).
+ */
 export const createMidTurnBox = () => {
-  let waiting: { text: string; done: () => void }[] = []
+  let waiting: { text: string; done: (attached: boolean) => void }[] = []
+  const drain = (attached: boolean) => {
+    const out = waiting
+    waiting = []
+    for (const w of out) w.done(attached)
+
+    return out.map(w => w.text)
+  }
 
   return {
-    put: (text: string) => new Promise<void>(done => void waiting.push({ text, done })),
-    take: (): string[] => {
-      const out = waiting
-      waiting = []
-      for (const w of out) w.done()
-
-      return out.map(w => w.text)
-    },
+    put: (text: string) => new Promise<boolean>(done => void waiting.push({ text, done })),
+    take: (): string[] => drain(true),
+    expire: (): void => void drain(false),
     size: () => waiting.length,
   }
 }
@@ -65,7 +70,11 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
   }).catch(($, e, next) => next(e))
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (e.agentId === undefined) emitter.emit({ type: 'turn.complete' })
+    if (e.agentId === undefined) {
+      // 붙지 못한 끼워 넣기는 버린다(코어가 새 턴으로 넣는다). 턴 끝 이벤트보다 먼저.
+      box.expire()
+      emitter.emit({ type: 'turn.complete' })
+    }
 
     return r
   }).catch(($, e, next) => next(e))

@@ -39,7 +39,7 @@ export type Switchboard = {
 
 export type SwitchboardOptions = {
   /** 메일함. 없거나 profilePath 가 null 이면 꺼진다. */
-  mail?: Omit<MailboxOptions, 'isIdle' | 'beforeDeliver'>
+  mail?: Omit<MailboxOptions, 'isIdle' | 'activity' | 'beforeDeliver'>
   /** 일반 메일 전 compact(D3). 컨텍스트가 thresholdTokens 이상이면 먼저 줄인다. 없으면 하지 않는다. */
   compactBeforeMail?: { thresholdTokens: number; instructions?: string }
 }
@@ -132,6 +132,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       mailbox = createMailbox(host, {
         ...opts.mail,
         isIdle: () => st.active && st.activity === 'idle',
+        activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
       })
       await mailbox.start().catch(() => false)
