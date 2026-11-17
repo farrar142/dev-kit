@@ -106,10 +106,20 @@ export const emitSubmit = (emitter: Emitter, text: string, originKind?: string) 
 export const submitOrigin = (kind: string | undefined): 'user' | 'plugin' | 'other' =>
   kind === 'composer' || kind === 'bridge' ? 'user' : kind === 'plugin' ? 'plugin' : 'other'
 
-/** 기계 이름: 모드 API에는 없어 SWITCHBOARD_MACHINE, 없으면 HOSTNAME 을 읽는다($.env.get 은 글자 그대로의 이름만 받는다). */
+/**
+ * 기계 이름: 모드 API에는 없어 SWITCHBOARD_MACHINE, 없으면 HOSTNAME(bash 는 보통 내보내지 않는다),
+ * 그것도 없으면 /etc/hostname 을 읽는다($.env.get 은 글자 그대로의 이름만 받는다). 번호 역할(D6)은 이 이름과
+ * 폴더로 재시작한 세션을 알아보므로 세션마다 바뀌지 않는 값이어야 한다.
+ */
 async function machineOf($: Self): Promise<string> {
   try {
-    return (await $.env.get('SWITCHBOARD_MACHINE')) || ((await $.env.get('HOSTNAME')) ?? '')
+    const env = (await $.env.get('SWITCHBOARD_MACHINE'))?.trim() || (await $.env.get('HOSTNAME'))?.trim() || ''
+    if (env !== '') return env
+  } catch {
+    // 아래로.
+  }
+  try {
+    return (await $.fs.exists('/etc/hostname')) ? (await $.fs.read('/etc/hostname')).trim() : ''
   } catch {
     return ''
   }
@@ -153,6 +163,22 @@ export async function holdEnv($: Self): Promise<string | undefined> {
     return await $.env.get('SWITCHBOARD_HOLD_MINUTES')
   } catch {
     return undefined
+  }
+}
+
+/**
+ * 번호 역할(D6) 환경: SWITCHBOARD_LABEL(예: 이슈 번호)·SWITCHBOARD_PARENT(부모 역할 주소)는 presence 에 싣고,
+ * SWITCHBOARD_SINGLE_ROLES(쉼표 목록, 기본 boss,coordinator, off 면 없음)는 중복 경고를 걸 역할이다.
+ */
+export async function slotEnv($: Self): Promise<{ label: string | undefined; parent: string | undefined; singles: string | undefined }> {
+  try {
+    return {
+      label: (await $.env.get('SWITCHBOARD_LABEL'))?.trim() || undefined,
+      parent: (await $.env.get('SWITCHBOARD_PARENT'))?.trim() || undefined,
+      singles: await $.env.get('SWITCHBOARD_SINGLE_ROLES'),
+    }
+  } catch {
+    return { label: undefined, parent: undefined, singles: undefined }
   }
 }
 

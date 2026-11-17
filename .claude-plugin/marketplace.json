@@ -31,7 +31,7 @@
     {
       "name": "switchboard",
       "source": "./plugins/switchboard",
-      "description": "question-panel을 대체하는 세션 교환대 mod(0.5.0): 질문 도구 mcp__plugin_switchboard_qp__ask·…__resolve(MCP 서버, node 필요)와 오른쪽 「질문」 패널은 question-panel 0.9.0과 같다. 에이전트를 모르는 코어와 AgentHost 포트(submitTurn·injectMidTurn·compact·usage·이벤트·identity·services)로 나눠 Claude 어댑터를 붙였다. AGENT_MAIL_PROFILE이 있으면 Agent Mail을 긴 대기로 구독해 일반 메일을 턴이 끝난 뒤 「Agent Mail #N 을 읽고 처리하라」 새 턴으로 알린다(0.2.0). 유휴이고 컨텍스트가 기준(기본 200k) 이상이면 메일 전에 compact부터 한다(0.3.0). 긴급(priority=urgent) 메일은 본문을 실행 중인 턴의 다음 도구 호출 뒤에 끼워 넣고(유휴면 새 턴) 곧바로 read로 표시한다(0.4.0). 사람이 입력창에 쓰는 중이거나 사람 턴이 끝난 뒤 몇 분(기본 3분)은 일반 메일 턴을 미룬다(0.5.0). 이후 presence가 붙는다. question-panel과 함께 켜지 말 것(질문 도구가 둘이 된다)"
+      "description": "question-panel을 대체하는 세션 교환대 mod(0.6.0): 질문 도구 mcp__plugin_switchboard_qp__ask·…__resolve(MCP 서버, node 필요)와 오른쪽 「질문」 패널은 question-panel 0.9.0과 같다. 에이전트를 모르는 코어와 AgentHost 포트(submitTurn·injectMidTurn·compact·usage·이벤트·identity·services)로 나눠 Claude 어댑터를 붙였다. AGENT_MAIL_PROFILE이 있으면 Agent Mail을 긴 대기로 구독해 일반 메일을 턴이 끝난 뒤 「Agent Mail #N 을 읽고 처리하라」 새 턴으로 알린다(0.2.0). 유휴이고 컨텍스트가 기준(기본 200k) 이상이면 메일 전에 compact부터 한다(0.3.0). 긴급(priority=urgent) 메일은 본문을 실행 중인 턴의 다음 도구 호출 뒤에 끼워 넣고(유휴면 새 턴) 곧바로 read로 표시한다(0.4.0). 사람이 입력창에 쓰는 중이거나 사람 턴이 끝난 뒤 몇 분(기본 3분)은 일반 메일 턴을 미룬다(0.5.0). 연결할 때 기계·폴더로 번호 역할(<역할>-N)을 받아 그 주소로 구독하고, 상태가 바뀔 때와 60초마다 presence를 보고하며, boss·coordinator에 -2가 생기면 경고하고 /switchboard-takeover로 -1을 가져온다(0.6.0). question-panel과 함께 켜지 말 것(질문 도구가 둘이 된다)"
     },
     {
       "name": "security-recon",

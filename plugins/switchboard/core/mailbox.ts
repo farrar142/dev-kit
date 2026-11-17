@@ -5,6 +5,8 @@
 //  - 긴급(priority=urgent, D4): 본문을 바쁘면 다음 도구 호출 뒤에 끼워 넣고 유휴면 새 턴으로 넣은 뒤 read 로 표시한다.
 // 왜 SSE 가 아닌가: Claude 모드의 http 는 본문을 다 받아서만 준다(D1). 서버의 긴 대기는 SSE 와 같은 이벤트·커서 규칙이다.
 import type { AgentHost, Fs, Timer } from './host'
+import { createSlot } from './slot'
+import type { PresenceReport, Slot, TakeoverResult } from './slot'
 
 /** Agent Mail CLI 프로필(`~/.config/agent-mail/<이름>.json`). token 은 메모리에만 둔다. */
 export type MailProfile = { endpoint: string; role: string; token: string }
@@ -26,6 +28,20 @@ export type MailboxOptions = {
    * 관문을 건 쪽이 끝난 뒤(compact.complete 등) 다시 kick 된다.
    */
   beforeDeliver?: () => Promise<'ready' | 'wait'>
+  /**
+   * 번호 역할(D6). 있으면 연결할 때 기반 역할(프로필 role)과 기계·폴더로 `<base>-N` 을 받아 그 주소로 구독하고,
+   * heartbeat 로 presence 를 보고한다. 없으면 프로필 role 그대로 구독한다(번호 없음).
+   */
+  slot?: SlotConfig
+}
+
+export type SlotConfig = {
+  presence: () => Promise<PresenceReport>
+  label?: string
+  parent?: string
+  /** 단일 역할인데 -2 이상을 받았을 때(토스트 등). */
+  warn?: (text: string) => void
+  singleRoles?: readonly string[]
 }
 
 export type MailboxState = {
@@ -35,6 +51,8 @@ export type MailboxState = {
   cursor: number | null
   /** 알리려고 기다리는 ID. */
   queued: number[]
+  /** 구독하는 주소(번호를 받았으면 `<base>-N`). 꺼져 있으면 null. */
+  role: string | null
 }
 
 export type Mailbox = {
@@ -44,6 +62,10 @@ export type Mailbox = {
   /** 세션이 유휴가 됐을 수 있다(턴 끝 등): 기다리는 알림을 넣어 본다. */
   kick: () => void
   state: () => MailboxState
+  /** presence 가 바뀌었다(상태 등): 곧 heartbeat 로 보고한다. 번호 역할이 없으면 아무것도 안 한다. */
+  report: () => void
+  /** 이 세션이 `<base>-1` 을 가져온다. */
+  takeover: () => Promise<TakeoverResult>
 }
 
 /** 한 번의 긴 대기(초). 서버 기본과 같고 상한(55초)보다 작다. */
@@ -160,7 +182,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   /** 돌고 있는 일의 세대. stop·다시 잇기 때 올려 늦게 온 응답을 버린다. */
   let gen = 0
   let backoff = RETRY_MIN_MS
-  let next: Timer | undefined
+  let next_: Timer | undefined
   let watchdog: Timer | undefined
   let grace: Timer | undefined
   let delivering = false
@@ -170,15 +192,33 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let urgentQ: MailEvent[] = []
   let urgentBusy = false
   let off: (() => void) | undefined
+  let slot: Slot | undefined
+  /** 구독하는 주소. 번호를 받으면 `<base>-N`, 아니면 프로필 role. */
+  let role: string | null = null
+  /** 구독 루프를 시작했다(그 뒤의 번호 바뀜은 다시 잇기). */
+  let polling = false
 
-  const headers = (p: MailProfile) => ({ Authorization: `Bearer ${p.token}`, 'X-Agent-Mail-Role': p.role })
+  const headers = (p: MailProfile) => ({ Authorization: `Bearer ${p.token}`, 'X-Agent-Mail-Role': role ?? p.role })
+
+  /** 번호 역할이 바뀌었다: 새 주소로 처음부터(커서 없이) 다시 잇는다. 이미 본 ID 는 known 이 거른다. */
+  const setRole = (next: string) => {
+    if (role === next) return
+    role = next
+    if (!polling || profile === null) return
+    cursor = null
+    gen++
+    next_?.cancel()
+    watchdog?.cancel()
+    status = 'connecting'
+    void poll()
+  }
   const pollUrl = (p: MailProfile, after: number | null, timeout: number) =>
     `${p.endpoint}/api/events/poll?timeout=${timeout}${after === null ? '' : `&after=${after}`}`
 
   const schedule = (ms: number) => {
-    next?.cancel()
+    next_?.cancel()
     const g = gen
-    next = clock.after(ms, () => {
+    next_ = clock.after(ms, () => {
       if (g === gen) void poll()
     })
   }
@@ -218,7 +258,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     if (!reply.ok) return fail(`HTTP ${reply.status}`)
     const body = parsePoll(reply.text)
     if (body === null) return fail('응답 모양이 틀림')
-    if (status !== 'live') log(`switchboard 메일함: ${p.role} 구독 중`)
+    if (status !== 'live') log(`switchboard 메일함: ${role ?? p.role} 구독 중`)
     status = 'live'
     backoff = RETRY_MIN_MS
     for (const e of body.events) {
@@ -384,7 +424,32 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       return false
     }
     profile = loaded
+    role = loaded.role
     status = 'connecting'
+    if (opts.slot !== undefined) {
+      const cfg = opts.slot
+      const me = await host.identity()
+      const s = createSlot(host, {
+        auth: loaded,
+        identity: {
+          // 서버가 둘 다 비어 있지 않기를 바란다. 기계 이름을 모르면 세션 id 로라도 가른다.
+          machine: me.machine !== '' ? me.machine : `session-${me.sessionId || 'unknown'}`,
+          directory: me.cwd !== '' ? me.cwd : '/',
+          sessionId: me.sessionId,
+          ...(cfg.label === undefined ? {} : { label: cfg.label }),
+          ...(cfg.parent === undefined ? {} : { parent: cfg.parent }),
+        },
+        presence: cfg.presence,
+        onRole: setRole,
+        log,
+        ...(cfg.warn === undefined ? {} : { warn: cfg.warn }),
+        ...(cfg.singleRoles === undefined ? {} : { singleRoles: cfg.singleRoles }),
+      })
+      slot = s
+      // 번호를 받은 뒤 구독한다(-2 세션이 잠깐이라도 -1 메일을 받지 않게). 못 받으면(옛 서버·끊김) 기반 역할로.
+      await s.start()
+      if (profile === null) return false
+    }
     off = host.on(e => {
       if (e.type === 'turn.start') {
         awaitingTurn = false
@@ -394,6 +459,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       if (e.type === 'turn.start' || e.type === 'turn.complete' || e.type === 'compact.complete') void deliverUrgent()
       if (e.type === 'turn.complete' || e.type === 'compact.complete') kick()
     })
+    polling = true
     void poll()
 
     return true
@@ -402,13 +468,27 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   const stop = () => {
     gen++
     profile = null
+    role = null
+    polling = false
     status = 'off'
-    next?.cancel()
+    slot?.stop()
+    slot = undefined
+    next_?.cancel()
     watchdog?.cancel()
     grace?.cancel()
     off?.()
     off = undefined
   }
 
-  return { start, stop, kick, state: () => ({ status, cursor, queued: [...queued] }) }
+  const takeover = async (): Promise<TakeoverResult> =>
+    slot === undefined ? { ok: false, reason: '번호 역할이 꺼져 있다(AGENT_MAIL_PROFILE 없음 등)' } : slot.takeover()
+
+  return {
+    start,
+    stop,
+    kick,
+    report: () => slot?.report(),
+    takeover,
+    state: () => ({ status, cursor, queued: [...queued], role }),
+  }
 }

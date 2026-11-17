@@ -3,7 +3,8 @@
 // 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다. 메일함은 mailbox.ts(D2).
 import type { AgentHost, CompactResult, Features, Timer } from './host'
 import { createMailbox } from './mailbox'
-import type { Mailbox, MailboxOptions, MailboxState } from './mailbox'
+import type { Mailbox, MailboxOptions, MailboxState, SlotConfig } from './mailbox'
+import type { PresenceReport, TakeoverResult } from './slot'
 
 export type Activity = 'idle' | 'busy' | 'compacting'
 
@@ -40,11 +41,16 @@ export type Switchboard = {
   noteUserInput: () => void
   /** 메일함 상태(꺼져 있으면 status off). */
   mail: () => MailboxState
+  /** 이 세션이 `<base>-1` 을 가져온다(D6, 중복 경고를 받았을 때). */
+  takeover: () => Promise<TakeoverResult>
 }
 
 export type SwitchboardOptions = {
   /** 메일함. 없거나 profilePath 가 null 이면 꺼진다. */
-  mail?: Omit<MailboxOptions, 'isIdle' | 'activity' | 'beforeDeliver'>
+  mail?: Omit<MailboxOptions, 'isIdle' | 'activity' | 'beforeDeliver' | 'slot'> & {
+    /** 번호 역할·presence(D6). presence 내용은 코어가 채운다. 없으면 번호 없이 프로필 role 로 구독한다. */
+    slot?: Omit<SlotConfig, 'presence'>
+  }
   /** 일반 메일 전 compact(D3). 컨텍스트가 thresholdTokens 이상이면 먼저 줄인다. 없으면 하지 않는다. */
   compactBeforeMail?: { thresholdTokens: number; instructions?: string }
   /**
@@ -92,6 +98,20 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
   let compactedForMail = false
   const holdMs = Math.max(0, opts.holdAfterUserMs ?? DEFAULT_HOLD_MS)
+  /** 마지막 턴이 끝난 시각(RFC3339, presence 용). */
+  let lastTurnAt: string | undefined
+  /** presence: 상태·컨텍스트 토큰·마지막 턴. 토큰 수를 못 읽으면 빼고 보낸다(서버가 이전 값을 둔다). */
+  const presence = async (): Promise<PresenceReport> => {
+    const out: PresenceReport = { state: st.activity }
+    try {
+      out.context_tokens = Math.max(0, Math.round((await host.usage()).tokens))
+    } catch {
+      // 모르면 뺀다.
+    }
+    if (lastTurnAt !== undefined) out.last_turn_at = lastTurnAt
+
+    return out
+  }
   /** 사람 턴이 들어갔고 아직 끝나지 않았다(끝나면 보류를 건다). */
   let userTurnOpen = false
   /** 시간 보류가 걸려 있다. 타이머가 풀고 메일함을 깨운다. */
@@ -152,6 +172,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     if (!me.isMain) return false
     st.active = true
     off = host.on(e => {
+      const was = st.activity
       switch (e.type) {
         case 'turn.start':
           st.activity = 'busy'
@@ -161,6 +182,9 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         case 'turn.complete':
           // compact 중에 끝난 턴(드묾)은 compact 완료가 마저 풀어 준다.
           if (st.activity === 'busy') st.activity = 'idle'
+          void host.services.clock.now().then(t => {
+            lastTurnAt = new Date(t).toISOString()
+          })
           // 사람이 보낸 턴이 끝났다: 답을 읽는 동안 보류(메일함은 이 뒤에 턴 끝을 본다).
           if (userTurnOpen) {
             userTurnOpen = false
@@ -186,11 +210,15 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           noteUserInput()
           break
       }
+      // 상태가 바뀌면 곧 presence 를 보고한다(60초 주기와 따로).
+      if (st.activity !== was) mailbox?.report()
     })
     // 메일함은 본 세션에서만. 듣는 순서상 위 상태가 먼저 바뀐 뒤 메일함이 턴 끝을 본다.
     if (opts.mail !== undefined) {
+      const { slot, ...mail } = opts.mail
       mailbox = createMailbox(host, {
-        ...opts.mail,
+        ...mail,
+        ...(slot === undefined ? {} : { slot: { ...slot, presence } }),
         isIdle: () => st.active && st.activity === 'idle' && !held(),
         activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
@@ -216,20 +244,29 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     if (!capabilities(host).compact || host.compact === undefined) return { done: false, reason: 'unsupported' }
     if (st.activity !== 'idle') return { done: false, reason: st.activity }
     st.activity = 'compacting'
+    mailbox?.report()
     try {
       const r = await host.compact(instructions)
       // 거절됐으면 완료 이벤트가 오지 않는다: 바로 되돌린다.
-      if (!r.done && st.activity === 'compacting') st.activity = 'idle'
+      if (!r.done && st.activity === 'compacting') {
+        st.activity = 'idle'
+        mailbox?.report()
+      }
 
       return r
     } catch (err) {
-      if (st.activity === 'compacting') st.activity = 'idle'
+      if (st.activity === 'compacting') {
+        st.activity = 'idle'
+        mailbox?.report()
+      }
 
       return { done: false, reason: err instanceof Error ? err.message : String(err) }
     }
   }
 
-  const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [] }
+  const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [], role: null }
+  const takeover = async (): Promise<TakeoverResult> =>
+    mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(AGENT_MAIL_PROFILE 없음)' } : mailbox.takeover()
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput }
+  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover }
 }
