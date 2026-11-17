@@ -6,6 +6,7 @@
 //  - 단일 역할(boss·coordinator 등)인데 -2 이상을 받으면 경고한다. takeover 로 -1 을 가져올 수 있다.
 //  - 토큰은 요청 머리(Authorization)에만 싣는다. 몸·기록·경고 어디에도 넣지 않는다.
 import type { AgentHost, Timer } from './host'
+import { httpWhy, roleHeaders } from './wire'
 
 export type PresenceState = 'idle' | 'busy' | 'compacting'
 
@@ -105,7 +106,7 @@ const parseGrant = (text: string): GrantReply | null => {
 export const sessionDirectory = (dir: string, sessionId: string) => `${dir} #${sessionId.slice(0, 8)}`
 
 type Action = 'register' | 'heartbeat' | 'takeover' | 'release'
-type Reply = { kind: 'ok'; grant: GrantReply } | { kind: 'status'; status: number } | { kind: 'error' }
+type Reply = { kind: 'ok'; grant: GrantReply } | { kind: 'status'; status: number; text: string } | { kind: 'error' }
 
 export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   const { http, clock } = host.services
@@ -145,7 +146,7 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     let timer: Timer | undefined
     try {
       const r = await Promise.race([
-        http.fetch(`${a.endpoint}/api/slots`, { method: 'GET', headers: { Authorization: `Bearer ${a.token}`, 'X-Agent-Mail-Role': a.role } }),
+        http.fetch(`${a.endpoint}/api/slots`, { method: 'GET', headers: roleHeaders(a.token, a.role) }),
         new Promise<null>(done => void (timer = clock.after(SLOT_TIMEOUT_MS, () => done(null)))),
       ]).finally(() => timer?.cancel())
       if (r === null || !r.ok) return
@@ -209,13 +210,13 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
         (async () =>
           http.fetch(`${a.endpoint}/api/slots/${action}`, {
             method: 'POST',
-            headers: { Authorization: `Bearer ${a.token}`, 'X-Agent-Mail-Role': a.role, 'Content-Type': 'application/json' },
+            headers: { ...roleHeaders(a.token, a.role), 'Content-Type': 'application/json' },
             body: await body(action),
           }))(),
         new Promise<null>(done => void (timer = clock.after(SLOT_TIMEOUT_MS, () => done(null)))),
       ]).finally(() => timer?.cancel())
       if (r === null) return { kind: 'error' }
-      if (!r.ok) return { kind: 'status', status: r.status }
+      if (!r.ok) return { kind: 'status', status: r.status, text: r.text }
       const g = parseGrant(r.text)
 
       return g === null ? { kind: 'error' } : { kind: 'ok', grant: g }
@@ -247,7 +248,7 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   }
 
   const failed = (what: string, r: Reply) => {
-    if (!failing) say(opts.log, `switchboard slot: ${what} 실패(${r.kind === 'status' ? `HTTP ${r.status}` : '연결·응답'}), ${HEARTBEAT_MS / 1000}초 뒤 다시`)
+    if (!failing) say(opts.log, `switchboard slot: ${what} 실패(${r.kind === 'status' ? httpWhy(r.status, r.text) : '연결·응답'}), ${HEARTBEAT_MS / 1000}초 뒤 다시`)
     failing = true
   }
 
@@ -314,7 +315,7 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     const r = await call('takeover')
     if (r.kind !== 'ok') {
       const reason =
-        r.kind === 'status' ? (r.status === 409 ? `${opts.auth.role}-1 이 따로 등록된 역할이다(HTTP 409)` : `HTTP ${r.status}`) : '연결·응답 실패'
+        r.kind === 'status' ? (r.status === 409 ? `${opts.auth.role}-1 이 따로 등록된 역할이다(HTTP 409)` : httpWhy(r.status, r.text)) : '연결·응답 실패'
 
       return { ok: false, reason }
     }

@@ -444,7 +444,7 @@ export const register: Register = on => {
       name: 'switchboard-takeover',
       description: '이 세션이 Agent Mail 역할의 -1 번호를 가져온다(번호 없이 온 메일을 받는다). 지금 -1 은 다른 번호로 밀린다',
     })
-    // 코어를 띄운다: 세션 상태를 따라가고, AGENT_MAIL_PROFILE 이 있으면 메일함(D2)도 켠다.
+    // 코어를 띄운다: 세션 상태를 따라가고, SWITCHBOARD_PROFILE(옛 AGENT_MAIL_PROFILE)이 있으면 메일함(D2)도 켠다.
     void board?.stop()
     const ce = await compactEnv($)
     const compactBeforeMail = compactConfig(ce.tokens, ce.instructions)
@@ -460,6 +460,7 @@ export const register: Register = on => {
       mail: {
         profilePath: mp.paths,
         ...(mp.problem === undefined ? {} : { profileProblem: mp.problem }),
+        ...(mp.override === undefined ? {} : { override: mp.override }),
         log: text => void $.ui.log(text),
         warn: text => void $.ui.toast(text),
         slot: {

@@ -7,16 +7,17 @@
 //  - 답 메일: 서버가 묻는 역할 앞으로 보내는 시스템 메일(`agent-mail/system`, 제목 `[질문 답] <id> …`, task_id = id).
 //    이 역할이 물은 질문인지는 이 세션이 올린 id 목록, 없으면(compact·재시작 뒤) GET /api/questions/{id} 의 asker base 로 본다.
 //    참조(watcher) 사본(다른 역할의 질문)은 손대지 않는다(평소 시스템 통지 그대로). 답 글은 보기(view)의 문항·답으로 만든다.
-//  - 대장 세션(#120): 원격 질문 대장 쪽이 켜지는 세션(bosses 를 받았고 지금 역할이 그 목록에 든다)은 참조 메일
+//  - 대장 세션(#120·#130): 원격 질문 대장 쪽이 켜지는 세션(대장 판정 isBoss, 없으면 bosses 목록)은 참조 메일
 //    「[질문] q_…」「[질문 답] q_…」(이 역할이 물은 질문의 답이 아닌 것)을 세션에 넣지 않고 read 로만 표시한다 — 같은 질문이
 //    대장 패널에 이미 뜬다(패널이 정본). 이 역할이 물은 질문의 답은 대장이어도 위처럼 넣는다.
 import type { QuestionPanelQuestion } from '../types'
 import { DROP_NOTICE } from './mailbox'
 import type { CallIo, Mailbox, MailEvent, NoticeDrop } from './mailbox'
 import { baseOf } from './permission'
-import { isBossRole } from './remote-inbox'
+import { isBossRole } from './boss'
 import { answerMailId, createQuestionsApi, isRemoteId, questionMailId, remoteAnswerText, toRemoteItems } from './remote-questions'
 import type { QuestionsApi } from './remote-questions'
+import { GROUP_REFUSAL } from './wire'
 
 /** ask 결과: 서버 질문이면 그 id, 로컬이면 까닭(메일함이 꺼져 시도하지 않았으면 null). */
 export type RemoteAskResult = { kind: 'remote'; id: string; asker: string } | { kind: 'local'; reason: string | null }
@@ -42,6 +43,8 @@ export type RemoteAskOptions = {
   log?: (text: string) => void
   /** 대장 역할 목록(원격 질문 대장 쪽이 켜질 때만 준다). 지금 역할이 여기 들면 참조 메일을 넣지 않는다(#120). */
   bosses?: readonly string[]
+  /** 대장 판정(core/boss.ts, whoami). 있으면 bosses 대신 쓴다. */
+  isBoss?: () => boolean
 }
 
 export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: RemoteAskOptions = {}): RemoteAsk => {
@@ -72,7 +75,9 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
       r.status === null
         ? `서버에 닿지 않음`
         : r.status === 403
-          ? `이 역할은 질문을 올릴 수 없음(can_ask 꺼짐, 403)`
+          ? r.error === GROUP_REFUSAL
+            ? `${GROUP_REFUSAL}(403)`
+            : `이 역할은 질문을 올릴 수 없음(can_ask 꺼짐, 403)`
           : r.status === 409
             ? `답할 대장 역할이 없음(409)`
             : r.status === 400
@@ -100,7 +105,7 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
     return { ok: false, status: r.status, reason }
   }
 
-  const boss = () => isBossRole(mail.state().role, opts.bosses ?? [])
+  const boss = () => (opts.isBoss === undefined ? isBossRole(mail.state().role, opts.bosses ?? []) : opts.isBoss())
 
   const noticeText = async (e: MailEvent, body: string): Promise<string | null | NoticeDrop> => {
     // 새 질문 참조 메일: 대장 세션이면 패널이 정본이라 넣지 않는다.

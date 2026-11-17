@@ -53,7 +53,7 @@ const fakeServer = () => {
   const view = (q: RemoteQuestion, role: string) => ({ ...q, can_answer: q.status === 'pending' && base(q.asker) !== base(role) })
 
   const attach = (host: FakeHost, role: string) => {
-    const authed = (init: HttpInit) => init.headers?.Authorization === `Bearer ${TOKEN}` && init.headers['X-Agent-Mail-Role'] === role
+    const authed = (init: HttpInit) => init.headers?.Authorization === `Bearer ${TOKEN}` && init.headers['X-Switchboard-Role'] === role
     host.http.route(`${EP}/api/events/poll`, async ({ url }: { url: string; init: HttpInit }) => {
       const timeout = Number(new URL(url).searchParams.get('timeout') ?? '25')
       await new Promise<void>(done => void host.clock.after(timeout * 1000, done))
@@ -187,11 +187,18 @@ const memoryLedger = () => {
 }
 
 /** 대장(또는 아닌) 세션 하나: 교환대 + 진짜 질문 패널 코어. sink 는 register.tsx 의 remoteSink 와 같은 일을 한다. */
-const session = async (server: ReturnType<typeof fakeServer>, clock: FakeClock, o: { role?: string; bosses?: string[] } = {}) => {
+const session = async (server: ReturnType<typeof fakeServer>, clock: FakeClock, o: { role?: string; bosses?: string[]; isBoss?: boolean } = {}) => {
   const role = o.role ?? BOSS
   const host = fakeHost({ clock, identity: { machine: 'box-b', cwd: '/work/repo', sessionId: 'sess-b' } })
   host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role, token: TOKEN }))
   server.attach(host, role)
+  // 새 서버(#130): whoami 가 is_boss 를 답한다. 없으면 라우트가 없어 404(옛 서버).
+  const isBoss = o.isBoss
+  if (isBoss !== undefined) {
+    host.http.route(`${EP}/api/whoami`, () => ({
+      text: JSON.stringify({ role, base: role.replace(/-\d+$/, ''), group: '', global_boss: isBoss, boss_of: [], is_boss: isBoss }),
+    }))
+  }
   const queue = memory<QuestionPanelBatch[]>([])
   const draft = memory('')
   const ledger = memoryLedger()
@@ -470,5 +477,27 @@ test('원격 질문 대장: 원격 묶음을 답 없이 닫거나 대화창 글�
   expect(s.queue.value()[0]!.via).toBe('dismissed')
   expect(s.host.turns).toEqual([])
   expect(server.answered).toEqual([])
+  await s.board.stop()
+})
+
+test('원격 질문 대장(#130): whoami 가 is_boss true 면 전역 목록에 없는 역할도 서버 질문을 끌어온다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const q = server.ask()
+  const s = await session(server, clock, { role: 'g/lead', bosses: [], isBoss: true })
+  expect(s.queue.value().map(b => b.remote?.id)).toEqual([q.id])
+  expect(s.logs.some(l => l.includes('g/lead 는 대장(whoami'))).toBe(true)
+  await s.board.stop()
+})
+
+test('원격 질문 대장(#130): whoami 가 is_boss false 면 전역 목록에 있어도 질문 API 를 부르지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  server.ask()
+  const s = await session(server, clock, { isBoss: false })
+  await clock.advance(120_000)
+  await settle(clock)
+  expect(server.calls).toEqual([])
+  expect(s.queue.value()).toEqual([])
   await s.board.stop()
 })

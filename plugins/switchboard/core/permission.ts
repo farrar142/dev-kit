@@ -7,10 +7,12 @@
 //  - 기다림은 훅 안에서 돈다. Claude 모드의 훅 예산(10초)은 `$` 응답을 기다리는 동안만 멈추므로 시계 타이머가 아니라
 //    `$.http` 긴 대기로 기다린다(실제로 켜 보니 타이머로 기다리면 10초 뒤 창이 뜨고 늦은 답은 버려졌다).
 //  - 서버가 답할 사람을 가린다. 여기서도 한 번 더 본다: 요청자 base 의 답은 버리고, 부모 base 나 대장 목록에
-//    없는 쪽의 답도 버린다(목록이 둘 다 비었으면 요청자가 아닌 쪽이면 받는다 — 서버가 이미 가렸다).
+//    없는 쪽의 답도 버린다(목록이 둘 다 비었으면 요청자가 아닌 쪽이면 받는다 — 서버가 이미 가렸다). 서버가 whoami 로
+//    협업 묶음을 안다고 답했으면(gated, #130) 묶음 대장도 답하므로 목록은 보지 않는다.
 import { POLL_TIMEOUT_S } from './mailbox'
 import type { CallIo, Mailbox, MailEvent } from './mailbox'
 import type { AgentHost, Http } from './host'
+import { httpWhy } from './wire'
 
 /** 답을 기다리는 시간 기본값(ms). */
 export const PERMISSION_WAIT_MS = 120_000
@@ -30,6 +32,11 @@ export type PermissionOptions = {
   pollMs?: number
   /** 부모 말고도 답을 받을 대장 역할(기반 역할). */
   bosses?: readonly string[]
+  /**
+   * 서버가 협업 묶음을 아는가(대장 판정의 whoami 가 200, core/boss.ts). 참이면 답할 쪽(부모·전역·묶음 대장)은 서버가 이미
+   * 가렸으므로 부모·대장 목록으로 거르지 않고 요청자 base 만 거른다(묶음 대장의 답을 버리지 않게).
+   */
+  gated?: () => boolean
   log?: (text: string) => void
 }
 
@@ -106,9 +113,10 @@ const parseRequest = (text: string): Request | null => {
   return out
 }
 
-/** 이 답을 받는가: 요청자 base 는 안 되고, 부모·대장 목록이 있으면 그 안이어야 한다. */
-export const trustedAnswer = (req: { requester: string; parent?: string }, by: string, bosses: readonly string[]): boolean => {
+/** 이 답을 받는가: 요청자 base 는 안 되고, 부모·대장 목록이 있으면 그 안이어야 한다(gated 면 목록은 보지 않는다). */
+export const trustedAnswer = (req: { requester: string; parent?: string }, by: string, bosses: readonly string[], gated = false): boolean => {
   if (by === '' || baseOf(by) === baseOf(req.requester)) return false
+  if (gated) return true
   const allowed = new Set([...(req.parent === undefined ? [] : [baseOf(req.parent)]), ...bosses.map(baseOf)])
 
   return allowed.size === 0 || allowed.has(baseOf(by))
@@ -152,7 +160,7 @@ export const createPermissions = (host: AgentHost, mail: Pick<Mailbox, 'call' | 
     const req = r.ok ? parseRequest(r.text) : null
     if (req !== null) remember(req.id)
     if (req === null) {
-      log(`switchboard 권한: 요청을 못 올림(HTTP ${r.status}), 화면 창으로`)
+      log(`switchboard 권한: 요청을 못 올림(${httpWhy(r.status, r.text)}), 화면 창으로`)
 
       return null
     }
@@ -181,7 +189,7 @@ export const createPermissions = (host: AgentHost, mail: Pick<Mailbox, 'call' | 
         if (cur.status === 'allowed' || cur.status === 'denied') {
           const by = cur.answered_by ?? ''
           const fixed = { requester: req.requester || cur.requester, ...(req.parent === undefined ? {} : { parent: req.parent }) }
-          if (!trustedAnswer(fixed, by, bosses)) return finish(null, `의 답(${by || '?'})은 부모·대장이 아니라 버린다, 화면 창으로`)
+          if (!trustedAnswer(fixed, by, bosses, opts.gated?.() ?? false)) return finish(null, `의 답(${by || '?'})은 부모·대장이 아니라 버린다, 화면 창으로`)
           const ans: PermissionAnswer = { decision: cur.status === 'allowed' ? 'allow' : 'deny', by }
           if (cur.note !== undefined) ans.note = cur.note
 

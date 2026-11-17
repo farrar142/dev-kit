@@ -2,10 +2,11 @@
 // 보는 것: 어떤 메일이 언제 어떤 글로 세션에 들어가는가, 서버에 무엇을 보내는가(토큰이 새지 않는가).
 import { expect, test } from 'claude-code/testing'
 
-import { announce, RETRY_MAX_MS } from './mailbox'
+import { announce, createMailbox, RETRY_MAX_MS } from './mailbox'
 import { EP, PROFILE, ROLE, runTurn, setup, TOKEN } from './mailtest'
 import { createSwitchboard } from './switchboard'
 import { fakeHost, flush } from './testing'
+import { GROUP_REFUSAL } from './wire'
 
 test('메일함: 유휴 세션은 메일 한 통으로 깨어나 ID만 담은 새 턴을 받는다', async () => {
   const { host, mail, board } = await setup()
@@ -196,4 +197,25 @@ test('메일함: stop 하면 더 묻지도 알리지도 않는다', async () => 
   await host.clock.advance(120_000)
   expect(host.turns).toEqual([])
   expect(host.http.requests.length).toBe(n)
+})
+
+test('메일함(#130): 묶음 밖 역할로 보내기가 403 outside your group 이면 사람이 읽을 한 줄로 남기고 다시 하지 않는다', async () => {
+  const host = fakeHost()
+  host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role: ROLE, token: TOKEN }))
+  host.http.route(`${EP}/api/events/poll`, () => ({ text: JSON.stringify({ events: [], cursor: 0 }) }))
+  const posts: Record<string, string>[] = []
+  host.http.route(`${EP}/api/messages`, ({ init }) => {
+    posts.push(init.headers ?? {})
+
+    return { status: 403, text: JSON.stringify({ error: 'recipient outside your group' }) }
+  })
+  const logs: string[] = []
+  const box = createMailbox(host, { profilePath: PROFILE, isIdle: () => true, log: t => void logs.push(t) })
+  expect(await box.start()).toBe(true)
+  expect(await box.send({ to: 'other/x', subject: 's', body: 'b' })).toBe(false)
+  expect(posts.length).toBe(1)
+  expect(posts[0]!['X-Switchboard-Role']).toBe(ROLE)
+  expect(posts[0]!['X-Agent-Mail-Role']).toBe(ROLE)
+  expect(logs.at(-1)).toBe(`switchboard 메일함: other/x 에 「s」 메일을 못 보냄(HTTP 403, ${GROUP_REFUSAL})`)
+  await box.stop()
 })

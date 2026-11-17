@@ -2,6 +2,8 @@
 // 사용자가 입력 중인가)를 따라간다. D2 이후의 메일함(SSE 구독·등급별 입력 줄·compact 판단·presence)이
 // 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다. 메일함은 mailbox.ts(D2).
 import type { AgentHost, CompactResult, Features, Http, Timer } from './host'
+import { createBossJudge } from './boss'
+import type { BossJudge } from './boss'
 import { createMailbox } from './mailbox'
 import { SYSTEM_SUBJECT_PREFIX } from './mailbox'
 import type { Mailbox, MailboxOptions, MailboxState, SlotConfig } from './mailbox'
@@ -199,6 +201,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null, condition: null }
   let stall: Stall | undefined
   let permissions: Permissions | undefined
+  let boss: BossJudge | undefined
   let remote: { ask: RemoteAsk; off: () => void } | undefined
   let inbox: RemoteInbox | undefined
   /** 원격 권한 답을 기다리는 건수(그동안 presence 는 blocked:permission_request). */
@@ -426,14 +429,17 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         beforeDeliver: compactBeforeMail,
       })
       await mailbox.start().catch(() => false)
-      permissions = createPermissions(host, mailbox, { ...opts.permissions, log })
+      // 대장 판정 하나(#130): 연결될 때마다 whoami, 옛 서버·실패면 전역 목록. 권한·질문 양쪽이 같이 쓴다.
+      const judge = createBossJudge(mailbox, { bosses: opts.permissions?.bosses ?? [], log, onChange: () => inbox?.recheck() })
+      boss = judge
+      permissions = createPermissions(host, mailbox, { ...opts.permissions, gated: judge.permissionsGated, log })
       // 대장 쪽(아래 inbox)이 켜지는 세션만 대장 판정을 준다: 참조 질문 메일을 패널에 맡기고 세션에 넣지 않는다(#120).
-      const ask = createRemoteAsk(mailbox, { log, ...(opts.remoteQuestions === undefined ? {} : { bosses: opts.permissions?.bosses ?? [] }) })
+      const ask = createRemoteAsk(mailbox, { log, ...(opts.remoteQuestions === undefined ? {} : { isBoss: judge.isBoss }) })
       remote = { ask, off: mailbox.onNotice(ask.noticeText) }
       const rq = opts.remoteQuestions
       if (rq !== undefined && mailbox.state().status !== 'off') {
         const { sink, ...rest } = rq
-        inbox = createRemoteInbox(host, mailbox, { ...rest, sink, bosses: opts.permissions?.bosses ?? [], log })
+        inbox = createRemoteInbox(host, mailbox, { ...rest, sink, bosses: opts.permissions?.bosses ?? [], isBoss: judge.isBoss, log })
         inbox.start()
       }
     }
@@ -446,6 +452,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     compactWatch = undefined
     permissions?.stop()
     permissions = undefined
+    boss?.stop()
+    boss = undefined
     remote?.off()
     remote = undefined
     inbox?.stop()
@@ -534,7 +542,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
 
   const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [], role: null }
   const takeover = async (): Promise<TakeoverResult> =>
-    mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(AGENT_MAIL_PROFILE 없음)' } : mailbox.takeover()
+    mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음)' } : mailbox.takeover()
 
   const askPermission = async (a: PermissionAsk, io?: { http?: Pick<Http, 'fetch'> }): Promise<PermissionAnswer | null> => {
     const p = permissions
@@ -563,7 +571,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
 
   const withdrawRemote = async (id: string, io?: { http?: Pick<Http, 'fetch'> }): Promise<WithdrawResult> => {
     const r = remote
-    if (!st.active || r === undefined) return { ok: false, status: null, reason: '메일함이 꺼져 있음(AGENT_MAIL_PROFILE 없음)' }
+    if (!st.active || r === undefined) return { ok: false, status: null, reason: '메일함이 꺼져 있음(SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음)' }
     try {
       return await r.ask.withdraw(id, io?.http === undefined ? {} : { http: io.http })
     } catch {

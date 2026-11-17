@@ -18,25 +18,25 @@ const rows: { name: string; platform: ProfilePlatform; env: ProfileEnv; want: Re
     name: 'Windows: APPDATA, HOME 없어도',
     platform: 'windows',
     env: { AGENT_MAIL_PROFILE: 'boss', APPDATA: WIN_APPDATA, USERPROFILE: WIN_HOME },
-    want: { paths: [`${WIN_APPDATA}\\agent-mail\\boss.json`, `${WIN_HOME}\\.config\\agent-mail\\boss.json`] },
+    want: { paths: [`${WIN_APPDATA}\\switchboard\\boss.json`, `${WIN_APPDATA}\\agent-mail\\boss.json`, `${WIN_HOME}\\.config\\agent-mail\\boss.json`] },
   },
   {
     name: 'Windows: APPDATA 없으면 USERPROFILE\\AppData\\Roaming',
     platform: 'windows',
     env: { AGENT_MAIL_PROFILE: 'boss', USERPROFILE: WIN_HOME },
-    want: { paths: [`${WIN_APPDATA}\\agent-mail\\boss.json`, `${WIN_HOME}\\.config\\agent-mail\\boss.json`] },
+    want: { paths: [`${WIN_APPDATA}\\switchboard\\boss.json`, `${WIN_APPDATA}\\agent-mail\\boss.json`, `${WIN_HOME}\\.config\\agent-mail\\boss.json`] },
   },
   {
     name: 'Windows: 홈은 HOME 이 USERPROFILE 보다 앞',
     platform: 'windows',
     env: { AGENT_MAIL_PROFILE: 'boss', HOME: 'D:\\h', USERPROFILE: WIN_HOME },
-    want: { paths: ['D:\\h\\AppData\\Roaming\\agent-mail\\boss.json', 'D:\\h\\.config\\agent-mail\\boss.json'] },
+    want: { paths: ['D:\\h\\AppData\\Roaming\\switchboard\\boss.json', 'D:\\h\\AppData\\Roaming\\agent-mail\\boss.json', 'D:\\h\\.config\\agent-mail\\boss.json'] },
   },
   {
     name: 'Windows: XDG_CONFIG_HOME 은 보지 않는다',
     platform: 'windows',
     env: { AGENT_MAIL_PROFILE: 'boss', APPDATA: WIN_APPDATA, XDG_CONFIG_HOME: 'C:\\xdg' },
-    want: { paths: [`${WIN_APPDATA}\\agent-mail\\boss.json`] },
+    want: { paths: [`${WIN_APPDATA}\\switchboard\\boss.json`, `${WIN_APPDATA}\\agent-mail\\boss.json`] },
   },
   {
     name: '덮어쓰기 AGENT_MAIL_CONFIG_DIR: 폴더 바로 아래, 다른 후보 없음',
@@ -48,22 +48,59 @@ const rows: { name: string; platform: ProfilePlatform; env: ProfileEnv; want: Re
     name: '리눅스: XDG_CONFIG_HOME → 옛 자리',
     platform: 'linux',
     env: { AGENT_MAIL_PROFILE: 'w', XDG_CONFIG_HOME: '/x/cfg', HOME: '/home/u' },
-    want: { paths: ['/x/cfg/agent-mail/w.json', '/home/u/.config/agent-mail/w.json'] },
+    want: { paths: ['/x/cfg/switchboard/w.json', '/x/cfg/agent-mail/w.json', '/home/u/.config/agent-mail/w.json'] },
   },
-  { name: '리눅스: HOME/.config 하나', platform: 'linux', env: { AGENT_MAIL_PROFILE: 'w', HOME: '/home/u/' }, want: { paths: ['/home/u/.config/agent-mail/w.json'] } },
-  { name: 'WSL 은 리눅스 규칙', platform: 'wsl', env: { AGENT_MAIL_PROFILE: 'w', HOME: '/home/u', APPDATA: WIN_APPDATA }, want: { paths: ['/home/u/.config/agent-mail/w.json'] } },
+  { name: '리눅스: HOME/.config 하나', platform: 'linux', env: { AGENT_MAIL_PROFILE: 'w', HOME: '/home/u/' }, want: { paths: ['/home/u/.config/switchboard/w.json', '/home/u/.config/agent-mail/w.json'] } },
+  { name: 'WSL 은 리눅스 규칙', platform: 'wsl', env: { AGENT_MAIL_PROFILE: 'w', HOME: '/home/u', APPDATA: WIN_APPDATA }, want: { paths: ['/home/u/.config/switchboard/w.json', '/home/u/.config/agent-mail/w.json'] } },
   {
     name: 'macOS: Application Support → 옛 자리',
     platform: 'macos',
     env: { AGENT_MAIL_PROFILE: 'w', HOME: '/Users/u', XDG_CONFIG_HOME: '/x' },
-    want: { paths: ['/Users/u/Library/Application Support/agent-mail/w.json', '/Users/u/.config/agent-mail/w.json'] },
+    want: { paths: ['/Users/u/Library/Application Support/switchboard/w.json', '/Users/u/Library/Application Support/agent-mail/w.json', '/Users/u/.config/agent-mail/w.json'] },
   },
-  { name: 'default 는 config.json', platform: 'linux', env: { AGENT_MAIL_PROFILE: 'default', HOME: '/home/u' }, want: { paths: ['/home/u/.config/agent-mail/config.json'] } },
+  { name: 'default 는 config.json', platform: 'linux', env: { AGENT_MAIL_PROFILE: 'default', HOME: '/home/u' }, want: { paths: ['/home/u/.config/switchboard/config.json', '/home/u/.config/agent-mail/config.json'] } },
   {
     name: '경로 글자가 든 이름은 거절(알림)',
     platform: 'linux',
     env: { AGENT_MAIL_PROFILE: '../x', HOME: '/home/u' },
     want: { problem: 'AGENT_MAIL_PROFILE 이름이 틀림(영문·숫자·-·_ 64자 이하): ../x' },
+  },
+  // #130 새 이름: SWITCHBOARD_* 가 먼저, 없으면 옛 AGENT_MAIL_*.
+  {
+    name: '새 이름 SWITCHBOARD_PROFILE 만으로도 켠다',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: 'w', HOME: '/home/u' },
+    want: { paths: ['/home/u/.config/switchboard/w.json', '/home/u/.config/agent-mail/w.json'] },
+  },
+  {
+    name: '새·옛 이름이 둘 다 있으면 새 이름(SWITCHBOARD_PROFILE)',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: 'new', AGENT_MAIL_PROFILE: 'old', HOME: '/home/u' },
+    want: { paths: ['/home/u/.config/switchboard/new.json', '/home/u/.config/agent-mail/new.json'] },
+  },
+  {
+    name: '새 이름이 비었으면(공백) 옛 이름',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: ' ', AGENT_MAIL_PROFILE: 'old', HOME: '/home/u' },
+    want: { paths: ['/home/u/.config/switchboard/old.json', '/home/u/.config/agent-mail/old.json'] },
+  },
+  {
+    name: '설정 폴더도 새 이름 SWITCHBOARD_CONFIG_DIR 이 옛 이름보다 앞',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: 'w', SWITCHBOARD_CONFIG_DIR: '/new/', AGENT_MAIL_CONFIG_DIR: '/old', HOME: '/home/u' },
+    want: { paths: ['/new/w.json'] },
+  },
+  {
+    name: '옛 AGENT_MAIL_CONFIG_DIR 만 있으면 그 폴더(새 이름 프로필과 섞여도)',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: 'w', AGENT_MAIL_CONFIG_DIR: '/old', HOME: '/home/u' },
+    want: { paths: ['/old/w.json'] },
+  },
+  {
+    name: '새 이름이 틀리면 그 이름으로 알린다',
+    platform: 'linux',
+    env: { SWITCHBOARD_PROFILE: 'a/b', AGENT_MAIL_PROFILE: 'ok', HOME: '/home/u' },
+    want: { problem: 'SWITCHBOARD_PROFILE 이름이 틀림(영문·숫자·-·_ 64자 이하): a/b' },
   },
 ]
 
@@ -81,7 +118,7 @@ test('프로필 위치: 홈·설정 폴더를 하나도 못 정하면 problem', 
 const PROFILE_JSON = JSON.stringify({ endpoint: EP, role: ROLE, token: TOKEN })
 
 /** 메일함을 켠 코어: 후보 경로·problem·파일을 정해 띄운다. */
-const boot = async (mail: { paths: string[] | null; problem?: string; files?: Record<string, string> }) => {
+const boot = async (mail: { paths: string[] | null; problem?: string; files?: Record<string, string>; override?: { endpoint?: string; token?: string } }) => {
   const host = fakeHost()
   for (const [p, t] of Object.entries(mail.files ?? {})) host.fs.files.set(p, t)
   const server = fakeMail(host)
@@ -91,6 +128,7 @@ const boot = async (mail: { paths: string[] | null; problem?: string; files?: Re
     mail: {
       profilePath: mail.paths,
       ...(mail.problem === undefined ? {} : { profileProblem: mail.problem }),
+      ...(mail.override === undefined ? {} : { override: mail.override }),
       log: t => void logs.push(t),
       warn: t => void warns.push(t),
     },
@@ -133,4 +171,36 @@ test('메일함: AGENT_MAIL_PROFILE 이 없으면(경로 null, problem 없음) �
   const { warns, logs } = await boot({ paths: null })
   expect(warns).toEqual([])
   expect(logs).toEqual([])
+})
+
+test('메일함(#130): 새 폴더(switchboard)에 없으면 옛 폴더(agent-mail)의 프로필로 잇는다', async () => {
+  const { host, server, warns } = await boot({
+    paths: ['/h/.config/switchboard/w.json', '/h/.config/agent-mail/w.json'],
+    files: { '/h/.config/agent-mail/w.json': PROFILE_JSON },
+  })
+  const id = server.send()
+  await flush()
+  expect(warns).toEqual([])
+  expect(host.turns[0]).toContain(`#${id}`)
+})
+
+test('메일함(#130): 새 폴더에 있으면 그것을 쓴다(옛 폴더의 깨진 파일은 보지 않는다)', async () => {
+  const { host, server, warns } = await boot({
+    paths: ['/h/.config/switchboard/w.json', '/h/.config/agent-mail/w.json'],
+    files: { '/h/.config/switchboard/w.json': PROFILE_JSON, '/h/.config/agent-mail/w.json': '{ broken' },
+  })
+  const id = server.send()
+  await flush()
+  expect(warns).toEqual([])
+  expect(host.turns[0]).toContain(`#${id}`)
+})
+
+test('메일함(#130): SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN 덮어쓰기가 프로필 값보다 앞선다', async () => {
+  const stale = JSON.stringify({ endpoint: 'http://old.test/', role: ROLE, token: 'tok-old' })
+  const { host, server, warns } = await boot({ paths: ['/h/w.json'], files: { '/h/w.json': stale }, override: { endpoint: `${EP}/`, token: TOKEN } })
+  const id = server.send()
+  await flush()
+  expect(warns).toEqual([])
+  expect(server.polls.length).toBeGreaterThan(0)
+  expect(host.turns[0]).toContain(`#${id}`)
 })
