@@ -105,6 +105,11 @@ export type Mailbox = {
    * 돌려준 함수로 끊는다.
    */
   onUrgent: (fn: (e: MailEvent) => boolean) => () => void
+  /**
+   * 시스템 통지 글 바꾸기(원격 질문 답 메일 등, #111). 듣는 쪽이 글을 돌려주면 noticeText 대신 그 글을 넣는다
+   * (넣는 시점·read 표시는 같다). null 이면 다음 듣는 쪽, 모두 null 이면 평소 글. 돌려준 함수로 끊는다.
+   */
+  onNotice: (fn: (e: MailEvent, body: string) => Promise<string | null>) => () => void
   /** 부모 주소(SWITCHBOARD_PARENT). 없으면 undefined. */
   parent: () => string | undefined
 }
@@ -297,6 +302,20 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let urgentBusy = false
   /** 긴급 메일 가로채는 쪽(onUrgent). */
   const urgentTaps = new Set<(e: MailEvent) => boolean>()
+  /** 시스템 통지 글 바꾸는 쪽(onNotice). */
+  const noticeTaps = new Set<(e: MailEvent, body: string) => Promise<string | null>>()
+  const noticeOf = async (e: MailEvent, body: string): Promise<string> => {
+    for (const fn of [...noticeTaps]) {
+      try {
+        const text = await fn(e, body)
+        if (text !== null) return text
+      } catch {
+        // 듣는 쪽의 잘못은 통지를 막지 않는다: 평소 글로.
+      }
+    }
+
+    return noticeText(e, body)
+  }
   /** 가로챈 긴급 메일: 넣지 않고 read 로만. */
   const tapped = (e: MailEvent) => {
     for (const fn of [...urgentTaps]) {
@@ -588,7 +607,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       }
       if (profile === null) return
       try {
-        const texts = await Promise.all(items.map(async e => noticeText(e, await bodyOf(p, e))))
+        const texts = await Promise.all(items.map(async e => noticeOf(e, await bodyOf(p, e))))
         await host.submitTurn(texts.join('\n\n'))
         awaitingTurn = true
         grace?.cancel()
@@ -783,6 +802,11 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       urgentTaps.add(fn)
 
       return () => void urgentTaps.delete(fn)
+    },
+    onNotice: fn => {
+      noticeTaps.add(fn)
+
+      return () => void noticeTaps.delete(fn)
     },
     parent: () => {
       const v = opts.slot?.parent

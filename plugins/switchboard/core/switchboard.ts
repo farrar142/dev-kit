@@ -7,7 +7,10 @@ import { SYSTEM_SUBJECT_PREFIX } from './mailbox'
 import type { Mailbox, MailboxOptions, MailboxState, SlotConfig } from './mailbox'
 import { createPermissions } from './permission'
 import type { PermissionAnswer, PermissionAsk, PermissionOptions, Permissions } from './permission'
+import { createRemoteAsk } from './remote-ask'
+import type { RemoteAsk, RemoteAskResult, WithdrawResult } from './remote-ask'
 import type { PresenceReport, TakeoverResult } from './slot'
+import type { QuestionPanelQuestion } from '../types'
 import { createStall } from './stall'
 import type { Stall, StallNotice, StallOptions } from './stall'
 
@@ -56,6 +59,13 @@ export type Switchboard = {
    * 메일함이 꺼져 있으면 바로 null.
    */
   askPermission: (a: PermissionAsk, io?: { http?: Pick<Http, 'fetch'> }) => Promise<PermissionAnswer | null>
+  /**
+   * 원격 질문(#111): 메일함이 켜져 있으면 서버 질문으로 올린다. 못 올리면 로컬(까닭), 메일함이 꺼져 있으면 로컬(까닭 null).
+   * 답 메일은 메일함이 「[질문 패널 답 <id>] …」 글로 바꿔 넣는다.
+   */
+  askRemote: (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }) => Promise<RemoteAskResult>
+  /** 서버 질문을 거둔다(resolve). 메일함이 꺼져 있으면 실패. */
+  withdrawRemote: (id: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<WithdrawResult>
 }
 
 export type SwitchboardOptions = {
@@ -147,6 +157,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null, condition: null }
   let stall: Stall | undefined
   let permissions: Permissions | undefined
+  let remote: { ask: RemoteAsk; off: () => void } | undefined
   /** 원격 권한 답을 기다리는 건수(그동안 presence 는 blocked:permission_request). */
   let permWaiting = 0
   let stallCondition: string | null = null
@@ -336,6 +347,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       })
       await mailbox.start().catch(() => false)
       permissions = createPermissions(host, mailbox, { ...opts.permissions, log })
+      const ask = createRemoteAsk(mailbox, { log })
+      remote = { ask, off: mailbox.onNotice(ask.noticeText) }
     }
 
     return true
@@ -346,6 +359,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     compactWatch = undefined
     permissions?.stop()
     permissions = undefined
+    remote?.off()
+    remote = undefined
     stall?.stop()
     stall = undefined
     const done = mailbox?.stop() ?? Promise.resolve()
@@ -445,5 +460,25 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     }
   }
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover, askPermission }
+  const askRemote = async (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }): Promise<RemoteAskResult> => {
+    const r = remote
+    if (!st.active || r === undefined) return { kind: 'local', reason: null }
+    try {
+      return await r.ask.ask(questions, io?.http === undefined ? {} : { http: io.http })
+    } catch {
+      return { kind: 'local', reason: '서버에 닿지 않음' }
+    }
+  }
+
+  const withdrawRemote = async (id: string, io?: { http?: Pick<Http, 'fetch'> }): Promise<WithdrawResult> => {
+    const r = remote
+    if (!st.active || r === undefined) return { ok: false, status: null, reason: '메일함이 꺼져 있음(AGENT_MAIL_PROFILE 없음)' }
+    try {
+      return await r.ask.withdraw(id, io?.http === undefined ? {} : { http: io.http })
+    } catch {
+      return { ok: false, status: null, reason: '서버에 닿지 않음' }
+    }
+  }
+
+  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover, askPermission, askRemote, withdrawRemote }
 }
