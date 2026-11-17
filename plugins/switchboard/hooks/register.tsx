@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, RenderSurface } from 'claude-code'
 
-import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, holdEnv, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { mcpLedger } from '../adapters/ledger'
 import {
@@ -17,7 +17,7 @@ import {
   VIA_TEXT,
 } from '../core/questions'
 import type { Store } from '../core/questions'
-import { compactConfig, createSwitchboard } from '../core/switchboard'
+import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboard'
 import type { Switchboard } from '../core/switchboard'
 import type { QuestionPanelBatch } from '../types'
 
@@ -71,12 +71,25 @@ const draftStore = ($: Self): Store<string> => ({
   update: fn => update($, draft, fn),
 })
 
+/** 질문 패널의 포트: 패널에서 답해 넣는 턴은 사람의 입력으로 친다(그 뒤 메일 턴 보류, D5). */
+function panelHost($: Self) {
+  const h = claudeHost($, emitter, box)
+
+  return {
+    ...h,
+    submitTurn: async (text: string) => {
+      board?.noteUserInput()
+      await h.submitTurn(text)
+    },
+  }
+}
+
 /** 이 `$` 로 질문 패널 코어를 만든다(가볍다: 상태는 atom 에 있다). */
 const panelOf = ($: Self) =>
   createQuestionPanel({
     queue: queueStore($),
     draft: draftStore($),
-    host: claudeHost($, emitter, box),
+    host: panelHost($),
     ledger: mcpLedger($),
     notify: text => $.ui.toast(text),
   })
@@ -319,6 +332,7 @@ export const register: Register = on => {
     board = createSwitchboard(claudeHost($, emitter, box), {
       mail: { profilePath: await mailProfilePath($), log: text => void $.ui.log(text) },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
+      holdAfterUserMs: holdConfig(await holdEnv($)),
     })
     await board.start().catch(() => false)
     // 닫힘 장부를 본다: Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
@@ -394,7 +408,7 @@ export const register: Register = on => {
 
   // 사용자가 대화창에 묶음 ID를 넣어 답하면(「q4 2번」) 패널의 그 묶음을 닫는다.
   on('prompt.submit', async ($, e, next) => {
-    emitSubmit(emitter, e.text)
+    emitSubmit(emitter, e.text, e.origin?.kind)
     const ids = mentionedIds(e.text)
     if (ids.size > 0) await panelOf($).closeByChat(ids)
 
