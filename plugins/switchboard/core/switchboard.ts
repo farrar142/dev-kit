@@ -1,10 +1,15 @@
 // switchboard 코어: 에이전트를 모른다. AgentHost 포트(host.ts)만 보고 세션의 바깥 상태(유휴·바쁨·compact 중,
 // 사용자가 입력 중인가)를 따라간다. D2 이후의 메일함(SSE 구독·등급별 입력 줄·compact 판단·presence)이
 // 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다. 메일함은 mailbox.ts(D2).
-import type { AgentHost, CompactResult, Features, Timer } from './host'
+import type { AgentHost, CompactResult, Features, Http, Timer } from './host'
 import { createMailbox } from './mailbox'
+import { SYSTEM_SUBJECT_PREFIX } from './mailbox'
 import type { Mailbox, MailboxOptions, MailboxState, SlotConfig } from './mailbox'
+import { createPermissions } from './permission'
+import type { PermissionAnswer, PermissionAsk, PermissionOptions, Permissions } from './permission'
 import type { PresenceReport, TakeoverResult } from './slot'
+import { createStall } from './stall'
+import type { Stall, StallNotice, StallOptions } from './stall'
 
 export type Activity = 'idle' | 'busy' | 'compacting'
 
@@ -16,6 +21,8 @@ export type BoardState = {
   typing: boolean
   /** 마지막으로 사용자가 입력창을 바꾸거나 제출한 시각(ms). 없으면 null. */
   lastInputAt: number | null
+  /** 멈춤(D8): `error:<종류>`(API 오류로 멈춤)·`blocked:<종류>`(사람을 기다림). 없으면 null. */
+  condition: string | null
 }
 
 /** 실제로 쓸 수 있는 기능: 플래그가 켜져 있고 메서드도 있어야 한다. */
@@ -27,7 +34,8 @@ export const capabilities = (host: AgentHost): Features => ({
 export type Switchboard = {
   /** 본 세션이면 이벤트를 듣기 시작하고 true. 서브에이전트 등이면 아무것도 하지 않고 false. */
   start: () => Promise<boolean>
-  stop: () => void
+  /** 끈다. 번호 역할 release 가 끝나면 풀린다(정상 종료: 서버가 offline 통지를 보내지 않는다). */
+  stop: () => Promise<void>
   state: () => BoardState
   /**
    * 대화를 줄인다. 기능이 없으면 건너뛰고(기능 낮추기), 턴이 돌거나 이미 줄이는 중이면 하지 않는다.
@@ -43,6 +51,11 @@ export type Switchboard = {
   mail: () => MailboxState
   /** 이 세션이 `<base>-1` 을 가져온다(D6, 중복 경고를 받았을 때). */
   takeover: () => Promise<TakeoverResult>
+  /**
+   * 권한 창이 뜨기 전 원격 답(D8). 부모·대장이 시간 안에 답하면 그 답, 아니면 null(화면 창으로).
+   * 메일함이 꺼져 있으면 바로 null.
+   */
+  askPermission: (a: PermissionAsk, io?: { http?: Pick<Http, 'fetch'> }) => Promise<PermissionAnswer | null>
 }
 
 export type SwitchboardOptions = {
@@ -58,6 +71,35 @@ export type SwitchboardOptions = {
    * 입력창에 글이 있는 동안도 미룬다. 0 이면 시간 보류는 없고 입력 중 보류만 한다. 긴급은 따르지 않는다.
    */
   holdAfterUserMs?: number
+  /** 멈춤 감지(D8) 재시도 간격·횟수. 없으면 기본(30초부터 두 배, 10분 상한, 8번). */
+  stall?: Pick<StallOptions, 'retry'>
+  /** 원격 권한 답(D8). waitMs 0 이면 끈다. bosses 는 오류 통지도 받는다. */
+  permissions?: Pick<PermissionOptions, 'waitMs' | 'pollMs' | 'bosses'>
+  /** 기록 한 줄(재시도·권한 등). */
+  log?: (text: string) => void
+}
+
+/** 멈춤 통지 메일(제목은 시스템 통지 머리로 시작: 받는 쪽 switchboard 가 본문 그대로 넣는다). */
+export const stallNotice = (n: StallNotice, who: { role: string; label?: string; machine: string; directory: string }) => {
+  const label = who.label === undefined || who.label === '' ? '' : ` (라벨 ${who.label})`
+  const where = [`주소: ${who.role}${label}`, `기계: ${who.machine}`, `폴더: ${who.directory}`]
+  if (n.kind === 'error') {
+    const why =
+      n.tries === undefined
+        ? '저절로 풀리지 않는 종류라 다시 시도하지 않는다.'
+        : `${n.tries}번 다시 시도했지만 풀리지 않아 멈췄다.`
+
+    return {
+      subject: `${SYSTEM_SUBJECT_PREFIX}오류 ${n.what} ${who.role}${label}`,
+      body: [`switchboard: 아래 세션의 턴이 API 오류(${n.what})로 멈췄다. ${why} 사람이 살펴야 한다(오류 본문은 그 세션 화면에 있다).`, ...where].join('\n'),
+    }
+  }
+  const what = n.what === 'permission_prompt' ? '권한 창' : n.what === 'idle_prompt' ? '입력 대기' : n.what === 'elicitation_dialog' ? '입력 양식' : n.what
+
+  return {
+    subject: `${SYSTEM_SUBJECT_PREFIX}기다림 ${n.what} ${who.role}${label}`,
+    body: [`switchboard: 아래 세션이 사람을 기다린다(${what}). 그 세션 화면에서 답하거나 메일로 지시해야 이어 간다.`, ...where].join('\n'),
+  }
 }
 
 /** 사람 입력 뒤 보류 기본값(3분). */
@@ -92,7 +134,46 @@ export const compactConfig = (
 }
 
 export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}): Switchboard => {
-  const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null }
+  const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null, condition: null }
+  let stall: Stall | undefined
+  let permissions: Permissions | undefined
+  /** 원격 권한 답을 기다리는 건수(그동안 presence 는 blocked:permission_request). */
+  let permWaiting = 0
+  let stallCondition: string | null = null
+  let self: { machine: string; cwd: string } = { machine: '', cwd: '' }
+  const meSet = (id: { machine: string; cwd: string }) => {
+    self = { machine: id.machine, cwd: id.cwd }
+  }
+  const log = (t: string) => {
+    try {
+      opts.log?.(t)
+    } catch {
+      // 기록이 실패해도 간다.
+    }
+  }
+  const syncCondition = () => {
+    const next = permWaiting > 0 ? 'blocked:permission_request' : stallCondition
+    if (st.condition === next) return
+    st.condition = next
+    mailbox?.report()
+  }
+  /** 멈춤 통지: 오류는 부모와 대장, 기다림은 부모. 받을 쪽이 없거나 메일함이 꺼져 있으면 기록만. */
+  const notifyStall = (n: StallNotice) => {
+    const m = mailbox
+    const role = m?.state().role ?? null
+    const parent = m?.parent()
+    const to = [...new Set([...(parent === undefined ? [] : [parent]), ...(n.kind === 'error' ? (opts.permissions?.bosses ?? []) : [])])]
+    if (m === undefined || role === null || to.length === 0) {
+      log(`switchboard: ${n.kind === 'error' ? `API 오류(${n.what})로 멈췄다` : `사람을 기다린다(${n.what})`}, 알릴 곳 없음`)
+
+      return
+    }
+    const label = opts.mail?.slot?.label
+    const text = stallNotice(n, { role, machine: self.machine, directory: self.cwd, ...(label === undefined ? {} : { label }) })
+    void host.services.clock.now().then(t => {
+      for (const r of to) void m.send({ to: r, ...text, key: `switchboard-${n.kind}-${n.what}-${role}-${r}-${t}` })
+    })
+  }
   let off: (() => void) | undefined
   let mailbox: Mailbox | undefined
   /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
@@ -103,6 +184,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   /** presence: 상태·컨텍스트 토큰·마지막 턴. 토큰 수를 못 읽으면 빼고 보낸다(서버가 이전 값을 둔다). */
   const presence = async (): Promise<PresenceReport> => {
     const out: PresenceReport = { state: st.activity }
+    if (st.condition !== null) out.condition = st.condition
     try {
       out.context_tokens = Math.max(0, Math.round((await host.usage()).tokens))
     } catch {
@@ -171,7 +253,18 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     const me = await host.identity()
     if (!me.isMain) return false
     st.active = true
+    meSet(me)
+    stall = createStall(host, {
+      ...(opts.stall?.retry === undefined ? {} : { retry: opts.stall.retry }),
+      setCondition: c => {
+        stallCondition = c
+        syncCondition()
+      },
+      notify: notifyStall,
+      log,
+    })
     off = host.on(e => {
+      stall?.onEvent(e)
       const was = st.activity
       switch (e.type) {
         case 'turn.start':
@@ -224,19 +317,26 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         beforeDeliver: compactBeforeMail,
       })
       await mailbox.start().catch(() => false)
+      permissions = createPermissions(host, mailbox, { ...opts.permissions, log })
     }
 
     return true
   }
 
   const stop = () => {
-    mailbox?.stop()
+    permissions?.stop()
+    permissions = undefined
+    stall?.stop()
+    stall = undefined
+    const done = mailbox?.stop() ?? Promise.resolve()
     mailbox = undefined
     holdTimer?.cancel()
     holding = false
     off?.()
     off = undefined
     st.active = false
+
+    return done
   }
 
   const compact = async (instructions?: string): Promise<CompactResult> => {
@@ -268,5 +368,20 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const takeover = async (): Promise<TakeoverResult> =>
     mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(AGENT_MAIL_PROFILE 없음)' } : mailbox.takeover()
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover }
+  const askPermission = async (a: PermissionAsk, io?: { http?: Pick<Http, 'fetch'> }): Promise<PermissionAnswer | null> => {
+    const p = permissions
+    if (!st.active || p === undefined) return null
+    permWaiting++
+    syncCondition()
+    try {
+      return await p.ask(a, io)
+    } catch {
+      return null
+    } finally {
+      permWaiting--
+      syncCondition()
+    }
+  }
+
+  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput, takeover, askPermission }
 }

@@ -5,10 +5,12 @@
 //  - 긴급(priority=urgent, D4): 본문을 바쁘면 다음 도구 호출 뒤에 끼워 넣고 유휴면 새 턴으로 넣은 뒤 read 로 표시한다.
 //  - 연결 통지(D7): SWITCHBOARD_PARENT 가 있으면 처음 이어졌을 때 부모에게 「연결됨(주소·라벨·기계·폴더)」 시스템 통지를 보낸다.
 //    받는 쪽은 시스템 통지(제목이 SYSTEM_SUBJECT_PREFIX 로 시작)를 ID 대신 본문 그대로, 일반 메일 뒤 일반 시점에 넣고 read 로 표시한다.
+//  - 서버 시스템 통지(D8): 보낸이가 `agent-mail/system`(·`-N`)인 일반 메일(멈춤·라벨 미연결)도 시스템 통지 길로 넣는다.
+//    긴급 메일은 onUrgent 듣는 쪽(권한 답 기다리기)이 가져가면 넣지 않고 read 로만 표시한다.
 //  - 라벨 메일(D7): `label:<base>/<라벨>` 앞 보관 메일은 서버가 register 때 번호 주소로 옮긴다(새 ID). 번호를 받은 뒤 커서 없이
 //    구독을 시작하므로 따로 할 일은 없다.
 // 왜 SSE 가 아닌가: Claude 모드의 http 는 본문을 다 받아서만 준다(D1). 서버의 긴 대기는 SSE 와 같은 이벤트·커서 규칙이다.
-import type { AgentHost, Fs, Timer } from './host'
+import type { AgentHost, Fs, Http, Timer } from './host'
 import { createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
 
@@ -16,7 +18,16 @@ import type { PresenceReport, Slot, TakeoverResult } from './slot'
 export type MailProfile = { endpoint: string; role: string; token: string }
 
 /** 서버 이벤트 하나(SSE message data 와 같다). 코어가 쓰는 칸만 적는다. */
-export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string; body?: string }
+export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string; body?: string; task_id?: string }
+
+/**
+ * call 의 바깥 길(선택): http 는 다른 fetch(Claude 모드에서는 그 훅의 `$` — 훅 예산은 `$` 를 기다리는 동안 멈춘다),
+ * timeoutMs 는 응답 한도(기본 CHECK_TIMEOUT_MS).
+ */
+export type CallIo = { http?: Pick<Http, 'fetch'>; timeoutMs?: number }
+
+/** 보낼 메일 하나(send). key 가 있으면 Idempotency-Key 로 실어 다시 보내도 한 통이다. */
+export type OutMail = { to: string; subject: string; body: string; key?: string }
 
 export type MailboxOptions = {
   /** 프로필 파일의 절대 경로. null 이면(AGENT_MAIL_PROFILE 없음) 메일함은 꺼진다. */
@@ -46,6 +57,8 @@ export type SlotConfig = {
   /** 단일 역할인데 -2 이상을 받았을 때(토스트 등). */
   warn?: (text: string) => void
   singleRoles?: readonly string[]
+  /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 AGENT_MAIL_ROLE 을 맞춘다). */
+  onRole?: (role: string) => void
 }
 
 export type MailboxState = {
@@ -62,7 +75,8 @@ export type MailboxState = {
 export type Mailbox = {
   /** 프로필을 읽고 구독을 시작한다. 프로필이 없거나 틀리면 false(꺼짐). */
   start: () => Promise<boolean>
-  stop: () => void
+  /** 끈다. 번호 역할 release 요청이 끝나면(실패해도) 풀린다. */
+  stop: () => Promise<void>
   /** 세션이 유휴가 됐을 수 있다(턴 끝 등): 기다리는 알림을 넣어 본다. */
   kick: () => void
   state: () => MailboxState
@@ -70,6 +84,17 @@ export type Mailbox = {
   report: () => void
   /** 이 세션이 `<base>-1` 을 가져온다. */
   takeover: () => Promise<TakeoverResult>
+  /** 메일을 보낸다(5xx·연결 실패는 NOTICE_TRIES 번까지, 4xx 는 바로 포기). 보냈으면 true. 꺼져 있으면 false. */
+  send: (m: OutMail) => Promise<boolean>
+  /** 지금 주소(번호 역할)로 인증한 요청. 꺼져 있거나 연결이 안 되면 null. 오류 문구는 옮기지 않는다(토큰). */
+  call: (path: string, init?: { method?: string; body?: string }, io?: CallIo) => Promise<{ status: number; ok: boolean; text: string } | null>
+  /**
+   * 긴급 메일 가로채기. 듣는 쪽이 true 를 돌려주면 그 메일은 세션에 넣지 않고 read 로만 표시한다.
+   * 돌려준 함수로 끊는다.
+   */
+  onUrgent: (fn: (e: MailEvent) => boolean) => () => void
+  /** 부모 주소(SWITCHBOARD_PARENT). 없으면 undefined. */
+  parent: () => string | undefined
 }
 
 /** 한 번의 긴 대기(초). 서버 기본과 같고 상한(55초)보다 작다. */
@@ -93,7 +118,10 @@ export const NOTICE_MAX_CHARS = 2000
 /** 연결 통지 보내기 시도 횟수(간격 RETRY_MIN_MS*5). 4xx 는 다시 하지 않는다. */
 export const NOTICE_TRIES = 3
 
-export const isSystemNotice = (e: MailEvent) => e.priority !== 'urgent' && (e.subject ?? '').startsWith(SYSTEM_SUBJECT_PREFIX)
+/** 서버가 쓰는 예약 보낸이(#73 서버 계약 6): `agent-mail/system` 과 `agent-mail/system-N`. */
+export const isSystemSender = (sender: string | undefined) => sender !== undefined && /^agent-mail\/system(-\d+)?$/.test(sender)
+export const isSystemNotice = (e: MailEvent) =>
+  e.priority !== 'urgent' && ((e.subject ?? '').startsWith(SYSTEM_SUBJECT_PREFIX) || isSystemSender(e.sender))
 
 /** 연결 통지 메일(부모 앞). 받는 쪽 세션에 본문이 그대로 들어가므로 한눈에 읽히게 쓴다. */
 export const connectedNotice = (c: { role: string; label?: string; machine: string; directory: string; sessionId: string }) => {
@@ -113,13 +141,15 @@ export const connectedNotice = (c: { role: string; label?: string; machine: stri
   }
 }
 
+const noticeSubject = (subject: string) => (subject.startsWith(SYSTEM_SUBJECT_PREFIX) ? subject.slice(SYSTEM_SUBJECT_PREFIX.length) : subject)
+
 /** 시스템 통지를 세션에 넣을 글. */
 export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): string => {
   const chars = [...body]
   const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 agent-mail read ${e.id})` : body
 
   return [
-    `[Agent Mail #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${(e.subject ?? '').slice(SYSTEM_SUBJECT_PREFIX.length)}`.trimEnd(),
+    `[Agent Mail #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${noticeSubject(e.subject ?? '')}`.trimEnd(),
     `(switchboard 플러그인이 이 세션 앞으로 온 시스템 통지를 본문 그대로 전한다. 출처는 agent-mail read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
     shown,
   ].join('\n')
@@ -164,6 +194,8 @@ const toEvent = (e: Record<string, unknown>, id: number): MailEvent => {
   const subject = str(e.subject)
   const priority = str(e.priority)
   const body = str(e.body)
+  const task = str(e.task_id)
+  if (task !== undefined) out.task_id = task
   if (sender !== undefined) out.sender = sender
   if (subject !== undefined) out.subject = subject
   if (priority !== undefined) out.priority = priority
@@ -244,6 +276,20 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   /** 넣으려고 기다리는 긴급 메일(받은 순). */
   let urgentQ: MailEvent[] = []
   let urgentBusy = false
+  /** 긴급 메일 가로채는 쪽(onUrgent). */
+  const urgentTaps = new Set<(e: MailEvent) => boolean>()
+  /** 가로챈 긴급 메일: 넣지 않고 read 로만. */
+  const tapped = (e: MailEvent) => {
+    for (const fn of [...urgentTaps]) {
+      try {
+        if (fn(e)) return true
+      } catch {
+        // 듣는 쪽의 잘못은 메일을 막지 않는다: 그대로 넣는다.
+      }
+    }
+
+    return false
+  }
   let off: (() => void) | undefined
   let slot: Slot | undefined
   /** 구독하는 주소. 번호를 받으면 `<base>-N`, 아니면 프로필 role. */
@@ -315,13 +361,14 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     status = 'live'
     if (!notified) {
       notified = true
-      void notifyParent(p, epoch)
+      void notifyParent(epoch)
     }
     backoff = RETRY_MIN_MS
     for (const e of body.events) {
       if (known.has(e.id)) continue
       known.add(e.id)
-      if (e.priority === 'urgent') urgentQ.push(e)
+      if (e.priority === 'urgent' && tapped(e)) void markRead(p, e.id)
+      else if (e.priority === 'urgent') urgentQ.push(e)
       else if (isSystemNotice(e)) noticeQ.push(e)
       else queued.push(e.id)
     }
@@ -333,43 +380,65 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     else schedule(EMPTY_GAP_MS)
   }
 
-  /** 부모에게 연결 통지를 보낸다(SWITCHBOARD_PARENT 가 있을 때만). 실패해도 메일함은 간다. */
-  const notifyParent = async (p: MailProfile, ep: number, tries = NOTICE_TRIES): Promise<void> => {
-    if (ep !== epoch || profile === null) return
-    const parent = opts.slot?.parent
-    if (parent === undefined || parent === '' || me === null || role === null) return
-    const label = opts.slot?.label
-    const n = connectedNotice({ role, machine: me.machine, directory: me.directory, sessionId: me.sessionId, ...(label === undefined ? {} : { label }) })
+  /** 메일 한 통(send). 5xx·연결 실패는 tries 번까지 간격을 두고 다시, 4xx 는 바로 포기. */
+  const sendMail = async (m: OutMail, ep: number, what = `「${m.subject}」 메일을`, tries = NOTICE_TRIES): Promise<boolean> => {
+    const p = profile
+    if (ep !== epoch || p === null) return false
     let why: string
     try {
       const r = await http.fetch(`${p.endpoint}/api/messages`, {
         method: 'POST',
-        headers: {
-          ...headers(p),
-          'Content-Type': 'application/json',
-          // 다시 보내도 한 통만(같은 세션·주소의 이번 연결).
-          'Idempotency-Key': `switchboard-connected-${me.sessionId || me.machine}-${role}-${startedAt}`,
-        },
-        body: JSON.stringify({ recipient: parent, subject: n.subject, body: n.body }),
+        headers: { ...headers(p), 'Content-Type': 'application/json', ...(m.key === undefined ? {} : { 'Idempotency-Key': m.key }) },
+        body: JSON.stringify({ recipient: m.to, subject: m.subject, body: m.body }),
       })
-      if (r.ok) {
-        log(`switchboard 메일함: ${parent} 에 연결 통지를 보냈다`)
-
-        return
-      }
+      if (r.ok) return true
       why = `HTTP ${r.status}`
       if (r.status >= 400 && r.status < 500) tries = 1
     } catch {
       // 오류 문구에 요청 머리(토큰)가 섞일 수 있어 옮기지 않는다.
       why = '연결 실패'
     }
-    if (ep !== epoch || profile === null) return
+    if (ep !== epoch || profile === null) return false
     if (tries <= 1) {
-      log(`switchboard 메일함: ${parent} 에 연결 통지를 못 보냄(${why})`)
+      log(`switchboard 메일함: ${m.to} 에 ${what} 못 보냄(${why})`)
 
-      return
+      return false
     }
-    clock.after(RETRY_MIN_MS * 5, () => void notifyParent(p, ep, tries - 1))
+    await new Promise<void>(done => void clock.after(RETRY_MIN_MS * 5, done))
+
+    return sendMail(m, ep, what, tries - 1)
+  }
+
+  /** 부모에게 연결 통지를 보낸다(SWITCHBOARD_PARENT 가 있을 때만). 실패해도 메일함은 간다. */
+  const notifyParent = async (ep: number): Promise<void> => {
+    if (ep !== epoch || profile === null) return
+    const parent = opts.slot?.parent
+    if (parent === undefined || parent === '' || me === null || role === null) return
+    const label = opts.slot?.label
+    const n = connectedNotice({ role, machine: me.machine, directory: me.directory, sessionId: me.sessionId, ...(label === undefined ? {} : { label }) })
+    // 다시 보내도 한 통만(같은 세션·주소의 이번 연결).
+    const key = `switchboard-connected-${me.sessionId || me.machine}-${role}-${startedAt}`
+    if (await sendMail({ to: parent, subject: n.subject, body: n.body, key }, ep, '연결 통지를')) log(`switchboard 메일함: ${parent} 에 연결 통지를 보냈다`)
+  }
+
+  const call: Mailbox['call'] = async (path, init = {}, io = {}) => {
+    const p = profile
+    if (p === null) return null
+    let timer: Timer | undefined
+    try {
+      const r = await Promise.race([
+        (io.http ?? http).fetch(`${p.endpoint}${path}`, {
+          method: init.method ?? 'GET',
+          headers: { ...headers(p), ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+          ...(init.body === undefined ? {} : { body: init.body }),
+        }),
+        new Promise<null>(done => void (timer = clock.after(io.timeoutMs ?? CHECK_TIMEOUT_MS, () => done(null)))),
+      ]).finally(() => timer?.cancel())
+
+      return r === null ? null : { status: r.status, ok: r.ok, text: r.text }
+    } catch {
+      return null
+    }
   }
 
   /** 지금도 pending 인 ID 만 남긴다(바쁜 동안 세션이 스스로 읽은 메일은 알리지 않는다). 못 물으면 그대로. */
@@ -588,7 +657,14 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
           ...(cfg.parent === undefined ? {} : { parent: cfg.parent }),
         },
         presence: cfg.presence,
-        onRole: setRole,
+        onRole: r => {
+          setRole(r)
+          try {
+            cfg.onRole?.(r)
+          } catch {
+            // 바깥(환경변수 등)의 잘못이 구독을 막지 않는다.
+          }
+        },
         log,
         ...(cfg.warn === undefined ? {} : { warn: cfg.warn }),
         ...(cfg.singleRoles === undefined ? {} : { singleRoles: cfg.singleRoles }),
@@ -620,13 +696,15 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     role = null
     polling = false
     status = 'off'
-    slot?.stop()
+    const released = slot?.stop() ?? Promise.resolve()
     slot = undefined
     next_?.cancel()
     watchdog?.cancel()
     grace?.cancel()
     off?.()
     off = undefined
+
+    return released
   }
 
   const takeover = async (): Promise<TakeoverResult> =>
@@ -639,5 +717,17 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     report: () => slot?.report(),
     takeover,
     state: () => ({ status, cursor, queued: [...queued], role }),
+    send: m => sendMail(m, epoch),
+    call,
+    onUrgent: fn => {
+      urgentTaps.add(fn)
+
+      return () => void urgentTaps.delete(fn)
+    },
+    parent: () => {
+      const v = opts.slot?.parent
+
+      return v === undefined || v === '' ? undefined : v
+    },
   }
 }

@@ -77,6 +77,15 @@ export type HostEvent =
    */
   | { type: 'input.submit'; text: string; origin?: 'user' | 'plugin' | 'other' }
   | { type: 'compact.complete' }
+  /**
+   * 턴이 API 오류로 멈췄다(D8). kind 는 에이전트가 나눈 오류 종류(rate_limit·overloaded·server_error·billing_error 등).
+   * 오류 본문은 싣지 않는다.
+   */
+  | { type: 'stop.failure'; kind: string }
+  /** 에이전트가 사람을 기다린다(D8, 권한 창·입력 대기 등). kind 는 알림 종류(permission_prompt·idle_prompt 등). */
+  | { type: 'notification'; kind: string }
+  /** 본 세션의 도구 호출 하나가 끝났다(D8: 사람 기다림이 풀린 것으로 본다). */
+  | { type: 'tool.complete' }
 
 export type Features = {
   /** injectMidTurn 이 있다. */
