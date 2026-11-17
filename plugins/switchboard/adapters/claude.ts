@@ -2,7 +2,7 @@
 //  - submitTurn → $.prompt.submit({ asUser: true }) (턴이 돌면 끝난 뒤 새 턴으로 간다)
 //  - injectMidTurn → 본 세션의 다음 도구 호출 결과에 context 로 붙인다(PostToolUse 리마인더와 같은 자리)
 //  - compact·usage → $.session.compact·$.session.usage
-//  - 이벤트 → turn.start·turn.complete·prompt.change·prompt.submit·session.compact 훅(wireClaudeEvents)
+//  - 이벤트 → turn.start·turn.complete·prompt.edit·prompt.change·prompt.submit·session.compact 훅(wireClaudeEvents)
 //  - services → $.http·$.clock·$.fs
 //  - 메일함 프로필 경로 → agent-mail CLI 규칙(AGENT_MAIL_CONFIG_DIR·APPDATA·XDG_CONFIG_HOME·HOME·USERPROFILE, mailProfilePath)
 //  - 메일 전 compact 설정 → SWITCHBOARD_COMPACT_TOKENS·SWITCHBOARD_COMPACT_INSTRUCTIONS(compactEnv)
@@ -79,6 +79,14 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
       box.expire()
       emitter.emit({ type: 'turn.complete' })
     }
+
+    return r
+  }).catch(($, e, next) => next(e))
+  // 사람이 치는 글자·붙여 넣기는 prompt.edit 로 온다(prompt.change 는 그 밖의 바뀜: 기록 불러오기·지우기·채우기).
+  // 둘 다 들어야 「입력창에 글이 있음」을 안다. 0.8.1 까지는 prompt.change 만 들어 입력 중 보류가 걸리지 않았다.
+  on('prompt.edit', async ($, e, next) => {
+    const r = await next(e)
+    emitter.emit({ type: 'input.change', text: r.text })
 
     return r
   }).catch(($, e, next) => next(e))

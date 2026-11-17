@@ -397,6 +397,13 @@ export const register: Register = on => {
       holdAfterUserMs: holdConfig(await holdEnv($)),
     })
     await board.start().catch(() => false)
+    // 다시 뜰 때(reload·resume) 입력창에 이미 글이 있으면 입력 중으로 시작한다.
+    try {
+      const draft = (await $.prompt.read()).text
+      if (draft.trim() !== '') emitter.emit({ type: 'input.change', text: draft })
+    } catch {
+      // 입력창을 못 읽으면 다음 편집에서 안다.
+    }
     // 닫힘 장부를 본다: Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
     $.clock.every(SYNC_MS, () => void pollLedger($).catch(() => undefined))
 
