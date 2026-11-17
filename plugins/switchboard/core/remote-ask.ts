@@ -1,6 +1,6 @@
 // 원격 질문 — 묻는 쪽(#111): 프로필이 있는 세션의 ask 를 Agent Mail 서버 질문으로 올리고, 답 메일을 세션 입력으로 바꾸고,
 // resolve 를 거두기로 잇는다.
-//  - 올리기: POST /api/questions. 201 이면 서버 질문, 403(can_ask 꺼짐)·409(답할 대장 없음)·400(모양)·연결 실패면 로컬 패널로.
+//  - 올리기: POST /api/questions(대장 세션이면 올리지 않고 로컬, #136). 201 이면 서버 질문, 403(can_ask 꺼짐)·409(답할 대장 없음)·400(모양)·연결 실패면 로컬 패널로.
 //    메일함이 꺼져 있으면(프로필 없음) 묻지 않고 로컬(까닭 없음).
 //  - 서버 질문은 이 세션의 로컬 패널에 올리지 않는다: 묻는 쪽 패널에 선택지가 뜨면 묻는 쪽(이 세션의 사람·Orca 사이드바)이
 //    스스로 답해 버릴 수 있고, 그 답은 서버로 가지 않아 대장·대시보드의 같은 질문과 갈라진다. 손잡이는 서버 id(q_…)다.
@@ -62,8 +62,13 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
     if (mine.length > REMEMBER_IDS) mine.shift()
   }
 
+  const boss = () => (opts.isBoss === undefined ? isBossRole(mail.state().role, opts.bosses ?? []) : opts.isBoss())
+
   const ask = async (questions: readonly QuestionPanelQuestion[], io?: CallIo): Promise<RemoteAskResult> => {
     if (mail.state().status === 'off') return { kind: 'local', reason: null }
+    // 대장 세션(#136): 답할 대장이 자기 자신이라 서버는 409 를 돌려줄 뿐이다. 묻지 않고 평소 로컬로(까닭 없음).
+    // 판정이 아직 안 났으면(연결 전) boss() 가 false 라 지금처럼 올려 본다.
+    if (boss()) return { kind: 'local', reason: null }
     const r = await api.ask(toRemoteItems(questions), io)
     if (r.ok) {
       remember(r.value.id)
@@ -104,8 +109,6 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
 
     return { ok: false, status: r.status, reason }
   }
-
-  const boss = () => (opts.isBoss === undefined ? isBossRole(mail.state().role, opts.bosses ?? []) : opts.isBoss())
 
   const noticeText = async (e: MailEvent, body: string): Promise<string | null | NoticeDrop> => {
     // 새 질문 참조 메일: 대장 세션이면 패널이 정본이라 넣지 않는다.

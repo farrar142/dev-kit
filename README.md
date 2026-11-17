@@ -63,7 +63,7 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.12.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.12.1, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
@@ -227,6 +227,12 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-18 — switchboard 0.12.1: 대장 질문은 로컬로, 좁은 터미널에서도 질문 보이기 (#136)
+
+- 대장 세션(`core/boss.ts` 판정이 대장)의 `ask`는 `POST /api/questions`를 부르지 않고 곧장 로컬 패널에 올린다. 결과 글에 「답할 대장 역할이 없음(409)」 줄이 붙지 않는다. 판정 전(연결 전·whoami 묻는 중)과 대장 아닌 세션은 그대로 올려 보고, 403·409·400·연결 실패면 까닭을 붙여 로컬로 간다.
+- 좁은 터미널: 모델이 부른 질문으로 연 패널은 Claude Code가 「묻지 않고 연 pane」으로 보아 144열(사람이 한 번 연 뒤로는 110열) 아래에서는 자리를 주지 않고 기다리게 한다. `$.ui.open`에는 아래칸 같은 배치 옵션이 없다(`placement`는 데스크톱 앱의 `widget`뿐). 그래서 패널이 자리를 못 잡으면 `질문 q3: 어느 DB를 쓸까요? 외 1 — /questions 로 연다` 토스트를 20초 띄운다(원격 질문 대장 쪽도 같다). 대화창 줄(`ui.log`)은 0.11.4대로 남기지 않는다.
+- `/questions`: 자리를 못 잡고 기다리는 패널은 열린 것으로 치지 않아, 좁은 터미널에서 `/questions`를 치면 닫히지 않고 열린다(사람이 연 pane은 폭과 상관없이 자리를 잡는다).
 
 ### 2026-11-18 — switchboard 0.12.0: 협업 묶음 대장 판정·SWITCHBOARD_* 이름 (#130)
 

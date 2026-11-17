@@ -47,6 +47,11 @@ import type { QuestionPanelBatch } from '../types'
 
 const PANE = 'questions'
 const TITLE = '질문'
+// 좁은 터미널(#136): 모델이 부른 질문으로 연 패널은 「묻지 않고 연 pane」이라 144열(사람이 한 번 연 뒤로는 110열) 아래에서는
+// 자리를 못 잡고 기다린다(Claude Code mod UI 규칙, 배치 옵션 없음). 그때는 질문 첫 줄을 오래 가는 토스트로 띄우고
+// /questions(사람이 연 pane 은 폭과 상관없이 자리를 잡는다)를 붙인다. 대화창 줄(ui.log)은 쓰지 않는다(#128).
+const NARROW_TOAST_MS = 20_000
+const OPEN_HINT = '/questions 로 연다'
 // 질문 도구는 이 플러그인의 stdio MCP 서버(.mcp.json의 qp, mcp/server.mjs)가 낸다. mod 도구로 내면
 // Claude Code가 PreToolUse·PostToolUse 훅을 돌리지 않아 Orca 등 바깥 도구가 질문을 못 받는다.
 const TOOL = 'mcp__plugin_switchboard_qp__ask'
@@ -106,6 +111,19 @@ function panelHost($: Self) {
 }
 
 /** 이 훅의 `$.http` 를 코어의 http 로(훅 예산은 `$` 응답을 기다리는 동안 멈춘다). */
+/** 질문 첫 줄(여럿이면 「외 N」). */
+const headline = (qs: readonly { question: string }[]) =>
+  `${qs[0]?.question ?? ''}${qs.length > 1 ? ` 외 ${qs.length - 1}` : ''}`
+
+/** 질문 패널을 연다. 자리를 못 잡았으면(좁은 터미널) 질문을 토스트로 보이고 false. */
+const openPanel = async ($: Self, toast: string): Promise<boolean> => {
+  const opened = await $.ui.open({ id: PANE, title: TITLE }).catch(() => null)
+  if (opened === null || opened.isPlaced) return true
+  $.ui.toast(`${toast} — ${OPEN_HINT}`, { timeoutMs: NARROW_TOAST_MS })
+
+  return false
+}
+
 const hookHttp = ($: Self): Pick<Http, 'fetch'> => ({
   fetch: async (url, init) => {
     const r = await $.http.fetch(url, init)
@@ -141,8 +159,9 @@ const remoteSink = ($: Self): RemoteSink => ({
     const b = await panelOf($).addRemote({ q, sessionId: sid, now })
     if (b === null || b.remote === undefined || b.key === undefined) return
     await mcpLedger($).sync({ offer: { id: b.id, key: b.key, questions: q.questions, remote: b.remote } })
-    $.ui.toast(`원격 질문 ${b.id}(${q.asker || '?'}): ${q.questions[0]?.question ?? ''}`)
-    if (panelMode(await $.session.surfaces()) === 'panel') void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    const toast = `원격 질문 ${b.id}(${q.asker || '?'}): ${q.questions[0]?.question ?? ''}`
+    // 패널이 자리를 못 잡으면 openPanel 이 오래 가는 토스트(열기 안내 포함)를 대신 띄운다.
+    if (panelMode(await $.session.surfaces()) !== 'panel' || (await openPanel($, toast))) $.ui.toast(toast)
   },
   close: async q => {
     await panelOf($).closeRemote(q.id, q.status === 'withdrawn' ? 'remote-withdrawn' : 'remote-answered')
@@ -547,9 +566,7 @@ export const register: Register = on => {
       '',
       chatBlock(batch),
     ].join('\n')
-    if (mode === 'panel') {
-      void $.ui.open({ id: PANE, title: TITLE })
-    }
+    if (mode === 'panel') void openPanel($, `질문 ${id}: ${headline(questions)}`)
 
     const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(before), panel_key: key })
     // 서버가 답하지 못했거나(꺼짐·오류) 훅이 막았으면 모델은 묶음을 모른다: 쌓은 묶음을 거둔다.
@@ -592,7 +609,8 @@ export const register: Register = on => {
 
   on('command.run', { command: 'questions' }, async ($, e) => {
     const arg = typeof e.args === 'string' ? e.args.trim().toLowerCase() : ''
-    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
+    // 자리를 못 잡고 기다리는 pane(좁은 터미널, #136)은 열린 것으로 치지 않는다: 그때 /questions 는 닫지 않고 연다.
+    const isUp = (await $.ui.panes()).some(p => p.id === PANE && p.isPlaced)
     if (arg === 'close' || arg === '닫기' || (arg === '' && isUp)) {
       await $.ui.close({ id: PANE })
 
