@@ -2,9 +2,12 @@
 // 올라갈 추가분만 검사해 비밀·내부 이름이 보이면 막는다(exit 2 + 이유).
 //
 // 검사 대상
-//   - git commit : `git diff --cached` 의 + 줄(-a/--all 이면 `git diff` 도), 명령 글(커밋 메시지)
+//   - git commit : `git diff --cached` 의 + 줄(-a/--all 이면 `git diff` 도), 그 명령의 인자(-m 메시지 등),
+//                  -F/--file/-t 파일 내용(`-F -` 면 heredoc·here-string)
 //   - git push   : 업스트림(없으면 원격 기본 브랜치, 그것도 없으면 원격에 없는 커밋) 대비 나갈 커밋들의 + 줄과 메시지
-//   - gh pr create/edit : 명령 글(제목·본문 인자, heredoc 포함), --body-file 내용, create 는 나갈 커밋들도
+//   - gh pr create/edit : 그 명령의 인자(제목·본문, `$(cat <<EOF …)` 포함), --body-file 내용, create 는 나갈 커밋들도
+// 명령 글은 셸 문법대로 단순 명령으로 나눠 그 git·gh 명령의 인자만 본다(cd 경로·환경변수·다른 명령은 보지 않는다).
+// 읽지 못하거나(닫히지 않은 따옴표 등) 트리거 꼴이 실행 자리에 있는데 설명이 안 되면($(git commit …) 등) 명령 글 전체를 본다.
 // 패턴
 //   1. 내장 일반 패턴(BUILTIN)
 //   2. 사용자 금지어 파일(저장소 밖): LEAK_GUARD_PATTERNS, 없으면 $XDG_CONFIG_HOME/leak-guard/patterns.txt
@@ -178,8 +181,274 @@ function nativePath(d) {
   return m ? `${m[1].toUpperCase()}:\\${(m[2] || '').replace(/\//g, '\\')}` : d;
 }
 
-// 트리거를 찾는다. 반환: [{ kind, dir, args }]
-function findTriggers(cmd, cwd) {
+// ── 셸 명령 읽기 ──
+// 명령 글을 단순 명령으로 나눈다. 돌려주는 것: { cmds, data }
+//   cmds: [{ start, words: [{ value, start }], heredocs: [본문] }]  (value 는 따옴표를 벗긴 값, `$(…)` 는 날 글 그대로)
+//   data: [[시작, 끝)] — 작은따옴표 안·큰따옴표의 글자 부분·heredoc 본문처럼 실행되지 않는 글의 자리
+// 닫히지 않은 따옴표·치환·heredoc 이면 null — 부른 쪽은 명령 글 전체를 검사한다(fail-closed).
+const META = ' \t\n;&|()<>';
+
+// `$(` 바로 뒤(i)부터 짝 `)` 다음 자리를 찾는다. 안의 따옴표·heredoc 은 data 로 적는다. 못 찾으면 -1.
+function skipSubst(s, i, data) {
+  let depth = 1;
+  const pending = [];
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '\\') {
+      i += 2;
+    } else if (ch === "'") {
+      const e = s.indexOf("'", i + 1);
+      if (e < 0) return -1;
+      data.push([i + 1, e]);
+      i = e + 1;
+    } else if (ch === '"') {
+      const e = readDouble(s, i + 1, data, null);
+      if (e < 0) return -1;
+      i = e;
+    } else if (ch === '`') {
+      const e = s.indexOf('`', i + 1);
+      if (e < 0) return -1;
+      i = e + 1;
+    } else if (s.startsWith('<<', i) && s[i + 2] !== '<') {
+      const h = readDelim(s, i + 2);
+      if (!h) return -1;
+      pending.push(h);
+      i = h.end;
+    } else if (ch === '\n' && pending.length) {
+      const r = readBodies(s, i, pending.splice(0), data);
+      if (!r) return -1;
+      i = r.pos;
+    } else if (ch === '(') {
+      depth++;
+      i++;
+    } else if (ch === ')') {
+      if (--depth === 0) return i + 1;
+      i++;
+    } else {
+      i++;
+    }
+  }
+  return -1;
+}
+
+// 큰따옴표 안(i 는 여는 `"` 다음)을 읽어 닫는 `"` 다음 자리를 돌려준다. out 이 있으면 값을 쌓는다.
+function readDouble(s, i, data, out) {
+  let lit = i;
+  const flush = (at) => at > lit && data.push([lit, at]);
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '"') {
+      flush(i);
+      return i + 1;
+    }
+    if (ch === '\\') {
+      const n = s[i + 1];
+      if (out && n !== '\n') out.v += '$`"\\'.includes(n) ? n : ch + (n || '');
+      i += 2;
+    } else if (s.startsWith('$(', i) || ch === '`') {
+      flush(i);
+      const e = ch === '`' ? s.indexOf('`', i + 1) + 1 : skipSubst(s, i + 2, data);
+      if (e <= 0) return -1;
+      if (out) out.v += s.slice(i, e);
+      i = lit = e;
+    } else {
+      if (out) out.v += ch;
+      i++;
+    }
+  }
+  return -1;
+}
+
+// `<<` 다음(i)에서 구분자를 읽는다: { delim, strip, end }
+function readDelim(s, i) {
+  let strip = false;
+  if (s[i] === '-') {
+    strip = true;
+    i++;
+  }
+  while (s[i] === ' ' || s[i] === '\t') i++;
+  let delim = '';
+  while (i < s.length && !META.includes(s[i])) {
+    const ch = s[i];
+    if (ch === "'" || ch === '"') {
+      const e = s.indexOf(ch, i + 1);
+      if (e < 0) return null;
+      delim += s.slice(i + 1, e);
+      i = e + 1;
+    } else if (ch === '\\') {
+      delim += s[i + 1] || '';
+      i += 2;
+    } else {
+      delim += ch;
+      i++;
+    }
+  }
+  return delim ? { delim, strip, end: i } : null;
+}
+
+// 줄바꿈 자리(nl) 뒤의 heredoc 본문들을 읽는다: { pos, bodies } 또는 null
+function readBodies(s, nl, list, data) {
+  let pos = nl + 1;
+  const bodies = [];
+  for (const h of list) {
+    const from = pos;
+    for (;;) {
+      if (pos > s.length) return null;
+      let e = s.indexOf('\n', pos);
+      if (e < 0) e = s.length;
+      const line = s.slice(pos, e).replace(/\r$/, '');
+      if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) {
+        data.push([from, pos]);
+        bodies.push(s.slice(from, pos));
+        pos = e + 1;
+        break;
+      }
+      pos = e + 1;
+    }
+  }
+  return { pos: Math.min(pos, s.length), bodies };
+}
+
+function parseCommands(s) {
+  const cmds = [];
+  const data = [];
+  let cur = null;
+  let word = null;
+  let pending = []; // { delim, strip, cmd }
+  let target = null; // 'redir' | 'here' — 다음 낱말을 인자로 넣지 않는다
+  const open = (at) => {
+    if (!cur) cur = { start: at, words: [], heredocs: [] };
+  };
+  const begin = (at) => {
+    open(at);
+    if (!word) word = { v: '', start: at };
+  };
+  const endWord = () => {
+    if (!word) return;
+    if (target === 'here') cur.heredocs.push(word.v);
+    else if (target !== 'redir') cur.words.push({ value: word.v, start: word.start });
+    target = null;
+    word = null;
+  };
+  const endCmd = () => {
+    endWord();
+    if (cur) cmds.push(cur);
+    cur = null;
+  };
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === "'") {
+      begin(i);
+      const e = s.indexOf("'", i + 1);
+      if (e < 0) return null;
+      data.push([i + 1, e]);
+      word.v += s.slice(i + 1, e);
+      i = e + 1;
+    } else if (ch === '"') {
+      begin(i);
+      const e = readDouble(s, i + 1, data, word);
+      if (e < 0) return null;
+      i = e;
+    } else if (ch === '\\') {
+      if (s[i + 1] !== '\n') {
+        begin(i);
+        word.v += s[i + 1] || '';
+      }
+      i += 2;
+    } else if (s.startsWith('$(', i) || ch === '`') {
+      begin(i);
+      const e = ch === '`' ? s.indexOf('`', i + 1) + 1 : skipSubst(s, i + 2, data);
+      if (e <= 0) return null;
+      word.v += s.slice(i, e);
+      i = e;
+    } else if (ch === '#' && !word) {
+      while (i < s.length && s[i] !== '\n') i++;
+    } else if (s.startsWith('<<<', i)) {
+      endWord();
+      open(i);
+      target = 'here';
+      i += 3;
+    } else if (s.startsWith('<<', i)) {
+      endWord();
+      open(i);
+      const h = readDelim(s, i + 2);
+      if (!h) return null;
+      pending.push({ ...h, cmd: cur });
+      i = h.end;
+    } else if (ch === '<' || ch === '>' || (ch === '&' && s[i + 1] === '>')) {
+      if (word && /^\d+$/.test(word.v)) word = null; // 2>&1 의 2
+      endWord();
+      open(i);
+      i++;
+      while (i < s.length && '<>&|'.includes(s[i])) i++;
+      const fd = /^(?:\d+|-)(?=[\s;&|)]|$)/.exec(s.slice(i)); // >&2, <&-
+      if (fd) i += fd[0].length;
+      else target = 'redir';
+    } else if (ch === '\n') {
+      const owner = cur;
+      endCmd();
+      if (pending.length) {
+        const r = readBodies(s, i, pending, data);
+        if (!r) return null;
+        pending.forEach((h, k) => (h.cmd || owner).heredocs.push(r.bodies[k]));
+        pending = [];
+        i = r.pos;
+      } else {
+        i++;
+      }
+    } else if (';&|()'.includes(ch)) {
+      endCmd();
+      i++;
+    } else if (ch === ' ' || ch === '\t') {
+      endWord();
+      i++;
+    } else {
+      begin(i);
+      word.v += ch;
+      i++;
+    }
+  }
+  if (pending.length) return null;
+  endCmd();
+  return { cmds, data };
+}
+
+const LEAD = new Set(['{', '!', 'then', 'do', 'else', 'elif', 'if', 'while', 'until', 'time', 'command', 'exec', 'nohup', 'env', 'sudo']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
+
+// 단순 명령의 낱말에서 트리거를 읽는다: { kind, at, gitC: [], args: [값] } | { shell, script } | null
+function readTrigger(words, heredocs) {
+  let k = 0;
+  while (k < words.length && (LEAD.has(words[k].value) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].value))) k++;
+  if (k >= words.length) return null;
+  const prog = path.basename(words[k].value);
+  const rest = words.slice(k + 1).map((w) => w.value);
+  if (prog === 'git') {
+    const gitC = [];
+    let j = 0;
+    while (j < rest.length && rest[j].startsWith('-')) {
+      if (rest[j] === '-C') gitC.push(rest[++j]);
+      else if (rest[j] === '-c') j++;
+      j++;
+    }
+    if (rest[j] === 'commit' || rest[j] === 'push') return { kind: rest[j], at: words[k].start, atEnd: words[k].start + words[k].value.length, gitC, args: rest.slice(j + 1) };
+    return null;
+  }
+  if (prog === 'gh' && rest[0] === 'pr' && (rest[1] === 'create' || rest[1] === 'edit')) {
+    return { kind: `pr-${rest[1]}`, at: words[k].start, atEnd: words[k].start + words[k].value.length, gitC: [], args: rest.slice(2) };
+  }
+  if (prog === 'eval') return { shell: true, script: rest.join(' ') };
+  if (SHELLS.has(prog)) {
+    const c = rest.indexOf('-c');
+    if (c >= 0 && rest[c + 1] !== undefined) return { shell: true, script: rest[c + 1] };
+    if (heredocs.length && !rest.some((w) => !w.startsWith('-'))) return { shell: true, script: heredocs.join('\n') };
+  }
+  return null;
+}
+
+// 옛 방식: 명령 글에서 트리거 꼴을 정규식으로 찾는다(파서가 설명하지 못한 것을 잡는 그물). [{ kind, dir, args, at }]
+function regexTriggers(cmd, cwd) {
   const out = [];
   const gitRe = /\bgit((?:\s+(?:-C\s+(?:"[^"]*"|'[^']*'|\S+)|-c\s+\S+|--?[\w-]+(?:=\S+)?))*)\s+(commit|push)\b([^\n;&|]*)/g;
   let m;
@@ -187,11 +456,79 @@ function findTriggers(cmd, cwd) {
     let dir = findDir(cmd, m.index, cwd);
     const c = /-C\s+("[^"]*"|'[^']*'|\S+)/.exec(m[1]);
     if (c) dir = path.resolve(dir, nativePath(unquote(c[1])));
-    out.push({ kind: m[2], dir, args: m[3] });
+    out.push({ kind: m[2], dir, at: m.index, args: m[3].trim().split(/\s+/).filter(Boolean) });
   }
   const ghRe = /\bgh\s+pr\s+(create|edit)\b/g;
   while ((m = ghRe.exec(cmd))) {
-    out.push({ kind: `pr-${m[1]}`, dir: findDir(cmd, m.index, cwd), args: cmd.slice(m.index) });
+    out.push({ kind: `pr-${m[1]}`, dir: findDir(cmd, m.index, cwd), at: m.index, args: [] });
+  }
+  return out;
+}
+
+// 트리거를 찾는다. 반환: [{ kind, dir, args: [값], heredocs: [본문], whole?: 명령 글 }]
+//   whole 이 있으면 나가는 부분을 가려내지 못한 것이라 그 명령 글 전체를 검사한다.
+function findTriggers(cmd, cwd, depth = 0) {
+  const loose = regexTriggers(cmd, cwd);
+  if (!loose.length) return [];
+  const parsed = depth < 3 ? parseCommands(cmd) : null;
+  if (!parsed) return loose.map((t) => ({ ...t, heredocs: [], whole: cmd }));
+  const out = [];
+  const explained = [];
+  for (const c of parsed.cmds) {
+    const t = readTrigger(c.words, c.heredocs);
+    if (!t) continue;
+    if (t.shell) {
+      out.push(...findTriggers(t.script, findDir(cmd, c.start, cwd), depth + 1));
+      continue;
+    }
+    let dir = findDir(cmd, c.start, cwd);
+    for (const d of t.gitC) dir = path.resolve(dir, nativePath(d));
+    explained.push([t.at, t.atEnd]);
+    out.push({ kind: t.kind, dir, args: t.args, heredocs: c.heredocs });
+  }
+  const within = (spans, at) => spans.some(([a, b]) => at >= a && at < b);
+  for (const t of loose) {
+    if (!within(explained, t.at) && !within(parsed.data, t.at)) out.push({ ...t, heredocs: [], whole: cmd });
+  }
+  return out;
+}
+
+// 나가는 글을 모은다: [[이름, 글]]. 파일 경로 인자는 빼고 그 파일 내용을 넣는다.
+// stdin(`-`)인데 heredoc·here-string 이 없으면 무엇이 들어올지 모르니 명령 글 전체를 넣는다(fail-closed).
+//   fileOpts: 값이 파일 경로인 선택지, valueOpts: 값을 받는 짧은 선택지 글자(뭉친 `-am` 꼴을 풀 때)
+function payload(t, label, fileOpts, shortWithValue, cmd) {
+  const out = [];
+  const readFile = (f) => {
+    if (f === '-') {
+      if (t.heredocs.length) t.heredocs.forEach((h) => out.push([label, h]));
+      else out.push(['명령', cmd]);
+      return;
+    }
+    const abs = path.resolve(t.dir, nativePath(f));
+    try {
+      out.push([path.basename(abs), fs.readFileSync(abs, 'utf8')]);
+    } catch {}
+  };
+  const a = t.args;
+  for (let i = 0; i < a.length; i++) {
+    const w = a[i];
+    const eq = /^(--[\w-]+)=([\s\S]*)$/.exec(w);
+    if (eq && fileOpts.includes(eq[1])) {
+      readFile(eq[2]);
+    } else if (fileOpts.includes(w)) {
+      if (i + 1 < a.length) readFile(a[++i]);
+    } else if (/^-[A-Za-z]/.test(w) && !w.startsWith('--')) {
+      // 뭉친 짧은 선택지: 값을 받는 글자가 나오면 나머지(없으면 다음 낱말)가 그 값
+      let j = 1;
+      while (j < w.length && !shortWithValue.includes(w[j])) j++;
+      if (j >= w.length) continue;
+      const v = j + 1 < w.length ? w.slice(j + 1) : a[++i];
+      if (v === undefined) continue;
+      if (fileOpts.includes(`-${w[j]}`)) readFile(v);
+      else out.push([label, v]);
+    } else {
+      out.push([label, w]);
+    }
   }
   return out;
 }
@@ -229,6 +566,24 @@ function visibility(dir) {
   return v;
 }
 
+const COMMIT_FILE_OPTS = ['-F', '--file', '-t', '--template'];
+const COMMIT_SHORT_VALUE = 'mFtcC';
+const PR_FILE_OPTS = ['-F', '--body-file'];
+const PR_SHORT_VALUE = 'tbFBHTRalmpr';
+
+// commit 의 -a/--all(뭉친 `-am` 도). 값 받는 글자 뒤의 a 는 값이라 보지 않는다.
+function commitAll(args) {
+  return args.some((w) => {
+    if (w === '--all') return true;
+    if (!/^-[A-Za-z]+$/.test(w)) return false;
+    for (const ch of w.slice(1)) {
+      if (ch === 'a') return true;
+      if (COMMIT_SHORT_VALUE.includes(ch)) return false;
+    }
+    return false;
+  });
+}
+
 function check(cmd, cwd) {
   const triggers = findTriggers(cmd, cwd);
   if (!triggers.length) return null;
@@ -243,14 +598,16 @@ function check(cmd, cwd) {
       if (user.error) return `leak-guard: ${user.error}`;
     }
     const patterns = [...BUILTIN, ...user.patterns];
+    const scanAll = (texts) => texts.forEach(([label, text]) => scanText(text, label, patterns, findings));
+    if (t.whole) scanAll([['명령', t.whole]]);
     if (t.kind === 'commit') {
       scanPatch(git(t.dir, ['diff', '--cached', '--no-color', '--no-ext-diff']) || '', patterns, findings);
-      if (/(?:^|\s)(?:--all|-[a-zA-Z]*a[a-zA-Z]*)(?=\s|$)/.test(t.args)) {
+      if (commitAll(t.args)) {
         scanPatch(git(t.dir, ['diff', '--no-color', '--no-ext-diff']) || '', patterns, findings);
       }
-      scanText(cmd, '명령', patterns, findings);
+      if (!t.whole) scanAll(payload(t, '커밋 메시지', COMMIT_FILE_OPTS, COMMIT_SHORT_VALUE, cmd));
     } else if (t.kind === 'push') {
-      const words = t.args.trim().split(/\s+/).filter((w) => w && !w.startsWith('-'));
+      const words = t.args.filter((w) => w && !w.startsWith('-'));
       let tipRef = 'HEAD';
       if (words.length >= 2) {
         const src = words[1].replace(/^\+/, '').split(':')[0];
@@ -258,13 +615,15 @@ function check(cmd, cwd) {
       }
       scanOutgoing(t.dir, tipRef, patterns, findings);
     } else {
-      scanText(cmd, '명령', patterns, findings);
-      const bf = /(?:--body-file|-F)[\s=]+("[^"]*"|'[^']*'|\S+)/.exec(t.args);
-      if (bf && unquote(bf[1]) !== '-') {
-        const f = path.resolve(t.dir, unquote(bf[1]));
-        try {
-          scanText(fs.readFileSync(f, 'utf8'), path.basename(f), patterns, findings);
-        } catch {}
+      if (!t.whole) scanAll(payload(t, 'PR 제목·본문', PR_FILE_OPTS, PR_SHORT_VALUE, cmd));
+      else {
+        const bf = /(?:--body-file|-F)[\s=]+("[^"]*"|'[^']*'|\S+)/.exec(t.whole.slice(t.at));
+        if (bf && unquote(bf[1]) !== '-') {
+          const f = path.resolve(t.dir, unquote(bf[1]));
+          try {
+            scanText(fs.readFileSync(f, 'utf8'), path.basename(f), patterns, findings);
+          } catch {}
+        }
       }
       if (t.kind === 'pr-create') scanOutgoing(t.dir, 'HEAD', patterns, findings);
     }

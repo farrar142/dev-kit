@@ -140,9 +140,11 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 
 | 명령 | 보는 것 |
 |---|---|
-| `git commit` | `git diff --cached`의 `+` 줄(`-a`·`--all`이면 `git diff`도), 명령 글(커밋 메시지) |
+| `git commit` | `git diff --cached`의 `+` 줄(`-a`·`--all`이면 `git diff`도), 그 commit 명령의 인자(`-m` 메시지 등), `-F`·`--file`·`-t` 파일의 내용(`-F -`면 heredoc·here-string) |
 | `git push` | 나갈 커밋들의 `+` 줄과 메시지. 기준은 업스트림, 없으면 원격 기본 브랜치, 그것도 없으면 원격에 없는 커밋. 중간 커밋에서 지운 값도 역사에 남으므로 걸린다 |
-| `gh pr create`·`gh pr edit` | 명령 글(제목·본문 인자, heredoc 포함), `--body-file`의 내용, create는 나갈 커밋들도 |
+| `gh pr create`·`gh pr edit` | 그 명령의 인자(제목·본문, `$(cat <<'EOF' …)` 포함), `--body-file`의 내용(`-`면 heredoc), create는 나갈 커밋들도 |
+
+명령 글은 셸 문법(따옴표·`$(…)`·heredoc·`;`·`&&`·`|`)대로 단순 명령으로 나눠 **그 git·gh 명령의 인자만** 본다. 그래서 `cd <홈 경로>/x && git commit -m '…'`의 cd 경로, 환경변수, 앞뒤의 다른 명령에 금지어가 있어도 막지 않는다. 파일 경로 인자(`-F`·`--body-file`)는 경로가 아니라 내용을 본다. 다만 다음은 명령 글 전체를 본다(fail-closed): 읽지 못하는 명령(닫히지 않은 따옴표·heredoc), 실행 자리에 있는데 단순 명령으로 설명되지 않는 트리거(`$(git commit …)` 등), 파이프로 들어오는 메시지(`echo … | git commit -F -`). `bash -c '…'`·`eval`·`bash <<EOF`는 안의 명령을 다시 나눠 본다.
 
 패턴은 두 겹이다.
 
@@ -172,6 +174,13 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — leak-guard 0.2.0: 나가는 내용만 검사 (#94)
+
+- 0.1.0은 `git commit`·`gh pr create/edit` 명령 글 **전체**를 금지어로 봐서 `cd <홈 경로>/… && git commit -m '…'`처럼 나가지 않는 cd 경로·환경변수·다른 명령에 걸려 막았다. 이제 명령 글을 셸 문법대로 나눠 그 git·gh 명령의 인자(메시지·제목·본문)와 `-F`·`--body-file` 파일 내용, `-F -`의 heredoc만 본다. 스테이지된 diff·push 검사, 공개 저장소에서만, `leak-guard:allow` 계약은 그대로다.
+- 읽지 못하거나 설명이 안 되는 트리거는 전처럼 명령 글 전체를 본다. `bash -c`·`eval`·`bash <<EOF`는 안을 다시 나눈다.
+- 막을 때 위치 이름이 `명령:N`에서 `커밋 메시지:N`·`PR 제목·본문:N`으로 바뀌었다(전체를 볼 때만 `명령:N`).
+- 시험: 24건(오탐 재현·인용 방식별 메시지·`-F` 파일·diff·PR 본문·fail-closed 6건 추가).
 
 ### 2026-11-17 — switchboard 0.7.0: 연결 통지와 라벨 메일 (#80)
 

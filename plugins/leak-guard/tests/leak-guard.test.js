@@ -108,7 +108,7 @@ test('commit: 개인 키 머리말·GitHub 토큰, 커밋 메시지(명령 글)�
   const r = run(dir, `git commit -m "token ${GH_TOKEN}"`);
   assert.strictEqual(r.code, 2);
   assert.match(r.err, /k:1 — private-key/);
-  assert.match(r.err, /명령:1 — github-token/);
+  assert.match(r.err, /커밋 메시지:1 — github-token/);
   assert.ok(!r.err.includes(GH_TOKEN));
 });
 
@@ -234,7 +234,7 @@ test('gh pr create: 제목·heredoc 본문·나갈 커밋을 본다', { skip: SK
   const body = `gh pr create --title t --body "$(cat <<'EOF'\n요약\n서버 ${CGNAT}\nEOF\n)"`;
   const r = run(dir, body);
   assert.strictEqual(r.code, 2);
-  assert.match(r.err, /명령:3 — cgnat-ip/);
+  assert.match(r.err, /PR 제목·본문:3 — cgnat-ip/);
   sh(dir, 'switch', '-qc', 'feature');
   write(dir, 'k.txt', `${KEY_HEAD}\n`);
   sh(dir, 'commit', '-qm', 'k');
@@ -251,4 +251,98 @@ test('gh pr edit --body-file: 파일 내용을 본다', { skip: SKIP }, () => {
   assert.strictEqual(r.code, 2);
   assert.match(r.err, /body\.md:2/);
   assert.strictEqual(run(dir, 'gh pr edit 3 --body-file body.md').code, 0);
+});
+
+// ── 나가는 내용만 본다(#94): 명령줄의 나머지(cd 경로·환경변수·다른 명령)는 보지 않는다 ──
+// 금지어는 가짜 값. 저장소 폴더 이름에 넣어 cd 경로 오탐을 재현한다.
+const WORD = 'acme' + 'corp';
+function wordRepo() {
+  const dir = repo();
+  const named = path.join(tmp, `${WORD}-home${++seq}`);
+  fs.renameSync(dir, named);
+  const pf = fresh('patterns');
+  fs.writeFileSync(pf, `${WORD}\n`);
+  write(named, 'b.txt', 'clean\n');
+  return { dir: named, env: { LEAK_GUARD_PATTERNS: pf } };
+}
+
+test('오탐 재현: cd 경로·git -C 경로·환경변수·앞뒤 다른 명령의 금지어는 막지 않는다', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  for (const cmd of [
+    `cd "${dir}" && git commit -m 'clean'`,
+    `cd ${dir} && git commit -m "clean"`,
+    `git -C "${dir}" commit -m clean`,
+    `cd "${dir}"; NOTE=${WORD} git commit -qm clean 2>&1 | tail -n 3; echo ${WORD}`,
+    `cd "${dir}" && git add -A && git commit -m "$(cat <<'X'\n요약: git push 하면 나간다\nX\n)" > /dev/null; echo done`,
+    `cd "${dir}" && gh pr create --title t --body 'clean'`,
+  ]) {
+    const r = run(tmp, cmd, { env });
+    assert.strictEqual(r.code, 0, `${cmd}\n${r.err}`);
+  }
+});
+
+test('메시지 속 금지어는 인용 방식과 상관없이 막는다(작은따옴표·큰따옴표·$(cat <<EOF)·-F - heredoc·here-string)', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  const cases = [
+    [`git commit -m 'x ${WORD}'`, /커밋 메시지:1 — patterns/],
+    [`git commit -m "x ${WORD}"`, /커밋 메시지:1/],
+    [`git commit -qm"${WORD}"`, /커밋 메시지:1/],
+    [`git commit --message="${WORD}"`, /커밋 메시지:1/],
+    [`git commit -m t -m "둘째 문단 ${WORD}"`, /커밋 메시지:1/],
+    [`git commit -m "$(cat <<'EOF'\n제목\n\n본문 ${WORD}\nEOF\n)"`, /커밋 메시지:4/],
+    [`git commit -F - <<'EOF'\n제목\n${WORD}\nEOF`, /커밋 메시지:2/],
+    [`git commit -F - <<< "${WORD}"`, /커밋 메시지:1/],
+  ];
+  for (const [cmd, re] of cases) {
+    const r = run(tmp, `cd "${dir}" && ${cmd}`, { env });
+    assert.strictEqual(r.code, 2, cmd);
+    assert.match(r.err, re, cmd);
+  }
+});
+
+test('commit -F 파일: 경로가 아니라 내용을 본다', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  const msg = path.join(dir, `${WORD}-msg.txt`);
+  fs.writeFileSync(msg, 'clean\n');
+  assert.strictEqual(run(dir, `git commit -F "${msg}"`, { env }).code, 0);
+  fs.writeFileSync(msg, `a\n${WORD}\n`);
+  const r = run(dir, `git commit --file=${msg}`, { env });
+  assert.strictEqual(r.code, 2);
+  assert.match(r.err, /-msg\.txt:2/);
+});
+
+test('스테이지된 diff 속 금지어는 cd 를 거쳐도 막는다', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  write(dir, 'c.txt', `${WORD}\n`);
+  const r = run(tmp, `cd "${dir}" && git commit -m clean`, { env });
+  assert.strictEqual(r.code, 2);
+  assert.match(r.err, /c\.txt:1/);
+});
+
+test('gh pr: 제목·본문(작은따옴표·-b·--title=·body-file -) 속 금지어는 막는다', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  for (const cmd of [
+    `gh pr create --title '${WORD}' --body ok`,
+    `gh pr edit 3 -b "x ${WORD}"`,
+    `gh pr edit 3 --title="${WORD}"`,
+    `gh pr edit 3 --body-file - <<'EOF'\n${WORD}\nEOF`,
+  ]) {
+    const r = run(tmp, `cd "${dir}" && ${cmd}`, { env });
+    assert.strictEqual(r.code, 2, cmd);
+  }
+});
+
+test('fail-closed: 읽지 못하는 명령·치환 속 git commit·bash -c 는 그 안까지 본다', { skip: SKIP }, () => {
+  const { dir, env } = wordRepo();
+  // 닫히지 않은 따옴표 → 명령 글 전체
+  assert.strictEqual(run(dir, `echo '${WORD}; git commit -m x`, { env }).code, 2);
+  // $(git commit …) 은 단순 명령으로 읽히지 않으니 명령 글 전체
+  assert.strictEqual(run(dir, `r=$(git commit -m x); echo ${WORD}`, { env }).code, 2);
+  // bash -c '…', eval, bash <<EOF 는 안의 명령을 다시 읽는다
+  assert.strictEqual(run(dir, `bash -c 'git commit -m "${WORD}"'`, { env }).code, 2);
+  assert.strictEqual(run(dir, `bash -c 'cd /nowhere-${WORD} || git commit -m clean'`, { env }).code, 0);
+  assert.strictEqual(run(dir, `eval "git commit -m ${WORD}"`, { env }).code, 2);
+  assert.strictEqual(run(dir, `bash <<'EOF'\ngit commit -m "${WORD}"\nEOF`, { env }).code, 2);
+  // stdin 메시지인데 heredoc 이 없으면(파이프) 명령 글 전체
+  assert.strictEqual(run(dir, `echo ${WORD} | git commit -F -`, { env }).code, 2);
 });
