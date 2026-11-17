@@ -1,7 +1,9 @@
 // switchboard 코어: 에이전트를 모른다. AgentHost 포트(host.ts)만 보고 세션의 바깥 상태(유휴·바쁨·compact 중,
 // 사용자가 입력 중인가)를 따라간다. D2 이후의 메일함(SSE 구독·등급별 입력 줄·compact 판단·presence)이
-// 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다.
+// 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다. 메일함은 mailbox.ts(D2).
 import type { AgentHost, CompactResult, Features } from './host'
+import { createMailbox } from './mailbox'
+import type { Mailbox, MailboxOptions, MailboxState } from './mailbox'
 
 export type Activity = 'idle' | 'busy' | 'compacting'
 
@@ -31,11 +33,19 @@ export type Switchboard = {
    * 끝(compact.complete 이벤트)은 activity 가 idle 로 돌아오는 것으로 본다.
    */
   compact: (instructions?: string) => Promise<CompactResult>
+  /** 메일함 상태(꺼져 있으면 status off). */
+  mail: () => MailboxState
 }
 
-export const createSwitchboard = (host: AgentHost): Switchboard => {
+export type SwitchboardOptions = {
+  /** 메일함. 없거나 profilePath 가 null 이면 꺼진다. */
+  mail?: Omit<MailboxOptions, 'isIdle'>
+}
+
+export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}): Switchboard => {
   const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null }
   let off: (() => void) | undefined
+  let mailbox: Mailbox | undefined
   // 이벤트 순서대로 시각을 적는다(clock.now 는 비동기라 마지막 값만 남긴다).
   const stamp = () => {
     void host.services.clock.now().then(t => {
@@ -70,11 +80,18 @@ export const createSwitchboard = (host: AgentHost): Switchboard => {
           break
       }
     })
+    // 메일함은 본 세션에서만. 듣는 순서상 위 상태가 먼저 바뀐 뒤 메일함이 턴 끝을 본다.
+    if (opts.mail !== undefined) {
+      mailbox = createMailbox(host, { ...opts.mail, isIdle: () => st.active && st.activity === 'idle' })
+      await mailbox.start().catch(() => false)
+    }
 
     return true
   }
 
   const stop = () => {
+    mailbox?.stop()
+    mailbox = undefined
     off?.()
     off = undefined
     st.active = false
@@ -98,5 +115,7 @@ export const createSwitchboard = (host: AgentHost): Switchboard => {
     }
   }
 
-  return { start, stop, state: () => ({ ...st }), compact }
+  const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [] }
+
+  return { start, stop, state: () => ({ ...st }), compact, mail }
 }

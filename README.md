@@ -58,9 +58,10 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.1.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.2.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
-    core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀). D2부터 메일함이 붙는다
+    core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켠다
+    core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기
     core/questions.ts              질문 패널 상태(쌓기·고르기·완료·답 없이 닫기·대화창 답·장부 읽기). 저장은 Store 포트, 보내기는 submitTurn, 장부는 선택 어댑터 LedgerLink
     core/testing.ts                시험 틀: 가짜 어댑터(fakeHost)·가짜 시계(advance)·가짜 http(경로 처리기·SSE 밀기/끊기)·가짜 fs
     core/*.test.ts                 코어 단위 시험(가짜 어댑터로)
@@ -88,7 +89,7 @@ orca-plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`(열려 있으면 닫는 토글; `/questions close`는 늘 닫음, 0.8.0+)·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
-| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다 |
+| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다. 세션을 `AGENT_MAIL_PROFILE=<프로필>`로 띄우면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)`/agent-mail/<프로필>.json`의 역할로 메일함을 구독해, 새 pending 메일을 턴이 끝난 뒤 「Agent Mail #12, #13 을 읽고 처리하라」 새 턴으로 넣는다(메일 상태는 pending 그대로, 0.2.0). 프로필이 없으면 메일함은 꺼진다 |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -132,6 +133,14 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.2.0: Agent Mail 일반 메일로 세션 깨우기 (#75)
+
+- spec #73의 D2. `AGENT_MAIL_PROFILE`이 있는 본 세션은 Agent Mail을 구독하고, 새 pending 메일 ID를 턴이 끝난 뒤 새 턴(「Agent Mail #12, #13 을 읽고 처리하라(agent-mail read <ID>).」)으로 넣는다. 바쁜 동안 온 메일은 한 줄로 묶고, 알릴 때 이미 읽힌 메일은 뺀다. 메일 상태는 바꾸지 않는다.
+- 구독은 SSE가 아니라 긴 대기(`GET /api/events/poll?after=<커서>&timeout=25`)다: 모드 `$.http.fetch`가 본문을 다 받아서만 주기 때문이다. 이벤트·커서 규칙은 SSE와 같아 커서로 다시 이으면 놓치는 메일이 없고, 같은 ID는 두 번 알리지 않는다. 세션이 막 뜨면 쌓여 있던 pending을 한 번 알린다.
+- 서버가 죽거나 응답이 멈추면(40초 감시) 1초에서 60초까지 간격을 늘려 다시 잇는다. 세션은 그대로 돈다. 끊김·이어짐은 대화창에 흐린 한 줄(`$.ui.log`, 모델에는 안 감)로만 남긴다.
+- 토큰은 프로필에서 읽어 요청 머리에만 싣는다(URL·알림 글·기록에 안 나옴, 시험으로 못 박음). 프로필 이름에 경로 글자가 있으면 받지 않는다. 긴급(priority=urgent)은 아직 일반과 같다(D4).
+- 시험: mod 61건(메일함 12건 추가). 실제로 프로필 worker-1 세션을 `--plugin-dir`로 띄워 메일 한 통으로 깨어나 읽고 complete하는 것, 바쁜 동안 보낸 두 통이 「#178, #179」 한 줄로 묶이는 것을 확인했다.
 
 ### 2026-11-17 — switchboard 0.1.0: question-panel을 옮기고 코어·AgentHost 포트를 나눔 (#74)
 
