@@ -2,98 +2,10 @@
 // 보는 것: 어떤 메일이 언제 어떤 글로 세션에 들어가는가, 서버에 무엇을 보내는가(토큰이 새지 않는가).
 import { expect, test } from 'claude-code/testing'
 
-import type { HttpInit } from './host'
-import { announce, EMPTY_GAP_MS, RETRY_MAX_MS } from './mailbox'
+import { announce, RETRY_MAX_MS } from './mailbox'
+import { EP, PROFILE, ROLE, runTurn, setup, TOKEN } from './mailtest'
 import { createSwitchboard } from './switchboard'
 import { fakeHost, flush } from './testing'
-import type { FakeHost } from './testing'
-
-const EP = 'http://mail.test'
-const ROLE = 'team/worker'
-const TOKEN = 'tok-SECRET-123'
-const PROFILE = '/home/u/.config/agent-mail/worker.json'
-
-/** 가짜 Agent Mail: 계약(#73 댓글)의 긴 대기를 흉내 낸다. pending 만, id 오름차순, after 보다 큰 것만. */
-const fakeMail = (host: FakeHost) => {
-  const mails: { id: number; status: 'pending' | 'read'; priority: string }[] = []
-  let waiters: (() => void)[] = []
-  let down = false
-  let nextId = 1
-  const polls: { after: number | null; timeout: number }[] = []
-  const pending = (after: number | null) =>
-    mails.filter(m => m.status === 'pending' && (after === null || m.id > after)).map(m => ({ id: m.id, sender: 'team/lead', subject: `s${m.id}`, priority: m.priority }))
-
-  host.http.route(`${EP}/api/events/poll`, async ({ url, init }: { url: string; init: HttpInit }) => {
-    if (down) throw new Error(`connect ECONNREFUSED (headers ${JSON.stringify(init.headers)})`)
-    if (init.headers?.Authorization !== `Bearer ${TOKEN}` || init.headers['X-Agent-Mail-Role'] !== ROLE) {
-      return { status: 401, text: 'unauthorized' }
-    }
-    const q = new URL(url).searchParams
-    const after = q.has('after') ? Number(q.get('after')) : null
-    const timeout = Number(q.get('timeout') ?? '25')
-    polls.push({ after, timeout })
-    let events = pending(after)
-    if (events.length === 0 && timeout > 0) {
-      // 새 메일이나 시간 초과까지 기다린다.
-      await new Promise<void>(done => {
-        waiters.push(done)
-        host.clock.after(timeout * 1000, done)
-      })
-      if (down) throw new Error('connection reset')
-      events = pending(after)
-    }
-    const cursor = events.length > 0 ? events[events.length - 1]!.id : (after ?? 0)
-
-    return { text: JSON.stringify({ events, cursor }) }
-  })
-
-  return {
-    polls,
-    send: (priority = 'normal') => {
-      const id = nextId++
-      mails.push({ id, status: 'pending', priority })
-      const w = waiters
-      waiters = []
-      for (const done of w) done()
-
-      return id
-    },
-    read: (id: number) => {
-      const m = mails.find(x => x.id === id)
-      if (m) m.status = 'read'
-    },
-    setDown: (v: boolean) => {
-      down = v
-      if (v) {
-        const w = waiters
-        waiters = []
-        for (const done of w) done()
-      }
-    },
-  }
-}
-
-const setup = async (opts: { profile?: string | null; isMain?: boolean; preload?: number } = {}) => {
-  const host = fakeHost({ identity: { isMain: opts.isMain ?? true } })
-  if (opts.profile !== null) host.fs.files.set(PROFILE, opts.profile ?? JSON.stringify({ endpoint: `${EP}/`, role: ROLE, token: TOKEN }))
-  const mail = fakeMail(host)
-  for (let i = 0; i < (opts.preload ?? 0); i++) mail.send()
-  const logs: string[] = []
-  const board = createSwitchboard(host, { mail: { profilePath: opts.profile === null ? null : PROFILE, log: t => void logs.push(t) } })
-  const started = await board.start()
-  // 첫 물음(밀린 것 받기) 뒤 긴 대기가 걸리게 한다.
-  await host.clock.advance(EMPTY_GAP_MS)
-
-  return { host, mail, logs, board, started }
-}
-
-/** 세션이 넣은 턴을 실제처럼 돌렸다 끝낸다. */
-const runTurn = async (host: FakeHost) => {
-  host.emit({ type: 'turn.start' })
-  await flush()
-  host.emit({ type: 'turn.complete' })
-  await flush()
-}
 
 test('메일함: 유휴 세션은 메일 한 통으로 깨어나 ID만 담은 새 턴을 받는다', async () => {
   const { host, mail, board } = await setup()

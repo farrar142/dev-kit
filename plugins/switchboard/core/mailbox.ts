@@ -19,6 +19,11 @@ export type MailboxOptions = {
   isIdle: () => boolean
   /** 연결 상태가 바뀔 때 한 줄. 토큰은 절대 담지 않는다. */
   log?: (text: string) => void
+  /**
+   * 일반 메일 턴을 넣기 직전 관문(D3: 메일 전 compact). 'wait' 이면 넣지 않고 되돌려 둔다:
+   * 관문을 건 쪽이 끝난 뒤(compact.complete 등) 다시 kick 된다.
+   */
+  beforeDeliver?: () => Promise<'ready' | 'wait'>
 }
 
 export type MailboxState = {
@@ -210,6 +215,14 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     }
   }
 
+  const gate = async (): Promise<'ready' | 'wait'> => {
+    try {
+      return (await opts.beforeDeliver?.()) ?? 'ready'
+    } catch {
+      return 'ready'
+    }
+  }
+
   const kick = () => {
     if (delivering || awaitingTurn || queued.length === 0 || profile === null || !opts.isIdle()) return
     delivering = true
@@ -227,6 +240,13 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
 
         return
       }
+      // 관문(메일 전 compact 등): 기다리라면 되돌려 두고 끝난 뒤의 kick 에 맡긴다.
+      if ((await gate()) === 'wait') {
+        queued = [...send, ...queued]
+
+        return
+      }
+      if (profile === null) return
       try {
         await host.submitTurn(announce(send))
         awaitingTurn = true

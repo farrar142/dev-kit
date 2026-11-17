@@ -5,6 +5,7 @@
 //  - 이벤트 → turn.start·turn.complete·prompt.change·prompt.submit·session.compact 훅(wireClaudeEvents)
 //  - services → $.http·$.clock·$.fs
 //  - 메일함 프로필 경로 → AGENT_MAIL_PROFILE·XDG_CONFIG_HOME·HOME(mailProfilePath)
+//  - 메일 전 compact 설정 → SWITCHBOARD_COMPACT_TOKENS·SWITCHBOARD_COMPACT_INSTRUCTIONS(compactEnv)
 import type { Hook, On } from 'claude-code'
 
 import type { AgentHost, HostEvent, HttpReply } from '../core/host'
@@ -117,6 +118,18 @@ export async function mailProfilePath($: Self): Promise<string | null> {
     return `${base}/agent-mail/${name}.json`
   } catch {
     return null
+  }
+}
+
+/** 메일 전 compact 설정 글: SWITCHBOARD_COMPACT_TOKENS(기본 200k, 0·off 면 끔)·SWITCHBOARD_COMPACT_INSTRUCTIONS. */
+export async function compactEnv($: Self): Promise<{ tokens: string | undefined; instructions: string | undefined }> {
+  try {
+    return {
+      tokens: await $.env.get('SWITCHBOARD_COMPACT_TOKENS'),
+      instructions: await $.env.get('SWITCHBOARD_COMPACT_INSTRUCTIONS'),
+    }
+  } catch {
+    return { tokens: undefined, instructions: undefined }
   }
 }
 

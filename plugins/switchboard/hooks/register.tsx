@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register, RenderSurface } from 'claude-code'
 
-import { claudeHost, createEmitter, createMidTurnBox, emitSubmit, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, compactEnv, emitSubmit, mailProfilePath, wireClaudeEvents } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { mcpLedger } from '../adapters/ledger'
 import {
@@ -17,7 +17,7 @@ import {
   VIA_TEXT,
 } from '../core/questions'
 import type { Store } from '../core/questions'
-import { createSwitchboard } from '../core/switchboard'
+import { compactConfig, createSwitchboard } from '../core/switchboard'
 import type { Switchboard } from '../core/switchboard'
 import type { QuestionPanelBatch } from '../types'
 
@@ -314,8 +314,11 @@ export const register: Register = on => {
     })
     // 코어를 띄운다: 세션 상태를 따라가고, AGENT_MAIL_PROFILE 이 있으면 메일함(D2)도 켠다.
     board?.stop()
+    const ce = await compactEnv($)
+    const compactBeforeMail = compactConfig(ce.tokens, ce.instructions)
     board = createSwitchboard(claudeHost($, emitter, box), {
       mail: { profilePath: await mailProfilePath($), log: text => void $.ui.log(text) },
+      ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
     })
     await board.start().catch(() => false)
     // 닫힘 장부를 본다: Orca 질문 패널에서 답하거나 닫은 묶음을 곧 닫는다.
