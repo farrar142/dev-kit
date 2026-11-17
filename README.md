@@ -59,9 +59,9 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.4.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.5.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
-    core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)을 단다
+    core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
     core/mailtest.ts               시험 도우미: 가짜 Agent Mail 서버(긴 대기 계약)와 메일함을 켠 코어 준비
     core/questions.ts              질문 패널 상태(쌓기·고르기·완료·답 없이 닫기·대화창 답·장부 읽기). 저장은 Store 포트, 보내기는 submitTurn, 장부는 선택 어댑터 LedgerLink
@@ -93,7 +93,7 @@ orca-plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`(열려 있으면 닫는 토글; `/questions close`는 늘 닫음, 0.8.0+)·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
-| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다. 세션을 `AGENT_MAIL_PROFILE=<프로필>`로 띄우면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)`/agent-mail/<프로필>.json`의 역할로 메일함을 구독해, 새 pending 메일을 턴이 끝난 뒤 「Agent Mail #12, #13 을 읽고 처리하라」 새 턴으로 넣는다(메일 상태는 pending 그대로, 0.2.0). 프로필이 없으면 메일함은 꺼진다. 메일을 넣기 전에 유휴이고 컨텍스트가 `SWITCHBOARD_COMPACT_TOKENS`(기본 `200k`, `0`·`off`면 끔) 이상이면 compact부터 하고 끝난 뒤 넣는다. 요약 지시문은 `SWITCHBOARD_COMPACT_INSTRUCTIONS`(0.3.0). 긴급 메일(`priority=urgent`)은 본문을 실행 중인 턴의 다음 도구 호출 결과 뒤에 끼워 넣고(유휴면 새 턴), 넣는 즉시 read로 표시한다(2000자 넘는 본문은 자르고 `agent-mail read <ID>`를 붙인다, 0.4.0) |
+| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다. 세션을 `AGENT_MAIL_PROFILE=<프로필>`로 띄우면 `$XDG_CONFIG_HOME`(없으면 `~/.config`)`/agent-mail/<프로필>.json`의 역할로 메일함을 구독해, 새 pending 메일을 턴이 끝난 뒤 「Agent Mail #12, #13 을 읽고 처리하라」 새 턴으로 넣는다(메일 상태는 pending 그대로, 0.2.0). 프로필이 없으면 메일함은 꺼진다. 메일을 넣기 전에 유휴이고 컨텍스트가 `SWITCHBOARD_COMPACT_TOKENS`(기본 `200k`, `0`·`off`면 끔) 이상이면 compact부터 하고 끝난 뒤 넣는다. 요약 지시문은 `SWITCHBOARD_COMPACT_INSTRUCTIONS`(0.3.0). 긴급 메일(`priority=urgent`)은 본문을 실행 중인 턴의 다음 도구 호출 결과 뒤에 끼워 넣고(유휴면 새 턴), 넣는 즉시 read로 표시한다(2000자 넘는 본문은 자르고 `agent-mail read <ID>`를 붙인다, 0.4.0). 입력창에 글이 있는 동안과 사람이 보낸 턴(질문 패널 답 포함)이 끝난 뒤 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 시간 보류 끔)은 일반 메일 턴을 미룬다. 긴급은 미루지 않는다(0.5.0) |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
@@ -138,6 +138,13 @@ switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 Agent
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.5.0: 사람 입력 중·답한 직후 메일 보류 (#78)
+
+- spec #73의 D5. 입력창에 글이 있는 동안은 일반 메일 턴을 미루고, 글을 지우면 곧 넣는다. 사람이 보낸 턴이 끝나면 그때부터 `SWITCHBOARD_HOLD_MINUTES`분(기본 3, `0`이면 끔) 동안도 미룬다(답을 읽는 동안). 보류가 풀리면 쌓인 메일을 한 줄로 넣는다. 긴급 메일은 보류를 따르지 않는다.
+- 포트 이벤트 `input.submit`에 `origin`(user·plugin·other)을 실었다. Claude 어댑터에서는 모드 `prompt.submit`의 `origin.kind`가 `composer`·`bridge`일 때만 사람이다. 메일 알림 턴(origin plugin)은 사람 입력으로 치지 않는다.
+- 질문 패널에서 답하거나 「보내기」로 넣은 턴은 플러그인 origin이지만 사람이 한 일이다. 그래서 패널 포트의 `submitTurn`이 `noteUserInput()`을 불러 사람 입력으로 친다. 패널 답 턴과 메일 턴이 같은 입력 줄에서 겹치지 않는다.
+- 시험: mod 88건(보류 8건, 어댑터 1건 추가).
 
 ### 2026-11-17 — harden 0.1.0: 재발 방지 사다리 스킬 (#85)
 

@@ -99,7 +99,12 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
 }
 
 /** 사용자 제출을 포트 이벤트로(prompt.submit 훅은 질문 패널도 쓰므로 register 가 이것을 부른다). */
-export const emitSubmit = (emitter: Emitter, text: string) => emitter.emit({ type: 'input.submit', text })
+export const emitSubmit = (emitter: Emitter, text: string, originKind?: string) =>
+  emitter.emit({ type: 'input.submit', text, origin: submitOrigin(originKind) })
+
+/** 모드 prompt.submit 의 origin.kind → 포트 origin. composer(터미널 입력)·bridge(Remote Control)만 사람이다. */
+export const submitOrigin = (kind: string | undefined): 'user' | 'plugin' | 'other' =>
+  kind === 'composer' || kind === 'bridge' ? 'user' : kind === 'plugin' ? 'plugin' : 'other'
 
 /** 기계 이름: 모드 API에는 없어 SWITCHBOARD_MACHINE, 없으면 HOSTNAME 을 읽는다($.env.get 은 글자 그대로의 이름만 받는다). */
 async function machineOf($: Self): Promise<string> {
@@ -139,6 +144,15 @@ export async function compactEnv($: Self): Promise<{ tokens: string | undefined;
     }
   } catch {
     return { tokens: undefined, instructions: undefined }
+  }
+}
+
+/** 사람 입력 뒤 메일 보류(분): SWITCHBOARD_HOLD_MINUTES(기본 3, 0 이면 시간 보류 끔). */
+export async function holdEnv($: Self): Promise<string | undefined> {
+  try {
+    return await $.env.get('SWITCHBOARD_HOLD_MINUTES')
+  } catch {
+    return undefined
   }
 }
 

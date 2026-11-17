@@ -1,7 +1,7 @@
 // Claude 어댑터 시험(얕게): 포트 호출이 모드 API로 이어지는지만 본다.
 import { expect, test } from 'claude-code/testing'
 
-import { claudeHost, createEmitter, createMidTurnBox } from '../adapters/claude'
+import { claudeHost, createEmitter, createMidTurnBox, submitOrigin } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 
 // 시험의 $ 는 플러그인 $ 의 일부만 가진 Engine 이다(clock·session.usage 등이 없다). 어댑터가 쓰는 것만 부른다.
@@ -61,4 +61,12 @@ test('Claude 어댑터: 턴이 도구 호출 없이 끝나면 끼워 넣기는 f
   expect(await p).toBe(false)
   expect(box.size()).toBe(0)
   expect(box.take()).toEqual([])
+})
+
+test('Claude 어댑터: 제출 origin 은 composer·bridge 만 사람이고 플러그인이 넣은 턴은 plugin 이다', () => {
+  expect(submitOrigin('composer')).toBe('user')
+  expect(submitOrigin('bridge')).toBe('user')
+  expect(submitOrigin('plugin')).toBe('plugin')
+  expect(submitOrigin('task-notification')).toBe('other')
+  expect(submitOrigin(undefined)).toBe('other')
 })
