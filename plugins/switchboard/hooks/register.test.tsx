@@ -835,3 +835,68 @@ test('AskUserQuestion: SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1 이면 통과', asy
   expect(ran.deny).toBeUndefined()
   expect(passed.length).toBe(1)
 })
+
+// 원격 질문(#111): 프로필이 있는 세션의 ask 는 서버 질문으로, resolve 는 거두기로. 서버는 http.fetch 자리에서 흉내 낸다.
+const RID = `q_${'c'.repeat(32)}`
+
+async function setupRemote($: any, on: any, ask: { status: number; text: string } | 'down') {
+  const hits: { url: string; method: string }[] = []
+  on('env.get', (_: any, e: any) => ({ value: ({ AGENT_MAIL_PROFILE: 'sbtest', AGENT_MAIL_CONFIG_DIR: '/cfg' } as Record<string, string>)[e.name] }))
+  on('fs.exists', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' ? JSON.stringify({ endpoint: 'http://mail.test', role: 'team/worker', token: 'tok' }) : '' }))
+  on('http.fetch', (_: any, e: any) => {
+    const url = String(e.url)
+    const method = e.init?.method ?? 'GET'
+    hits.push({ url, method })
+    const reply = (status: number, body: unknown) => ({ value: { status, ok: status < 300, headers: {}, text: JSON.stringify(body) } })
+    if (url.includes('/api/slots/register')) return reply(200, { role: 'team/worker-1', base: 'team/worker', number: 1, other_active: 0, reclaimed: false })
+    if (url.includes('/api/slots/')) return reply(200, {})
+    if (url.includes('/api/events/poll')) return reply(200, { events: [], cursor: 0 })
+    if (url === 'http://mail.test/api/questions' && method === 'POST') {
+      if (ask === 'down') throw new Error('connect ECONNREFUSED')
+
+      return { value: { status: ask.status, ok: ask.status < 300, headers: {}, text: ask.text } }
+    }
+    if (url === `http://mail.test/api/questions/${RID}/withdraw`) return reply(200, { id: RID, status: 'withdrawn', asker: 'team/worker-1', questions: [] })
+
+    return reply(404, { error: 'not found' })
+  })
+  const submitted = await setup($, on)
+
+  return { hits, submitted }
+}
+
+const VIEW = JSON.stringify({ id: RID, asker: 'team/worker-1', created_at: '', status: 'pending', questions: [], answers: null, answered_by: '', answered_at: null, withdrawn_at: null, seq: 1, can_answer: false })
+
+test('원격 질문: 프로필이 있으면 서버 질문으로 올리고 로컬 패널에는 쌓지 않는다', async ($, on) => {
+  const { hits } = await setupRemote($, on, { status: 201, text: VIEW })
+  const ran = await $.tool.call(INPUT as any)
+  const text = textOf(ran)
+  expect(text).toContain(`원격 질문 ${RID} 로 올렸다`)
+  expect(text).not.toMatch(/질문 묶음 q\d/)
+  expect(hits.some(h => h.method === 'POST' && h.url === 'http://mail.test/api/questions')).toBe(true)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' } as any)
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('원격 질문: 서버가 403 이면 로컬 패널에 올리고 결과 글에 까닭을 적는다', async ($, on) => {
+  await setupRemote($, on, { status: 403, text: JSON.stringify({ error: 'can_ask is off' }) })
+  const text = textOf(await $.tool.call(INPUT as any))
+  expect(text).toContain('원격 질문으로 올리지 못해 로컬 패널에 올렸다(이 역할은 질문을 올릴 수 없음(can_ask 꺼짐, 403))')
+  expect(text).toContain('질문 묶음 q1을 패널에 올렸다')
+})
+
+test('원격 질문: 서버에 닿지 않으면 로컬 패널로', async ($, on) => {
+  await setupRemote($, on, 'down')
+  const text = textOf(await $.tool.call(INPUT as any))
+  expect(text).toContain('로컬 패널에 올렸다(서버에 닿지 않음)')
+  expect(text).toContain('질문 묶음 q1')
+})
+
+test('원격 질문: resolve 에 서버 id 를 주면 거두기(withdraw)를 부른다', async ($, on) => {
+  const { hits } = await setupRemote($, on, { status: 201, text: VIEW })
+  const ran = await $.tool.call({ tool: RESOLVE, id: RID } as any)
+  expect(hits.some(h => h.method === 'POST' && h.url === `http://mail.test/api/questions/${RID}/withdraw`)).toBe(true)
+  expect(textOf(ran)).toContain(`원격 질문 ${RID}을 거뒀다`)
+})

@@ -35,6 +35,8 @@ import { compactConfig, createSwitchboard, holdConfig } from '../core/switchboar
 import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
+import { isRemoteId, localFallbackLine, remoteAskText, withdrawText } from '../core/remote-ask'
+import type { Http } from '../core/host'
 import type { QuestionPanelBatch } from '../types'
 
 // Claude Code 쪽 껍데기: 코어(../core)를 Claude 어댑터(../adapters/claude)로 잇고, 질문 패널을 그린다.
@@ -99,6 +101,15 @@ function panelHost($: Self) {
     },
   }
 }
+
+/** 이 훅의 `$.http` 를 코어의 http 로(훅 예산은 `$` 응답을 기다리는 동안 멈춘다). */
+const hookHttp = ($: Self): Pick<Http, 'fetch'> => ({
+  fetch: async (url, init) => {
+    const r = await $.http.fetch(url, init)
+
+    return { status: r.status, ok: r.ok, headers: r.headers, text: r.text }
+  },
+})
 
 /** 이 `$` 로 질문 패널 코어를 만든다(가볍다: 상태는 atom 에 있다). */
 const panelOf = ($: Self) =>
@@ -379,7 +390,7 @@ export const register: Register = on => {
     // 기다림은 이 훅의 `$.http` 긴 대기로 한다: 훅 예산(10초)은 `$` 응답을 기다리는 동안 멈춘다.
     const ans = await b.askPermission(
       { tool: e.tool_name, summary: permissionSummary(e.tool_name, e.tool_input, e.agent_type) },
-      { http: { fetch: async (url, init) => { const r = await $.http.fetch(url, init); return { status: r.status, ok: r.ok, headers: r.headers, text: r.text } } } },
+      { http: hookHttp($) },
     )
     if (ans === null) return next(e)
     if (ans.decision === 'allow') return { decision: { behavior: 'allow' } }
@@ -463,6 +474,19 @@ export const register: Register = on => {
     if (typeof questions === 'string') return { deny: `switchboard: ${questions}` }
     const mode = panelMode(await $.session.surfaces())
 
+    // 원격 질문(#111): 프로필이 있으면 먼저 서버 질문으로 올린다. 서버 질문은 이 세션의 패널에 올리지 않는다
+    // (묻는 쪽이 스스로 답하지 않게 — remote-ask.ts 머리말). 못 올리면 까닭을 결과 글에 적고 로컬 패널로.
+    const remote = board === undefined ? { kind: 'local' as const, reason: null } : await board.askRemote(questions, { http: hookHttp($) })
+    if (remote.kind === 'remote') {
+      const text = remoteAskText(remote.id, remote.asker, RESOLVE_TOOL)
+      const ran = await next({ ...e, panel_result: text, panel_echo: text, panel_closed: chatClosed(await read($, queue)) })
+      // 모델이 질문을 모르게 됐으면(서버 꺼짐·훅이 막음) 서버 질문도 거둔다.
+      if (ran.deny !== undefined || ran.isError === true) await board?.withdrawRemote(remote.id, { http: hookHttp($) })
+
+      return ran
+    }
+    const fallback = remote.reason === null ? [] : [localFallbackLine(remote.reason)]
+
     const now = await $.clock.now()
     const sid = await $.session.id().catch(() => '')
     const p = panelOf($)
@@ -474,10 +498,12 @@ export const register: Register = on => {
     // (훅 환경에는 process가 없어 환경변수는 서버만 읽는다).
     const replyLine = `답은 「[질문 패널 답] …」 메시지(Orca면 제목 「[질문 패널 답] ${id}」 메일)나 사용자의 글(「${id} 1-2」 같은)로 온다. 묶음 ID 없이 글로 답이 오면 ${RESOLVE_TOOL}로 이 묶음을 닫아라.`
     const panelResult = [
+      ...fallback,
       `질문 묶음 ${id}을 패널에 올렸다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(${id})」 정도로 짧게 말하고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
       replyLine,
     ].join('\n')
     const panelEcho = [
+      ...fallback,
       `질문 묶음 ${id}을 패널에 올렸다. 아래 블록을 답변 글에 그대로 옮겨 적고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
       replyLine,
       '',
@@ -500,6 +526,12 @@ export const register: Register = on => {
   // agent.tool.after 훅으로 닫힘을 보고, 채팅 세션은 서버가 Orca 질문 패널 폴더에 닫힘을 남긴다.
   on('tool.call', { tool: RESOLVE_TOOL }, async ($, e, next) => {
     const id = typeof e.id === 'string' ? e.id.trim().toLowerCase() : ''
+    // 서버 질문(q_…, #111)은 거둔다(POST /withdraw). 로컬 패널에는 없다.
+    if (isRemoteId(id)) {
+      const r = board === undefined ? { ok: false as const, status: null, reason: '메일함이 꺼져 있음' } : await board.withdrawRemote(id, { http: hookHttp($) })
+
+      return next({ ...e, id, panel_result: withdrawText(id, r), panel_closed: chatClosed(await read($, queue)) })
+    }
     const found = (await read($, queue)).find(b => b.id === id)
     await panelOf($).closeByChat(new Set([id]))
     const after = await read($, queue)
