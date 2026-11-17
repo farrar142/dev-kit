@@ -48,6 +48,10 @@ const resolved: any[] = []
 // 패널이 열려 있나, 닫기 호출 기록(setup 마다 비운다).
 const paneUp = { value: false }
 const closes: string[] = []
+// 패널이 자리를 잡았나·ui.open 기록·/questions 실행 중인가(좁은 터미널 시험, #136).
+const paneSeated = { value: false }
+const paneOpens: string[] = []
+const commandRunning = { value: false }
 // setup 의 가짜 시계(장부 동기화 타이머를 움직인다).
 const clockRef: { value: any } = { value: undefined }
 
@@ -71,12 +75,16 @@ async function setup(
   on('command.register', () => ({ value: { command: 'x' } }))
   paneUp.value = false
   closes.length = 0
-  on('ui.open', () => {
+  paneOpens.length = 0
+  on('ui.open', (_: any, e: any) => {
     paneUp.value = true
+    paneOpens.push(e.id)
+    // 좁은 터미널 흉내(#136): 묻지 않고 연 pane 은 기다리고, 사람이 /questions 로 열면 폭과 상관없이 자리를 잡는다.
+    paneSeated.value = placed || e.origin?.kind === 'person' || commandRunning.value
 
-    return { value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'no-room' } }
+    return { value: paneSeated.value ? { isPlaced: true } : { isPlaced: false, reason: 'unasked below 144 columns (now 120)' } }
   })
-  on('ui.panes', () => ({ value: paneUp.value ? [{ id: 'questions', title: '질문', isPlaced: true }] : [] }))
+  on('ui.panes', () => ({ value: paneUp.value ? [{ id: 'questions', title: '질문', isPlaced: paneSeated.value }] : [] }))
   on('ui.close', (_: any, e: any) => {
     closes.push(e.id)
     paneUp.value = false
@@ -993,4 +1001,54 @@ test('원격 질문 대장: 대장 역할이 아니면 서버 질문을 끌어�
   const { hits } = await setupBoss($, on, 'team/other')
   await nap(50)
   expect(hits.some(h => h.url.includes('/api/questions'))).toBe(false)
+})
+
+test('좁은 터미널(#136): 패널이 자리를 못 잡으면 질문 첫 줄을 오래 가는 토스트로 띄우고, 대화창 줄은 남기지 않는다', async ($, on) => {
+  const toasts: { text: string; timeoutMs?: number }[] = []
+  const logs: string[] = []
+  on('ui.toast', (_: any, e: any) => {
+    toasts.push({ text: e.text, timeoutMs: e.options?.timeoutMs ?? e.timeoutMs })
+
+    return { value: undefined }
+  })
+  on('ui.log', (_: any, e: any) => {
+    logs.push(e.text)
+
+    return { value: undefined }
+  })
+  await setup($, on, ['terminal'], undefined, false)
+  await $.tool.call(INPUT as any)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(toasts.length).toBe(1)
+  expect(toasts[0]!.text).toMatch(/^질문 q\d+: 어느 DB를 쓸까요\? 외 1 — \/questions 로 연다$/)
+  expect(toasts[0]!.timeoutMs).toBeGreaterThanOrEqual(10_000)
+  expect(logs).toEqual([])
+})
+
+test('좁은 터미널(#136): 패널이 자리를 잡으면 토스트를 띄우지 않는다', async ($, on) => {
+  const toasts: string[] = []
+  on('ui.toast', (_: any, e: any) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  await setup($, on, ['terminal'])
+  await $.tool.call(INPUT as any)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(toasts).toEqual([])
+})
+
+test('좁은 터미널(#136): 자리를 못 잡고 기다리는 패널이면 /questions 는 닫지 않고 연다', async ($, on) => {
+  await setup($, on, ['terminal'], undefined, false)
+  await $.tool.call(INPUT as any)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(paneSeated.value).toBe(false)
+  commandRunning.value = true
+  try {
+    expect(JSON.stringify(await $.command.run({ command: 'questions', args: '' } as any))).toContain('열었습니다')
+  } finally {
+    commandRunning.value = false
+  }
+  expect(closes).toEqual([])
+  expect(paneSeated.value).toBe(true)
 })
