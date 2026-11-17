@@ -107,9 +107,10 @@ export type Mailbox = {
   onUrgent: (fn: (e: MailEvent) => boolean) => () => void
   /**
    * 시스템 통지 글 바꾸기(원격 질문 답 메일 등, #111). 듣는 쪽이 글을 돌려주면 noticeText 대신 그 글을 넣는다
-   * (넣는 시점·read 표시는 같다). null 이면 다음 듣는 쪽, 모두 null 이면 평소 글. 돌려준 함수로 끊는다.
+   * (넣는 시점·read 표시는 같다). null 이면 다음 듣는 쪽, 모두 null 이면 평소 글. DROP_NOTICE 면 세션에 넣지 않고
+   * read 로만 표시한다(#120). 돌려준 함수로 끊는다.
    */
-  onNotice: (fn: (e: MailEvent, body: string) => Promise<string | null>) => () => void
+  onNotice: (fn: NoticeTap) => () => void
   /** 부모 주소(SWITCHBOARD_PARENT). 없으면 undefined. */
   parent: () => string | undefined
 }
@@ -134,6 +135,12 @@ export const SYSTEM_SUBJECT_PREFIX = '[switchboard] '
 export const NOTICE_MAX_CHARS = 2000
 /** 연결 통지 보내기 시도 횟수(간격 RETRY_MIN_MS*5). 4xx 는 다시 하지 않는다. */
 export const NOTICE_TRIES = 3
+
+/** onNotice 듣는 쪽이 「이 통지는 세션에 넣지 말고 read 로만」이라고 돌려주는 값. */
+export type NoticeDrop = { readonly drop: true }
+export const DROP_NOTICE: NoticeDrop = { drop: true }
+/** 시스템 통지 듣는 쪽: 넣을 글, 다음 듣는 쪽으로(null), 또는 넣지 않기(DROP_NOTICE). */
+export type NoticeTap = (e: MailEvent, body: string) => Promise<string | null | NoticeDrop>
 
 /** 서버가 쓰는 예약 보낸이(#73 서버 계약 6): `agent-mail/system` 과 `agent-mail/system-N`. */
 export const isSystemSender = (sender: string | undefined) => sender !== undefined && /^agent-mail\/system(-\d+)?$/.test(sender)
@@ -303,12 +310,15 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   /** 긴급 메일 가로채는 쪽(onUrgent). */
   const urgentTaps = new Set<(e: MailEvent) => boolean>()
   /** 시스템 통지 글 바꾸는 쪽(onNotice). */
-  const noticeTaps = new Set<(e: MailEvent, body: string) => Promise<string | null>>()
-  const noticeOf = async (e: MailEvent, body: string): Promise<string> => {
+  const noticeTaps = new Set<NoticeTap>()
+  /** 넣을 글. null 이면 넣지 않는다(듣는 쪽이 DROP_NOTICE). */
+  const noticeOf = async (e: MailEvent, body: string): Promise<string | null> => {
     for (const fn of [...noticeTaps]) {
       try {
         const text = await fn(e, body)
-        if (text !== null) return text
+        if (text === null) continue
+
+        return typeof text === 'string' ? text : null
       } catch {
         // 듣는 쪽의 잘못은 통지를 막지 않는다: 평소 글로.
       }
@@ -607,14 +617,17 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       }
       if (profile === null) return
       try {
-        const texts = await Promise.all(items.map(async e => noticeOf(e, await bodyOf(p, e))))
-        await host.submitTurn(texts.join('\n\n'))
-        awaitingTurn = true
-        grace?.cancel()
-        grace = clock.after(TURN_GRACE_MS, () => {
-          awaitingTurn = false
-          kick()
-        })
+        const texts = (await Promise.all(items.map(async e => noticeOf(e, await bodyOf(p, e))))).filter((t): t is string => t !== null)
+        // 모두 거른 통지(#120)면 턴을 열지 않고 read 로만.
+        if (texts.length > 0) {
+          await host.submitTurn(texts.join('\n\n'))
+          awaitingTurn = true
+          grace?.cancel()
+          grace = clock.after(TURN_GRACE_MS, () => {
+            awaitingTurn = false
+            kick()
+          })
+        }
         await Promise.all(items.map(e => markRead(p, e.id)))
       } catch {
         failed = true

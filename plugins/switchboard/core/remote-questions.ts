@@ -58,6 +58,8 @@ export const isRemoteId = (id: string) => REMOTE_ID.test(id)
 
 /** 답 메일 제목 머리(묻는 역할 앞: `[질문 답] <id> <첫 header>`, 참조 사본: `[질문 답] <id> <asker> <첫 header>`). */
 export const ANSWER_SUBJECT_PREFIX = '[질문 답] '
+/** 새 질문 참조(watcher) 메일 제목 머리(`[질문] <id> …`). */
+export const QUESTION_SUBJECT_PREFIX = '[질문] '
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
@@ -186,17 +188,23 @@ export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
   }
 }
 
-/** 이 메일이 서버의 질문 답 메일이면 그 질문 id(시스템 보낸이, 제목 `[질문 답] <id> …`, task_id 가 있으면 같아야 한다). */
-export const answerMailId = (e: Pick<MailEvent, 'sender' | 'subject' | 'task_id'>): string | null => {
+/** 시스템 보낸이·제목 머리 `<prefix><id> …`·(있으면) 같은 task_id 인 메일의 질문 id. */
+const subjectId = (e: Pick<MailEvent, 'sender' | 'subject' | 'task_id'>, prefix: string): string | null => {
   if (!isSystemSender(e.sender)) return null
   const subject = e.subject ?? ''
-  if (!subject.startsWith(ANSWER_SUBJECT_PREFIX)) return null
-  const id = subject.slice(ANSWER_SUBJECT_PREFIX.length).split(/\s/)[0] ?? ''
+  if (!subject.startsWith(prefix)) return null
+  const id = subject.slice(prefix.length).split(/\s/)[0] ?? ''
   if (!isRemoteId(id)) return null
   if (e.task_id !== undefined && e.task_id !== '' && e.task_id !== id) return null
 
   return id
 }
+
+/** 이 메일이 서버의 질문 답 메일이면 그 질문 id(시스템 보낸이, 제목 `[질문 답] <id> …`, task_id 가 있으면 같아야 한다). */
+export const answerMailId = (e: Pick<MailEvent, 'sender' | 'subject' | 'task_id'>): string | null => subjectId(e, ANSWER_SUBJECT_PREFIX)
+
+/** 이 메일이 서버의 새 질문 참조(watcher) 메일이면 그 질문 id(시스템 보낸이, 제목 `[질문] <id> …`, #120). */
+export const questionMailId = (e: Pick<MailEvent, 'sender' | 'subject' | 'task_id'>): string | null => subjectId(e, QUESTION_SUBJECT_PREFIX)
 
 /** 문항 하나의 답 글(로컬 답과 같은 꼴: 고른 label 을 「, 」로, 기타 글은 `기타: …`). */
 export const remoteChosen = (a: RemoteAnswer | undefined): string => {

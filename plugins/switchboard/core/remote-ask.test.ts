@@ -4,7 +4,7 @@ import { expect, test } from 'claude-code/testing'
 import type { QuestionPanelQuestion } from '../types'
 import type { HttpInit } from './host'
 import { EMPTY_GAP_MS } from './mailbox'
-import { answerMailId, createQuestionsApi, isRemoteId, remoteAnswerText } from './remote-questions'
+import { answerMailId, createQuestionsApi, isRemoteId, questionMailId, remoteAnswerText } from './remote-questions'
 import type { RemoteAnswer, RemoteQuestion } from './remote-questions'
 import { localFallbackLine, remoteAskText, withdrawText } from './remote-ask'
 import { createSwitchboard } from './switchboard'
@@ -162,13 +162,37 @@ const fakeServer = () => {
   }
 }
 
-const session = async (server: ReturnType<typeof fakeServer>, clock: FakeClock, o: { role?: string; profile?: boolean } = {}) => {
+/** 패널 쪽 흉내(대장 세션용): 올리고 닫은 것만 센다. */
+const fakeSink = () => {
+  const offered: string[] = []
+
+  return {
+    offered,
+    sink: {
+      offer: async (q: RemoteQuestion) => void offered.push(q.id),
+      close: async () => {},
+      prune: async () => {},
+    },
+  }
+}
+
+const session = async (
+  server: ReturnType<typeof fakeServer>,
+  clock: FakeClock,
+  o: { role?: string; profile?: boolean; bosses?: string[]; panel?: boolean } = {},
+) => {
   const role = o.role ?? ME
   const host = fakeHost({ clock, identity: { machine: 'box-w', cwd: '/work/repo', sessionId: 'sess-w' } })
   if (o.profile !== false) host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role, token: TOKEN }))
   server.attach(host, role)
   const logs: string[] = []
-  const board = createSwitchboard(host, { log: t => void logs.push(t), mail: { profilePath: o.profile === false ? null : PROFILE, log: t => void logs.push(t) } })
+  const board = createSwitchboard(host, {
+    log: t => void logs.push(t),
+    mail: { profilePath: o.profile === false ? null : PROFILE, log: t => void logs.push(t) },
+    ...(o.bosses === undefined ? {} : { permissions: { bosses: o.bosses } }),
+    // 대장 쪽 inbox(패널). 가짜 서버는 목록·poll 을 404 로 돌려 inbox 는 물러나 다시 해 보기만 한다.
+    ...(o.panel === true ? { remoteQuestions: { sink: fakeSink().sink, retry: { firstMs: 60_000, maxMs: 60_000 } } } : {}),
+  })
   await board.start()
   await clock.advance(EMPTY_GAP_MS)
 
@@ -299,6 +323,78 @@ test('원격 질문: 참조(watcher) 사본 — 다른 역할이 물은 질문�
   await w.board.stop()
 })
 
+const BOSS = 'team/boss-1'
+const qMail = (id: string, to: string) => ({ to, sender: SYSTEM, subject: `[질문] ${id} team/other-1 DB`, body: 'DB: 어느 DB를 쓸까요?', priority: 'normal', task_id: id })
+const aMail = (id: string, to: string) => ({
+  to,
+  sender: SYSTEM,
+  subject: `[질문 답] ${id} team/other-1 DB`,
+  body: 'DB: 어느 DB를 쓸까요? = Postgres\n답한 쪽: dashboard',
+  priority: 'normal',
+  task_id: id,
+})
+
+test('대장 세션(#120): 참조 메일 [질문]·[질문 답] 은 세션에 넣지 않고 read 로만 표시한다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const other = await session(server, clock, { role: 'team/other-1' })
+  const r = await other.board.askRemote(QS)
+  if (r.kind !== 'remote') throw new Error('remote 가 아님')
+  await other.board.stop()
+  const b = await session(server, clock, { role: BOSS, bosses: ['team/boss'], panel: true })
+  server.put(qMail(r.id, BOSS))
+  server.put(aMail(r.id, BOSS))
+  await settle(clock)
+  expect(b.host.turns).toEqual([])
+  expect(server.mails.map(m => m.status)).toEqual(['read', 'read'])
+  await b.board.stop()
+})
+
+test('대장 세션(#120): 참조 메일은 거르고 다른 시스템 통지는 그대로 넣는다(한 묶음에 섞여도)', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const b = await session(server, clock, { role: BOSS, bosses: ['team/boss'], panel: true })
+  const id = `q_${'b'.repeat(32)}`
+  server.put(qMail(id, BOSS))
+  server.put({ to: BOSS, sender: SYSTEM, subject: '[시스템] 다른 통지', body: '본문', priority: 'normal' })
+  await settle(clock)
+  expect(b.host.turns.length).toBe(1)
+  expect(b.host.turns[0]).toContain('다른 통지')
+  expect(b.host.turns[0]).not.toContain(id)
+  expect(server.mails.map(m => m.status)).toEqual(['read', 'read'])
+  await b.board.stop()
+})
+
+test('대장 세션(#120): 대장이 스스로 물은 질문의 답은 여전히 「[질문 패널 답 …]」으로 넣는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const b = await session(server, clock, { role: BOSS, bosses: ['team/boss'], panel: true })
+  const r = await b.board.askRemote(QS)
+  if (r.kind !== 'remote') throw new Error('remote 가 아님')
+  server.answer(r.id, [{ selected: ['Postgres'] }, { selected: ['검색'] }])
+  await settle(clock)
+  expect(b.host.turns.length).toBe(1)
+  expect(b.host.turns[0]).toContain(`[질문 패널 답 ${r.id}] 어느 DB를 쓸까요? = Postgres`)
+  await b.board.stop()
+})
+
+test('대장 아닌 세션(#120): 참조 [질문] 메일은 평소 시스템 통지로 넣는다(대장 목록에 없거나 패널이 없는 대장)', async () => {
+  for (const o of [{ role: ME, bosses: ['team/boss'], panel: true }, { role: BOSS, bosses: ['team/boss'], panel: false }]) {
+    const clock = fakeClock()
+    const server = fakeServer()
+    const w = await session(server, clock, o)
+    const id = `q_${'c'.repeat(32)}`
+    server.put(qMail(id, o.role))
+    server.put(aMail(id, o.role))
+    await settle(clock)
+    expect(w.host.turns.length).toBe(1)
+    expect(w.host.turns[0]).toContain(`[질문] ${id}`)
+    expect(w.host.turns[0]).toContain(`[질문 답] ${id}`)
+    expect(w.host.turns[0]).not.toContain('[질문 패널 답 ')
+    await w.board.stop()
+  }
+})
+
 test('원격 질문: 보기를 못 읽으면(끊김) 이 세션이 올린 질문은 메일 본문으로 같은 머리를 달아 넣는다', async () => {
   const clock = fakeClock()
   const server = fakeServer()
@@ -341,6 +437,11 @@ test('원격 질문: 답 메일 판정·답 글 도우미', () => {
   expect(answerMailId({ sender: 'team/lead', subject: `[질문 답] ${id} DB`, task_id: id })).toBeNull()
   expect(answerMailId({ sender: SYSTEM, subject: `[질문 답] ${id} DB`, task_id: 'q_other' })).toBeNull()
   expect(answerMailId({ sender: SYSTEM, subject: '[질문 답] q3 DB' })).toBeNull()
+  // 새 질문 참조 메일(#120): 답 메일과 서로 겹치지 않는다.
+  expect(questionMailId({ sender: SYSTEM, subject: `[질문] ${id} team/other-1 DB`, task_id: id })).toBe(id)
+  expect(questionMailId({ sender: SYSTEM, subject: `[질문 답] ${id} DB`, task_id: id })).toBeNull()
+  expect(answerMailId({ sender: SYSTEM, subject: `[질문] ${id} DB`, task_id: id })).toBeNull()
+  expect(questionMailId({ sender: 'team/lead', subject: `[질문] ${id} DB` })).toBeNull()
   const view: RemoteQuestion = {
     id,
     asker: ME,
