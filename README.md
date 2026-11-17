@@ -60,7 +60,7 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.2, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.8.3, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
@@ -75,7 +75,7 @@ plugins/
     adapters/claude.ts             Claude 어댑터: 모드 API로 포트를 구현(prompt.submit, 도구 결과 context, session.compact·usage, 턴·입력·compact 훅, $.http·$.clock·$.fs)
     adapters/ledger.ts             선택 어댑터: 닫힘 장부(MCP 서버 qp의 sync). 서버가 안 닿으면 장부 없이 혼자 돈다
     hooks/register.tsx             껍데기: 코어를 Claude 어댑터로 잇고 질문 패널을 그린다. hooks/register.test.tsx는 question-panel 시험을 이름만 바꿔 옮긴 것
-    .mcp.json, mcp/                MCP 서버 qp(question-panel과 같은 코드, 장부·Orca 폴더도 같은 ~/.question-panel)
+    .mcp.json, mcp/                MCP 서버 qp(question-panel과 같은 코드, 장부·Orca 폴더도 같은 ~/.question-panel). 0.8.3부터 Orca 터미널 탭 세션(`ORCA_TERMINAL_HANDLE`)의 질문·닫힘도 handle 로 Orca 폴더에
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
     hooks/register.ts              turn.complete에서 30분 타이머(IDLE_MS)를 걸고, turn.start·prompt.change·prompt.submit에서 취소, 컨텍스트 MIN_PERCENT(15%) 미만이면 건너뜀
   context-cap/                     세션 컨텍스트 상한 훅(Node, issue-worker 본 세션 또는 환경변수가 있을 때 켜짐)
@@ -87,7 +87,7 @@ plugins/
     hooks/leak-guard.js            git commit·push·gh pr create/edit 직전에 나갈 추가분만 내장 패턴+사용자 금지어로 검사
     tests/                         임시 git 저장소·가짜 gh 시험(`node --test plugins/leak-guard/tests`, 리눅스·macOS)
 orca-plugins/
-  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다(0.5.2)
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다, 터미널 탭 세션의 질문 파일(0.6.0)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -177,6 +177,14 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.8.3·Orca 질문 패널 0.6.0: 터미널 탭 세션의 질문도 Orca 사이드바로 (#102)
+
+- 증상: Orca 터미널 탭으로 뜬 Claude 세션의 질문이 Claude Code 패널에만 쌓이고 Orca 사이드바 질문 패널에 뜨지 않았다(대장 Windows). MCP 서버는 채팅 UI 세션(`ORCA_STRUCTURED_SESSION`·`ORCA_AGENT_SESSION_ID`)일 때만 Orca 질문 폴더에 남겼고, 터미널 세션은 Orca `agent.tool.after` 훅에만 기댔다.
+- switchboard: 채팅 세션이 아니고 `ORCA_TERMINAL_HANDLE`(`term_…`)이 있으면 질문을 `~/.question-panel/orca-inbox/<qN>-<handle>.json`에 `session:{terminal}`·`workspaceId`·key 와 남기고, 결과 글 끝에 「답은 이 터미널에 `[질문 패널 답 qN] …` 글로 들어온다」 안내를 붙인다. 대화창에서 닫힌 묶음은 `session:{terminal}` 닫힘 파일로 남긴다. 채팅 세션 길(Run 메일)은 그대로이고, 두 환경 변수가 다 있으면 채팅이 먼저다.
+- Orca 질문 패널(`orca-plugins/question-panel`): 그 파일을 터미널 묶음으로 받아 답을 `terminal.sendText`로 그 터미널에 넣는다(훅 길과 같은 길, Agent Mail 역할이 없는 세션에서도 된다). 훅과 파일로 같은 질문이 두 번 와도 카드는 하나다. 닫힘 장부 규칙은 그대로.
+- 실제로 켜 봄(work Linux Orca 1.4.254): 새 터미널 탭의 Haiku 세션이 쓴 질문 파일이 위 모양이었고, Orca 플러그인 코드가 그 파일을 터미널 묶음으로 읽어 만든 답 줄을 `orca terminal send`로 넣자 세션이 답으로 받았다. 이 기계 Orca 런타임에는 플러그인 서비스가 없어 사이드바 카드는 Windows에서 확인한다.
+- 시험: switchboard MCP 20건(터미널 탭 3건 추가), mod 144건, Orca 플러그인 67건(5건 추가).
 
 ### 2026-11-17 — switchboard 0.8.2: 같은 폴더 두 세션의 번호, 입력 중 보류 (#99, #100)
 

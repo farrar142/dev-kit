@@ -281,6 +281,24 @@ export const closeInChat = (
   return { list: next, closed }
 }
 
+/** 훅과 질문 파일이 같은 질문으로 보는 시간 폭(0.6.0). */
+export const SAME_ASK_MS = 10 * 60_000
+
+/**
+ * 같은 터미널의 같은 묶음을 이미 받았나(0.6.0). 터미널 탭 세션은 훅(①)과 질문 파일 둘 다로 올 수 있어,
+ * 먼저 온 쪽만 남긴다. 둘 다 key 가 있으면 key 로 가린다. 없으면 아직 대기 중이고 만든 시각이 가까울 때만
+ * 같다고 본다(같은 터미널에서 세션을 다시 띄우면 q 번호가 되풀이된다 — 그 새 질문을 삼키지 않게).
+ */
+export const sameAsk = (list: readonly Batch[], b: Batch): Batch | undefined =>
+  isMailbox(b)
+    ? undefined
+    : list.find(x => {
+        if (isMailbox(x) || x.terminalId !== b.terminalId || x.id !== b.id) return false
+        if (x.key !== undefined && b.key !== undefined) return x.key === b.key
+
+        return x.status === 'pending' && Math.abs(x.createdAt - b.createdAt) <= SAME_ASK_MS
+      })
+
 export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b.status === 'pending')
 
 // ── 지운 묶음(0.4.1) ─────────────────────────────────────────────────────────
@@ -389,6 +407,11 @@ export const isMailbox = (b: Batch): b is Batch & { route: Extract<Route, { kind
 const ID_RE = /^q\d{1,6}$/
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/
 const RUN_RE = /^run_[A-Za-z0-9_-]{1,80}$/
+/** Orca 터미널 handle(`ORCA_TERMINAL_HANDLE`, 훅의 terminalId 와 같다). */
+const TERM_RE = /^term_[A-Za-z0-9_-]{1,120}$/
+/** workspace id(`ORCA_WORKSPACE_ID`, `<uuid>::<경로>`). 길이와 제어 문자만 막는다. */
+// eslint-disable-next-line no-control-regex
+const isWorkspaceId = (s: string) => s.length > 0 && s.length <= 600 && !/[\u0000-\u001f]/.test(s)
 
 const optStr = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
@@ -398,6 +421,25 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
   const id = str(raw.id)
   const session = isRecord(raw.session) ? raw.session : null
   const sessionId = session === null ? '' : str(session.id)
+  const terminal = session === null ? '' : str(session.terminal)
+  // 터미널 탭 세션(0.6.0): 세션 ID 대신 그 터미널 handle. 답은 훅 길(①)과 같이 terminal.sendText 로 간다.
+  if (ID_RE.test(id) && sessionId === '' && TERM_RE.test(terminal)) {
+    const questions = normalize(raw.questions)
+    if (questions.length === 0) return null
+    const ws = optStr(raw.workspaceId)
+    const cwd = optStr(raw.cwd)
+
+    return {
+      id,
+      terminalId: terminal,
+      workspaceId: ws !== null && isWorkspaceId(ws) ? ws : null,
+      createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
+      questions,
+      status: 'pending',
+      ...(cwd === null ? {} : { cwd }),
+      ...(isKey(raw.key) ? { key: raw.key } : {}),
+    }
+  }
   if (!ID_RE.test(id) || !SESSION_RE.test(sessionId)) return null
   const questions = normalize(raw.questions)
   if (questions.length === 0) return null
@@ -425,13 +467,18 @@ export const batchFromInbox = (raw: unknown, now: number): Batch | null => {
 
 /**
  * 채팅 세션의 닫힘 파일(question-panel 0.6.3+): `{v, kind:'closed', ids, session:{id}, at}`.
+ * 터미널 탭 세션(switchboard 0.8.3+)은 `session:{terminal}`.
  * 질문 파일과 같은 폴더에 남는다. 모양이 틀리면 null.
  */
 export const closeFromInbox = (raw: unknown): { terminalId: string; ids: string[]; at: number } | null => {
   if (!isRecord(raw) || raw.v !== INBOX_VERSION || raw.kind !== 'closed') return null
   const sessionId = isRecord(raw.session) ? str(raw.session.id) : ''
+  const terminal = isRecord(raw.session) ? str(raw.session.terminal) : ''
   const ids = idsFrom(raw.ids)
-  if (!SESSION_RE.test(sessionId) || ids.length === 0 || typeof raw.at !== 'number') return null
+  if (ids.length === 0 || typeof raw.at !== 'number') return null
+  // 터미널 탭 세션(0.6.0)은 그 handle 의 묶음을 닫는다.
+  if (sessionId === '' && TERM_RE.test(terminal)) return { terminalId: terminal, ids, at: raw.at }
+  if (!SESSION_RE.test(sessionId)) return null
 
   return { terminalId: `orca_session_id:${sessionId}`, ids, at: raw.at }
 }

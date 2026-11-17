@@ -739,3 +739,85 @@ test('장부: 대기 카드 지우기는 「답 없이 닫음」으로 장부에
   assert.equal(((await w2.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean }).ok, true)
   assert.equal(g.ledger.size, 0)
 })
+
+// 터미널 탭 세션(switchboard 0.8.3+)의 질문 파일: `session:{terminal}`. 답은 훅 길과 같이 그 터미널에 넣는다.
+const termInbox = (id: string, createdAt: number, terminal = 'term_1') => ({
+  name: `${id}-${terminal}.json`,
+  text: JSON.stringify({
+    v: 1,
+    id,
+    createdAt,
+    questions: ASK.input.questions,
+    session: { terminal },
+    workspaceId: 'ws_1',
+    cwd: '/home/me/app',
+  }),
+})
+
+test('터미널 탭 세션 질문 파일을 묶음으로 옮기고, 답은 그 터미널 handle 에 한 줄로 넣는다(메일·CLI 없음)', async () => {
+  const files = [termInbox('q2', Date.now())]
+  const f = fakeIo(files)
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.request('qp.refresh', {})
+  assert.deepEqual(f.removed, ['q2-term_1.json'])
+  const [b] = (w.host.data().storage.batches ?? []) as { id: string; terminalId: string; workspaceId: string; route?: unknown }[]
+  assert.equal(b.id, 'q2')
+  assert.equal(b.terminalId, 'term_1')
+  assert.equal(b.workspaceId, 'ws_1')
+  assert.equal(b.route, undefined)
+  assert.ok(w.logs.some(l => l.includes('inbox: 터미널 묶음 q2 저장')))
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[1]] })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  assert.deepEqual(host.callsOf('terminal.sendText'), [
+    { terminalId: 'term_1', text: '[질문 패널 답 q2] 1) 어느 DB? = SQLite [2]', enter: true },
+  ])
+  assert.equal(f.runs.filter(x => x.args[0] === 'orchestration').length, 0)
+  await w.deactivate()
+})
+
+test('터미널 탭 세션: 질문 파일과 훅이 같은 묶음을 올려도 카드는 하나다(어느 쪽이 먼저든)', async () => {
+  // 질문 파일이 먼저(ask 가 돌 때 쓴다), 훅이 뒤.
+  const a = fakeIo([termInbox('q2', Date.now())])
+  const wa = await mountWorker({ default: createWorker(a.io), deactivate }, { host: mockHost({}) })
+  await wa.hooks.fire('agent.tool.after', ASK)
+  assert.equal((wa.host.data().storage.batches as unknown[]).length, 1)
+  assert.ok(wa.logs.some(l => l.includes('hook: 묶음 q2(terminal term_1)는 질문 파일로 이미 받아 버림')))
+  await wa.deactivate()
+  // 훅이 먼저, 질문 파일이 뒤.
+  const files: { name: string; text: string }[] = []
+  const b = fakeIo(files)
+  const wb = await mountWorker({ default: createWorker(b.io), deactivate }, { host: mockHost({}) })
+  await wb.hooks.fire('agent.tool.after', ASK)
+  files.push(termInbox('q2', Date.now()))
+  await wb.request('qp.refresh', {})
+  assert.equal((wb.host.data().storage.batches as unknown[]).length, 1)
+  assert.deepEqual(b.removed, ['q2-term_1.json'])
+  await wb.deactivate()
+})
+
+test('터미널 탭 세션 닫힘 파일(session:{terminal})은 그 터미널의 묶음만 닫는다', async () => {
+  const now = Date.now()
+  const files = [termInbox('q2', now), termInbox('q2', now, 'term_9')]
+  const f = fakeIo(files)
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  await w.request('qp.refresh', {})
+  files.push({
+    name: 'closed-term_1-x-q2.json',
+    text: JSON.stringify({ v: 1, kind: 'closed', ids: ['q2'], session: { terminal: 'term_1' }, at: now + 1 }),
+  })
+  await w.request('qp.refresh', {})
+  const list = w.host.data().storage.batches as { terminalId: string; status: string; via?: string }[]
+  assert.deepEqual(
+    list.map(x => [x.terminalId, x.status]).sort(),
+    [
+      ['term_1', 'sent'],
+      ['term_9', 'pending'],
+    ],
+  )
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0]] })) as { ok: boolean }
+  assert.equal(r.ok, false)
+  assert.equal(host.callsOf('terminal.sendText').length, 0)
+  await w.deactivate()
+})

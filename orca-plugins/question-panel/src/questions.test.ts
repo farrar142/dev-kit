@@ -27,6 +27,8 @@ import {
   workspaceNameFrom,
   closedIdsOf,
   closeFromInbox,
+  sameAsk,
+  SAME_ASK_MS,
   closeInChat,
   OTHER,
   OTHER_MAX,
@@ -335,4 +337,43 @@ test('대화창에서 닫힘: 도구 입력의 id·panel_closed, 닫힘 파일, 
       ['q6', 't', 'pending', ''],
     ],
   )
+})
+
+test('터미널 탭 세션 질문 파일(session:{terminal}): 터미널 묶음(route 없음)으로 읽고, handle 모양이 틀리면 버린다', () => {
+  const raw = {
+    v: 1,
+    id: 'q2',
+    createdAt: 9,
+    questions: [{ question: '어느 DB?', header: 'DB', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }],
+    session: { terminal: 'term_abc-1' },
+    workspaceId: 'ws-1::/home/me/app',
+    cwd: '/home/me/app',
+  }
+  const b = batchFromInbox(raw, 0)!
+  assert.equal(b.terminalId, 'term_abc-1')
+  assert.equal(b.workspaceId, 'ws-1::/home/me/app')
+  assert.equal(b.route, undefined)
+  assert.equal(b.createdAt, 9)
+  assert.equal(routeLabel(b), '터미널')
+  assert.equal(batchFromInbox({ ...raw, session: { terminal: '../x' } }, 0), null)
+  assert.equal(batchFromInbox({ ...raw, session: {} }, 0), null)
+  assert.equal(batchFromInbox({ ...raw, workspaceId: 'a\nb' }, 0)?.workspaceId, null)
+  assert.deepEqual(closeFromInbox({ v: 1, kind: 'closed', ids: ['q2'], session: { terminal: 'term_abc-1' }, at: 3 }), {
+    terminalId: 'term_abc-1',
+    ids: ['q2'],
+    at: 3,
+  })
+  assert.equal(closeFromInbox({ v: 1, kind: 'closed', ids: ['q2'], session: { terminal: 'nope' }, at: 3 }), null)
+})
+
+test('sameAsk: 훅과 질문 파일의 같은 묶음 — key 가 둘 다 있으면 key 로, 없으면 대기 중·10분 안일 때만', () => {
+  const q = [{ question: 'Q', header: '', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }]
+  const base = { id: 'q2', terminalId: 'term_1', workspaceId: null, createdAt: 1_000_000, questions: q, status: 'pending' as const }
+  assert.ok(sameAsk([base], { ...base, createdAt: base.createdAt + 5_000 }))
+  assert.equal(sameAsk([base], { ...base, terminalId: 'term_2' }), undefined)
+  assert.equal(sameAsk([base], { ...base, createdAt: base.createdAt + SAME_ASK_MS + 1 }), undefined)
+  // 이미 보낸 같은 번호는 key 없이는 다른 묶음(세션을 다시 띄움)
+  assert.equal(sameAsk([{ ...base, status: 'sent' }], base), undefined)
+  assert.ok(sameAsk([{ ...base, status: 'sent', key: 's~q2~1' }], { ...base, key: 's~q2~1' }))
+  assert.equal(sameAsk([{ ...base, key: 's~q2~1' }], { ...base, key: 's~q2~2' }), undefined)
 })
