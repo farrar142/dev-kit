@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { announce } from './mailbox'
 import { runTurn, setup } from './mailtest'
-import { DEFAULT_HOLD_MS, holdConfig } from './switchboard'
+import { DEFAULT_HOLD_MS, DEFAULT_TYPING_MS, holdConfig, typingConfig } from './switchboard'
 import { flush } from './testing'
 
 const MIN = 60_000
@@ -12,7 +12,7 @@ test('보류: 입력창에 글이 있으면 일반 메일을 미루고, 글을 �
   const { host, mail } = await setup()
   host.emit({ type: 'input.change', text: '이번 건은 ' })
   const a = mail.send()
-  await host.clock.advance(10 * MIN)
+  await host.clock.advance(4 * MIN)
   expect(host.turns).toEqual([])
 
   host.emit({ type: 'input.change', text: '' })
@@ -105,4 +105,83 @@ test('보류: 0 이면 시간 보류 없이 턴이 끝나자마자 넣는다', a
   host.emit({ type: 'turn.complete' })
   await flush()
   expect(host.turns).toEqual([announce([a])])
+})
+
+// #123 사람이 안 쳤는데 입력 중으로 보아 메일을 미루던 것: 사람이 바꾼 것만 입력 중, 그것도 마지막 입력 뒤 상한까지.
+test('입력 중(#123): 플러그인 채우기·엔진 쓰기(by other)는 글이 있어도 입력 중이 아니다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '다른 플러그인이 채운 글', by: 'other' })
+  const a = mail.send()
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): 사람이 치던 글을 다른 쪽이 바꿔도 입력 중은 그대로, 비우면 풀린다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '쓰는 중' })
+  host.emit({ type: 'input.change', text: '쓰는 중 + 채움', by: 'other' })
+  const a = mail.send()
+  await host.clock.advance(1 * MIN)
+  expect(host.turns).toEqual([])
+  // 제출·지우기(clear)는 other 로 오지만 빈 글이면 입력 중을 푼다.
+  host.emit({ type: 'input.change', text: '', by: 'other' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): 기록 불러오기·되돌리기(by person)는 입력 중이다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '지난번에 보낸 글', by: 'person' })
+  const a = mail.send()
+  await host.clock.advance(1 * MIN)
+  expect(host.turns).toEqual([])
+  host.emit({ type: 'input.change', text: '', by: 'person' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): 마지막 사람 입력 뒤 상한(기본 5분)이 지나면 글이 남아 있어도 넣는다', async () => {
+  const { host, mail, board } = await setup()
+  host.emit({ type: 'input.change', text: '쓰다 만 글' })
+  const a = mail.send()
+  await host.clock.advance(3 * MIN)
+  // 다시 치면 상한을 새로 센다.
+  host.emit({ type: 'input.change', text: '쓰다 만 글 더' })
+  await host.clock.advance(DEFAULT_TYPING_MS - 1)
+  expect(host.turns).toEqual([])
+  expect(board.state().typing).toBe(true)
+  await host.clock.advance(1)
+  expect(board.state().typing).toBe(false)
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): 다른 쪽이 바꾼 것(by other)은 상한을 새로 세지 않는다', async () => {
+  const { host, mail } = await setup({ board: { typingLimitMs: 2 * MIN } })
+  host.emit({ type: 'input.change', text: '쓰는 중' })
+  const a = mail.send()
+  await host.clock.advance(1 * MIN)
+  host.emit({ type: 'input.change', text: '쓰는 중 + 채움', by: 'other' })
+  await host.clock.advance(1 * MIN)
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): 상한 0 이면 글이 있는 동안 계속 미룬다', async () => {
+  const { host, mail } = await setup({ board: { typingLimitMs: 0 } })
+  host.emit({ type: 'input.change', text: '쓰는 중' })
+  const a = mail.send()
+  await host.clock.advance(60 * MIN)
+  expect(host.turns).toEqual([])
+  host.emit({ type: 'input.submit', text: '쓰는 중', origin: 'user' })
+  await runTurn(host)
+  await host.clock.advance(DEFAULT_HOLD_MS)
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#123): typingConfig 는 분 글을 ms 로, 비거나 이상하면 기본 5분, 0 이면 상한 없음', () => {
+  expect(typingConfig(undefined)).toBe(DEFAULT_TYPING_MS)
+  expect(typingConfig('')).toBe(5 * MIN)
+  expect(typingConfig('abc')).toBe(5 * MIN)
+  expect(typingConfig('10')).toBe(10 * MIN)
+  expect(typingConfig(' 0.5 ')).toBe(30_000)
+  expect(typingConfig('0')).toBe(0)
 })

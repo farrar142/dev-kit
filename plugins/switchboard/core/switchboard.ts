@@ -87,6 +87,11 @@ export type SwitchboardOptions = {
    * 입력창에 글이 있는 동안도 미룬다. 0 이면 시간 보류는 없고 입력 중 보류만 한다. 긴급은 따르지 않는다.
    */
   holdAfterUserMs?: number
+  /**
+   * 입력 중 보류 상한(ms, #123). 사람이 마지막으로 입력창을 바꾼 뒤 이만큼 지나면 글이 남아 있어도 입력 중으로 보지 않는다
+   * (자리를 비운 채 남은 글이 메일을 끝없이 막지 않게). 0 이면 상한 없음. 없으면 기본 5분.
+   */
+  typingLimitMs?: number
   /** 멈춤 감지(D8) 재시도 간격·횟수. 없으면 기본(30초부터 두 배, 10분 상한, 8번). */
   stall?: Pick<StallOptions, 'retry'>
   /** 원격 권한 답(D8). waitMs 0 이면 끈다. bosses 는 오류 통지도 받는다. */
@@ -136,6 +141,17 @@ export const DEFAULT_HOLD_MS = 3 * 60_000
 export const holdConfig = (minutes: string | undefined): number => {
   const t = (minutes ?? '').trim()
   if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_HOLD_MS
+
+  return Math.round(Number(t) * 60_000)
+}
+
+/** 입력 중 보류 기본 상한(5분, #123). */
+export const DEFAULT_TYPING_MS = 5 * 60_000
+
+/** 환경변수 글(분)로 입력 중 보류 상한(ms)을 만든다. 비거나 숫자가 아니면 기본 5분, 0 이면 상한 없음. */
+export const typingConfig = (minutes: string | undefined): number => {
+  const t = (minutes ?? '').trim()
+  if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_TYPING_MS
 
   return Math.round(Number(t) * 60_000)
 }
@@ -211,6 +227,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
   let compactedForMail = false
   const holdMs = Math.max(0, opts.holdAfterUserMs ?? DEFAULT_HOLD_MS)
+  const typingMs = Math.max(0, opts.typingLimitMs ?? DEFAULT_TYPING_MS)
   /** 마지막 턴이 끝난 시각(RFC3339, presence 용). */
   let lastTurnAt: string | undefined
   /** presence: 상태·컨텍스트 토큰·마지막 턴. 토큰 수를 못 읽으면 빼고 보낸다(서버가 이전 값을 둔다). */
@@ -243,6 +260,19 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     holding = true
     holdTimer = host.services.clock.after(ms, () => {
       holding = false
+      mailbox?.kick()
+    })
+  }
+  /** 입력 중 상한 타이머: 사람이 마지막으로 바꾼 뒤 typingMs 가 지나면 입력 중을 풀고 메일함을 깨운다(#123). */
+  let typingTimer: Timer | undefined
+  const setTyping = (on: boolean) => {
+    typingTimer?.cancel()
+    typingTimer = undefined
+    st.typing = on
+    if (!on || typingMs <= 0) return
+    typingTimer = host.services.clock.after(typingMs, () => {
+      typingTimer = undefined
+      st.typing = false
       mailbox?.kick()
     })
   }
@@ -326,8 +356,12 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           break
         case 'input.change': {
           const was = st.typing
-          st.typing = e.text.trim() !== ''
-          stamp()
+          // 사람이 바꾼 것(치기·기록 불러오기·되돌리기)만 입력 중으로 친다. 플러그인 채우기·엔진 쓰기(prefill 등)는
+          // 비웠을 때만 따른다(#123). 사람이 바꿀 때마다 상한을 다시 센다.
+          const person = (e.by ?? 'person') === 'person'
+          const empty = e.text.trim() === ''
+          if (person || empty) setTyping(!empty)
+          if (person) stamp()
           // 입력창을 비웠다: 미룬 메일을 넣어 본다.
           if (was && !st.typing) mailbox?.kick()
           break
@@ -335,7 +369,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         case 'input.submit':
           // 플러그인이 넣은 턴(메일 알림 등)은 사람 입력이 아니다: 입력창도 그대로다.
           if ((e.origin ?? 'user') !== 'user') break
-          st.typing = false
+          setTyping(false)
           stamp()
           noteUserInput()
           break
@@ -352,7 +386,9 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         isIdle: () => st.active && st.activity === 'idle' && !held(),
         // 턴·compact 는 곧 끝나므로 남기지 않는다. 사람 쪽 보류만 까닭을 남긴다.
         holdReason: () =>
-          st.typing ? '입력창에 글이 있음(비우거나 보내면 넣는다)' : holding ? '사람 입력 뒤 보류(SWITCHBOARD_HOLD_MINUTES)' : null,
+          st.typing
+            ? `입력창에 글이 있음(비우거나 보내면${typingMs > 0 ? `, 마지막 입력 ${typingMs / 60_000}분 뒤` : ''} 넣는다)`
+            : holding ? '사람 입력 뒤 보류(SWITCHBOARD_HOLD_MINUTES)' : null,
         activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
       })
@@ -387,6 +423,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     mailbox = undefined
     holdTimer?.cancel()
     holding = false
+    typingTimer?.cancel()
+    typingTimer = undefined
     off?.()
     off = undefined
     st.active = false

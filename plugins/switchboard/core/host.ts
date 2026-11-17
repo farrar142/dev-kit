@@ -68,8 +68,11 @@ export type CompactResult = { done: true } | { done: false; reason: string }
 export type HostEvent =
   | { type: 'turn.start' }
   | { type: 'turn.complete' }
-  /** 사용자가 입력창의 글을 바꿨다(text 는 바뀐 뒤 전체 글). */
-  | { type: 'input.change'; text: string }
+  /**
+   * 입력창의 글이 바뀌었다(text 는 바뀐 뒤 전체 글). by: person(사람이 치기·붙여 넣기·기록 불러오기·되돌리기),
+   * other(플러그인 채우기·엔진 쓰기·지우기 등 사람이 친 글이 아닌 것). 없으면 person 으로 본다.
+   */
+  | { type: 'input.change'; text: string; by?: 'person' | 'other' }
   /** 사용자가 글을 제출했다(입력창이 비었다). */
   /**
    * 글이 제출됐다. origin: user(사람이 입력창·원격에서 보냄), plugin(플러그인이 넣은 턴: 메일 알림·질문 패널 등),
