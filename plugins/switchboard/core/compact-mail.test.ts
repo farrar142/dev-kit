@@ -102,3 +102,60 @@ test('메일 전 compact 설정: 환경변수 글을 읽는다(기본 200k, k �
   expect(compactConfig('OFF', undefined)).toBeUndefined()
   expect(compactConfig('많이', undefined)).toEqual({ thresholdTokens: 200_000 })
 })
+
+// #104: resume 직후 이미 기준을 넘은 세션. 연결 전에 와 있던 메일 앞에서 compact 를 거는데, 요청이
+// 받아들여지고도 실제로는 시작되지 않으면(완료 이벤트 없음) compacting 에 갇혀 메일을 못 받았다.
+const RESUMED = { ...BOARD, compactTimeoutMs: 5 * 60_000 }
+
+test('resume 직후 기준 이상: compact 가 완료 이벤트 없이 끝나지 않으면 시간 뒤 풀고 메일을 넣는다(알림 한 번)', async () => {
+  const warns: string[] = []
+  const { host, mail, board } = await setup({ board: { ...RESUMED, warn: t => void warns.push(t) }, preload: 1, usage: { tokens: 243_500 }, compact: 'silent' })
+  expect(host.compacts.length).toBe(1)
+  expect(board.state().activity).toBe('compacting')
+  expect(host.turns).toEqual([])
+
+  await host.clock.advance(5 * 60_000)
+  expect(board.state().activity).toBe('idle')
+  expect(host.turns.length).toBe(1)
+  expect(warns.length).toBe(1)
+  expect(warns[0]).toContain('compact')
+
+  // 같은 메일 턴이 돌기 전에는 다시 걸지 않고, 다음 메일도 막히지 않는다.
+  const b = mail.send()
+  await host.clock.advance(5 * 60_000)
+  expect(host.compacts.length).toBe(1)
+  await runTurn(host)
+  expect(host.turns.at(-1)).toEqual(announce([b]))
+  expect(warns.length).toBe(1)
+})
+
+test('resume 직후 기준 이상: compact 호출이 풀리지 않아도(hang) 시간 뒤 풀고 메일을 넣는다', async () => {
+  const warns: string[] = []
+  const { host, board } = await setup({ board: { ...RESUMED, warn: t => void warns.push(t) }, preload: 1, usage: { tokens: 243_500 }, compact: 'hang' })
+  expect(board.state().activity).toBe('compacting')
+  await host.clock.advance(5 * 60_000)
+  expect(board.state().activity).toBe('idle')
+  expect(host.turns.length).toBe(1)
+  expect(warns.length).toBe(1)
+})
+
+test('resume 직후 기준 이상: compact 가 제때 끝나면 알림 없이 메일을 넣고, 늦은 시간 초과는 아무것도 하지 않는다', async () => {
+  const warns: string[] = []
+  const { host, board } = await setup({ board: { ...RESUMED, warn: t => void warns.push(t) }, preload: 1, usage: { tokens: 243_500 } })
+  expect(host.compacts.length).toBe(1)
+  await host.clock.advance(0)
+  expect(host.turns.length).toBe(1)
+  host.emit({ type: 'turn.start' })
+  await host.clock.advance(5 * 60_000)
+  expect(board.state().activity).toBe('busy')
+  expect(warns).toEqual([])
+})
+
+test('컨텍스트 토큰 수를 모르면(0·읽기 실패) 기준 판정을 하지 않고 바로 넣는다', async () => {
+  const { host, mail } = await setup({ board: { ...BOARD, compactBeforeMail: { thresholdTokens: 0 } } })
+  host.setUsage({ tokens: 0 })
+  const a = mail.send()
+  await flush()
+  expect(host.compacts).toEqual([])
+  expect(host.turns).toEqual([announce([a])])
+})

@@ -316,14 +316,30 @@ export function claudeHost($: Self, emitter: Emitter, box: MidTurnBox): AgentHos
   },
   injectMidTurn: text => box.put(text),
   compact: async instructions => {
-    const r = await $.session.compact(instructions === undefined ? {} : { instructions })
+    // 플러그인이 건 compact 는 끝나고 풀리지만 session.compact 훅이 오지 않을 수 있다(#104: resume 직후 첫 턴 전에
+    // 확인). 그러면 코어가 완료를 몰라 compacting 에 갇힌다: 그 사이 훅이 없었으면 여기서 완료를 알린다.
+    let hooked = false
+    const off = emitter.on(e => {
+      if (e.type === 'compact.complete') hooked = true
+    })
+    let r: Awaited<ReturnType<Self['session']['compact']>>
+    try {
+      r = await $.session.compact(instructions === undefined ? {} : { instructions })
+    } finally {
+      off()
+    }
+    if ('skip' in r && typeof r.skip === 'string') return { done: false, reason: r.skip }
+    if (!hooked) emitter.emit({ type: 'compact.complete' })
 
-    return 'skip' in r && typeof r.skip === 'string' ? { done: false, reason: r.skip } : { done: true }
+    return { done: true }
   },
   usage: async () => {
     const { context } = await $.session.usage()
 
-    return { tokens: context.tokens ?? 0, ...(context.percent === undefined ? {} : { percent: context.percent }) }
+    // 모르면(resume 직후 등) 0 으로 꾸미지 않고 실패로 알린다: 코어는 판정을 건너뛰고 presence 에서 뺀다(#104).
+    if (typeof context.tokens !== 'number' || !Number.isFinite(context.tokens)) throw new Error('context tokens unknown')
+
+    return { tokens: context.tokens, ...(context.percent === undefined ? {} : { percent: context.percent }) }
   },
   on: l => emitter.on(l),
   }

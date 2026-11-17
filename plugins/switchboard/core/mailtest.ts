@@ -1,8 +1,8 @@
 // 메일함 시험 도우미: 가짜 Agent Mail 서버(긴 대기, #73 댓글 계약)와 메일함을 켠 코어 준비. 시험에서만 쓴다.
 import { flush } from './testing'
-import type { FakeHost } from './testing'
+import type { CompactBehavior, FakeHost } from './testing'
 import { fakeHost } from './testing'
-import type { HttpInit } from './host'
+import type { HttpInit, Usage } from './host'
 import { EMPTY_GAP_MS } from './mailbox'
 import { createSwitchboard } from './switchboard'
 import type { SwitchboardOptions } from './switchboard'
@@ -110,9 +110,15 @@ export const fakeMail = (host: FakeHost) => {
 }
 
 export const setup = async (
-  opts: { profile?: string | null; isMain?: boolean; preload?: number; features?: { midTurnInject?: boolean; compact?: boolean }; board?: Omit<SwitchboardOptions, 'mail'> } = {},
+  opts: { profile?: string | null; isMain?: boolean; preload?: number; features?: { midTurnInject?: boolean; compact?: boolean }; board?: Omit<SwitchboardOptions, 'mail'>
+    /** 연결 전부터의 컨텍스트(resume 으로 이어 띄운 세션). */
+    usage?: Usage
+    compact?: CompactBehavior
+  } = {},
 ) => {
   const host = fakeHost({ identity: { isMain: opts.isMain ?? true }, ...(opts.features === undefined ? {} : { features: opts.features }) })
+  if (opts.usage !== undefined) host.setUsage(opts.usage)
+  if (opts.compact !== undefined) host.setCompactBehavior(opts.compact)
   if (opts.profile !== null) host.fs.files.set(PROFILE, opts.profile ?? JSON.stringify({ endpoint: `${EP}/`, role: ROLE, token: TOKEN }))
   const mail = fakeMail(host)
   for (let i = 0; i < (opts.preload ?? 0); i++) mail.send()
