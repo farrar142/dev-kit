@@ -22,6 +22,8 @@ import {
   SESSION_GONE,
   splitBy,
   ASK_TOOL,
+  isAskTool,
+  isResolveTool,
   asBatches,
   batchFromInbox,
   batchFromTool,
@@ -35,7 +37,6 @@ import {
   ledgerVia,
   parseLedger,
   type LedgerRecord,
-  RESOLVE_TOOL,
   isMailbox,
   mailBody,
   mailSubject,
@@ -240,7 +241,7 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
   }
 
   orca.hooks.on('agent.tool.after', async event => {
-    if (event.tool === RESOLVE_TOOL) {
+    if (isResolveTool(event.tool)) {
       const ids = closedIdsOf(event.input)
       log(`hook ${event.tool} terminalId=${event.terminalId ?? '(없음)'} ids=${ids.join(',') || '(없음)'}`)
       if (event.terminalId !== undefined && event.terminalId !== '') {
@@ -249,9 +250,9 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
 
       return
     }
-    if (event.tool !== ASK_TOOL) {
+    if (!isAskTool(event.tool)) {
       // 이름이 바뀐 질문 도구(옛 mod 도구 등)가 오면 왜 무시하는지 남긴다. 다른 도구는 조용히 넘긴다.
-      if (event.tool.includes('question-panel')) log(`hook ${event.tool}: 질문 도구 이름이 아니라 무시(기대: ${ASK_TOOL})`)
+      if (event.tool.includes('question-panel') || event.tool.includes('switchboard')) log(`hook ${event.tool}: 질문 도구 이름이 아니라 무시(기대: ${ASK_TOOL})`)
       return
     }
     log(

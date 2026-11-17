@@ -10,7 +10,8 @@
 /plugin install django-asgi@dev-kit
 /plugin install test-speed@dev-kit
 /plugin install token-diet@dev-kit
-/plugin install question-panel@dev-kit
+/plugin install question-panel@dev-kit   # switchboard로 옮기는 중: 아래 「question-panel → switchboard 이전」
+/plugin install switchboard@dev-kit
 /plugin install security-recon@dev-kit
 /plugin install idle-compact@dev-kit
 /plugin install context-cap@dev-kit
@@ -57,13 +58,23 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.1.0, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+    core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
+    core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀). D2부터 메일함이 붙는다
+    core/questions.ts              질문 패널 상태(쌓기·고르기·완료·답 없이 닫기·대화창 답·장부 읽기). 저장은 Store 포트, 보내기는 submitTurn, 장부는 선택 어댑터 LedgerLink
+    core/testing.ts                시험 틀: 가짜 어댑터(fakeHost)·가짜 시계(advance)·가짜 http(경로 처리기·SSE 밀기/끊기)·가짜 fs
+    core/*.test.ts                 코어 단위 시험(가짜 어댑터로)
+    adapters/claude.ts             Claude 어댑터: 모드 API로 포트를 구현(prompt.submit, 도구 결과 context, session.compact·usage, 턴·입력·compact 훅, $.http·$.clock·$.fs)
+    adapters/ledger.ts             선택 어댑터: 닫힘 장부(MCP 서버 qp의 sync). 서버가 안 닿으면 장부 없이 혼자 돈다
+    hooks/register.tsx             껍데기: 코어를 Claude 어댑터로 잇고 질문 패널을 그린다. hooks/register.test.tsx는 question-panel 시험을 이름만 바꿔 옮긴 것
+    .mcp.json, mcp/                MCP 서버 qp(question-panel과 같은 코드, 장부·Orca 폴더도 같은 ~/.question-panel)
   idle-compact/                    작업이 끝난 뒤 오래 입력이 없으면 자동 compact 하는 mod(hooks 모듈, Claude Code 2.1.312+)
     hooks/register.ts              turn.complete에서 30분 타이머(IDLE_MS)를 걸고, turn.start·prompt.change·prompt.submit에서 취소, 컨텍스트 MIN_PERCENT(15%) 미만이면 건너뜀
   context-cap/                     세션 컨텍스트 상한 훅(Node, issue-worker 본 세션 또는 환경변수가 있을 때 켜짐)
     hooks/context-cap.js           transcript 끝에서 마지막 본 세션 응답의 usage로 컨텍스트를 재고 UserPromptSubmit·PostToolUse·PreToolUse를 처리
     tests/                         가짜 transcript 시험(`node --test plugins/context-cap/tests`)
 orca-plugins/
-  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤(0.5.1)
+  question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다(0.5.2)
 ```
 
 | 플러그인 | 스킬·에이전트 | 언제 불러오나 |
@@ -77,9 +88,23 @@ orca-plugins/
 | token-diet | 훅 `read-guard`·`block-heredoc` | 설치하면 늘 켜진다 |
 | | `token-diet` | 작업자가 토큰을 많이 쓴다, 지시서·에이전트 정의를 쓴다 |
 | question-panel | 도구 `mcp__plugin_question-panel_qp__ask`·`mcp__plugin_question-panel_qp__resolve`(MCP 서버, resolve는 0.6.3부터; 그 전 이름 `mcp__question-panel__resolve`), 명령 `/questions`(열려 있으면 닫는 토글; `/questions close`는 늘 닫음, 0.8.0+)·`/questions-clear` | 모델이 결정 질문을 패널에 쌓고 턴을 끝낸다; 사용자가 답하고 완료를 누르면 답이 새 메시지로 온다(AskUserQuestion은 급한 확인만). 질문은 패널(데스크톱 앱·CLI·Orca 사이드바)에만 보이고 대화창에 다시 쓰지 않는다(0.7.0+). Orca 채팅 세션은 Orca 사이드바 질문 패널로 답한다(0.6.1+, 답은 `[질문 패널 답] qN` 오케스트레이션 메일). 글로 답해도 된다(예: `q4 1-2`). 패널이 안 보이는 화면(Remote Control·폰)에서는 환경변수 `QUESTION_PANEL_ECHO=1`로 질문을 대화창 블록으로도 옮겨 적게 한다 |
+| switchboard | 도구 `mcp__plugin_switchboard_qp__ask`·`mcp__plugin_switchboard_qp__resolve`, 명령 `/questions`·`/questions-clear` | question-panel과 같다(이름의 플러그인 자리만 다르다). question-panel과 같이 켜지 않는다 |
 | security-recon | `security-recon` | 인가 받은 새 서버·낯선 인프라를 바깥에서 점검한다, 클라우드 방화벽을 조인다, 방화벽을 좁힌 뒤 서비스가 죽었다 |
 | idle-compact | 훅만(도구·명령 없음) | 설치하면 늘 켜진다. 작업이 끝나고 30분 동안 입력이 없으면 `/compact`와 같은 정리를 하고 알림을 띄운다 |
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
+
+## question-panel → switchboard 이전
+
+switchboard 0.1.0은 question-panel 0.9.0을 그대로 옮기고 코어와 AgentHost 포트를 나눈 것이다. 도구 이름만 `mcp__plugin_question-panel_qp__*`에서 `mcp__plugin_switchboard_qp__*`로 바뀐다. 두 플러그인을 함께 켜면 질문 도구(`ask`)가 둘 생기므로 기계마다 다음 순서로 옮긴다.
+
+1. `/plugin marketplace update dev-kit` 뒤 `/plugin install switchboard@dev-kit`(켜기).
+2. `/plugin disable question-panel@dev-kit`(끄기). 세션을 다시 띄운다.
+3. 지침·스킬에 적힌 도구 이름을 `mcp__plugin_switchboard_qp__ask`·`…__resolve`로 바꾼다.
+4. Orca를 쓰는 기계는 Orca 질문 패널을 0.5.2 이상으로 올린다(두 이름을 다 알아본다).
+
+- 패널의 쌓인 질문은 옮겨지지 않는다(저장 키가 플러그인 이름을 따른다). 대기 중인 질문이 없을 때 옮긴다.
+- 닫힘 장부·Orca 질문 폴더(`~/.question-panel/…`)는 그대로 같이 쓴다.
+- 계획: 모든 기계가 옮기면 question-panel은 이 안내만 남기고 마켓플레이스에서 내린다.
 
 ## context-cap 쓰는 법
 
@@ -107,6 +132,14 @@ orca-plugins/
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.1.0: question-panel을 옮기고 코어·AgentHost 포트를 나눔 (#74)
+
+- spec #73의 첫 티켓(D1). 동작은 바꾸지 않는 프리팩터다. 새 플러그인 `plugins/switchboard`가 question-panel 0.9.0을 대체한다(옛 플러그인은 아직 남긴다, 위 「이전」).
+- 코어(`core/`)는 Claude 모드 API를 모른다. 세션 상태 추적(`switchboard.ts`)과 질문 패널 상태(`questions.ts`)가 AgentHost 포트(`host.ts`)·Store·LedgerLink만 본다. Claude 어댑터(`adapters/claude.ts`)가 포트를 모드 API에 잇는다. 모드 로더 제약 때문에 `$`를 받는 어댑터 함수는 함수 선언(`function f($)`)으로 두고 `$.env.get`에는 글자 그대로의 이름을 쓴다.
+- Orca 사이드바 연동은 선택 어댑터다: 장부(`adapters/ledger.ts`)는 MCP 서버가 닿을 때만 쓰고, Orca 전용 동작(Orca 질문 폴더·run-current)은 서버가 `ORCA_*` 환경변수를 볼 때만 한다. Orca 질문 패널 0.5.2는 switchboard 도구 이름도 알아본다.
+- 모드 http는 본문을 다 받아서만 주므로 Claude 어댑터에는 SSE(`services.http.sse`)가 없다. D2가 길을 정한다.
+- 시험: mod 49건(`claude plugin test plugins/switchboard` — 옮긴 question-panel 시험 30, 코어 15, Claude 어댑터 4), 서버 17건(`node --test plugins/switchboard/mcp`).
 
 ### 2026-11-13 — Orca 질문 패널 0.5.1: 「기타」 글 상자의 한글 겹침 (#66)
 
