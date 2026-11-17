@@ -71,7 +71,11 @@ export type HostEvent =
   /** 사용자가 입력창의 글을 바꿨다(text 는 바뀐 뒤 전체 글). */
   | { type: 'input.change'; text: string }
   /** 사용자가 글을 제출했다(입력창이 비었다). */
-  | { type: 'input.submit'; text: string }
+  /**
+   * 글이 제출됐다. origin: user(사람이 입력창·원격에서 보냄), plugin(플러그인이 넣은 턴: 메일 알림·질문 패널 등),
+   * other(예약 작업·SDK 등). 없으면 user 로 본다.
+   */
+  | { type: 'input.submit'; text: string; origin?: 'user' | 'plugin' | 'other' }
   | { type: 'compact.complete' }
 
 export type Features = {

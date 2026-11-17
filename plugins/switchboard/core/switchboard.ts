@@ -1,7 +1,7 @@
 // switchboard 코어: 에이전트를 모른다. AgentHost 포트(host.ts)만 보고 세션의 바깥 상태(유휴·바쁨·compact 중,
 // 사용자가 입력 중인가)를 따라간다. D2 이후의 메일함(SSE 구독·등급별 입력 줄·compact 판단·presence)이
 // 이 위에 붙는다. 질문 패널 상태는 questions.ts 가 맡는다. 메일함은 mailbox.ts(D2).
-import type { AgentHost, CompactResult, Features } from './host'
+import type { AgentHost, CompactResult, Features, Timer } from './host'
 import { createMailbox } from './mailbox'
 import type { Mailbox, MailboxOptions, MailboxState } from './mailbox'
 
@@ -33,6 +33,11 @@ export type Switchboard = {
    * 끝(compact.complete 이벤트)은 activity 가 idle 로 돌아오는 것으로 본다.
    */
   compact: (instructions?: string) => Promise<CompactResult>
+  /**
+   * 사람이 입력을 한 것으로 친다(포트 이벤트로 안 보이는 사람 행동: 질문 패널에서 답한 것 등).
+   * 그 턴이 끝난 뒤 보류 시간 동안 일반 메일을 미룬다.
+   */
+  noteUserInput: () => void
   /** 메일함 상태(꺼져 있으면 status off). */
   mail: () => MailboxState
 }
@@ -42,6 +47,22 @@ export type SwitchboardOptions = {
   mail?: Omit<MailboxOptions, 'isIdle' | 'activity' | 'beforeDeliver'>
   /** 일반 메일 전 compact(D3). 컨텍스트가 thresholdTokens 이상이면 먼저 줄인다. 없으면 하지 않는다. */
   compactBeforeMail?: { thresholdTokens: number; instructions?: string }
+  /**
+   * 사람 입력 뒤 보류(D5, ms). 사람이 보낸 턴이 끝난 뒤 이만큼 일반 메일 턴을 미룬다(답을 읽는 동안).
+   * 입력창에 글이 있는 동안도 미룬다. 0 이면 시간 보류는 없고 입력 중 보류만 한다. 긴급은 따르지 않는다.
+   */
+  holdAfterUserMs?: number
+}
+
+/** 사람 입력 뒤 보류 기본값(3분). */
+export const DEFAULT_HOLD_MS = 3 * 60_000
+
+/** 환경변수 글(분)로 보류 시간(ms)을 만든다. 비거나 숫자가 아니면 기본 3분, 0 이면 끔. */
+export const holdConfig = (minutes: string | undefined): number => {
+  const t = (minutes ?? '').trim()
+  if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_HOLD_MS
+
+  return Math.round(Number(t) * 60_000)
 }
 
 /** 메일 전 compact 기본 기준(토큰). */
@@ -70,6 +91,33 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   let mailbox: Mailbox | undefined
   /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
   let compactedForMail = false
+  const holdMs = Math.max(0, opts.holdAfterUserMs ?? DEFAULT_HOLD_MS)
+  /** 사람 턴이 들어갔고 아직 끝나지 않았다(끝나면 보류를 건다). */
+  let userTurnOpen = false
+  /** 시간 보류가 걸려 있다. 타이머가 풀고 메일함을 깨운다. */
+  let holding = false
+  let holdTimer: Timer | undefined
+  const holdFor = (ms: number) => {
+    holdTimer?.cancel()
+    if (ms <= 0) {
+      holding = false
+
+      return
+    }
+    holding = true
+    holdTimer = host.services.clock.after(ms, () => {
+      holding = false
+      mailbox?.kick()
+    })
+  }
+  /** 사람 입력: 그 턴이 도는 동안과 끝난 뒤 보류 시간 동안 일반 메일을 미룬다. */
+  const noteUserInput = () => {
+    userTurnOpen = true
+    // 턴이 안 시작돼도(거절 등) 풀리도록 지금부터도 건다. 턴 끝에서 다시 센다.
+    holdFor(holdMs)
+  }
+  /** 일반 메일 보류: 입력 중이거나 사람 입력 뒤 보류 시간 안. */
+  const held = () => st.typing || holding
 
   /**
    * 메일 턴 직전: 유휴이고 컨텍스트가 기준 이상이면 compact 를 걸고 'wait'. 완료 이벤트(compact.complete)가
@@ -113,17 +161,29 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         case 'turn.complete':
           // compact 중에 끝난 턴(드묾)은 compact 완료가 마저 풀어 준다.
           if (st.activity === 'busy') st.activity = 'idle'
+          // 사람이 보낸 턴이 끝났다: 답을 읽는 동안 보류(메일함은 이 뒤에 턴 끝을 본다).
+          if (userTurnOpen) {
+            userTurnOpen = false
+            holdFor(holdMs)
+          }
           break
         case 'compact.complete':
           st.activity = 'idle'
           break
-        case 'input.change':
+        case 'input.change': {
+          const was = st.typing
           st.typing = e.text.trim() !== ''
           stamp()
+          // 입력창을 비웠다: 미룬 메일을 넣어 본다.
+          if (was && !st.typing) mailbox?.kick()
           break
+        }
         case 'input.submit':
+          // 플러그인이 넣은 턴(메일 알림 등)은 사람 입력이 아니다: 입력창도 그대로다.
+          if ((e.origin ?? 'user') !== 'user') break
           st.typing = false
           stamp()
+          noteUserInput()
           break
       }
     })
@@ -131,7 +191,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     if (opts.mail !== undefined) {
       mailbox = createMailbox(host, {
         ...opts.mail,
-        isIdle: () => st.active && st.activity === 'idle',
+        isIdle: () => st.active && st.activity === 'idle' && !held(),
         activity: () => st.activity,
         beforeDeliver: compactBeforeMail,
       })
@@ -144,6 +204,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const stop = () => {
     mailbox?.stop()
     mailbox = undefined
+    holdTimer?.cancel()
+    holding = false
     off?.()
     off = undefined
     st.active = false
@@ -169,5 +231,5 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
 
   const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [] }
 
-  return { start, stop, state: () => ({ ...st }), compact, mail }
+  return { start, stop, state: () => ({ ...st }), compact, mail, noteUserInput }
 }
