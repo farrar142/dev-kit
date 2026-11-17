@@ -39,13 +39,58 @@ export type Switchboard = {
 
 export type SwitchboardOptions = {
   /** 메일함. 없거나 profilePath 가 null 이면 꺼진다. */
-  mail?: Omit<MailboxOptions, 'isIdle'>
+  mail?: Omit<MailboxOptions, 'isIdle' | 'beforeDeliver'>
+  /** 일반 메일 전 compact(D3). 컨텍스트가 thresholdTokens 이상이면 먼저 줄인다. 없으면 하지 않는다. */
+  compactBeforeMail?: { thresholdTokens: number; instructions?: string }
+}
+
+/** 메일 전 compact 기본 기준(토큰). */
+export const DEFAULT_COMPACT_TOKENS = 200_000
+
+/**
+ * 환경변수 글로 메일 전 compact 설정을 만든다. tokens: 비면 기본 200k, `0`·`off` 이면 끔(undefined),
+ * 숫자가 아니면 기본. 뒤에 k 를 붙여도 된다(`150k`). instructions: 비면 에이전트 기본 요약.
+ */
+export const compactConfig = (
+  tokens: string | undefined,
+  instructions: string | undefined,
+): SwitchboardOptions['compactBeforeMail'] => {
+  const t = (tokens ?? '').trim().toLowerCase()
+  if (t === '0' || t === 'off') return undefined
+  const m = /^(\d+(?:\.\d+)?)(k?)$/.exec(t)
+  const n = m === null ? DEFAULT_COMPACT_TOKENS : Math.round(Number(m[1]) * (m[2] === 'k' ? 1000 : 1))
+  const ins = (instructions ?? '').trim()
+
+  return { thresholdTokens: n > 0 ? n : DEFAULT_COMPACT_TOKENS, ...(ins === '' ? {} : { instructions: ins }) }
 }
 
 export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}): Switchboard => {
   const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null }
   let off: (() => void) | undefined
   let mailbox: Mailbox | undefined
+  /** 메일 전 compact 를 했고 아직 그 메일 턴이 돌지 않았다(줄여도 기준 위면 되풀이하지 않게). */
+  let compactedForMail = false
+
+  /**
+   * 메일 턴 직전: 유휴이고 컨텍스트가 기준 이상이면 compact 를 걸고 'wait'. 완료 이벤트(compact.complete)가
+   * 메일함을 다시 깨운다(시간 sleep 없음). 바쁘거나 기능이 없거나 기준 아래거나 거절되면 'ready'.
+   */
+  const compactBeforeMail = async (): Promise<'ready' | 'wait'> => {
+    const cfg = opts.compactBeforeMail
+    if (cfg === undefined || compactedForMail || !capabilities(host).compact || st.activity !== 'idle') return 'ready'
+    let tokens: number
+    try {
+      tokens = (await host.usage()).tokens
+    } catch {
+      return 'ready'
+    }
+    if (tokens < cfg.thresholdTokens || st.activity !== 'idle') return 'ready'
+    compactedForMail = true
+    const r = await compact(cfg.instructions)
+
+    // 받아들여졌으면 끝(compact.complete)까지 기다린다. 거절이면 그대로 넣는다.
+    return r.done ? 'wait' : 'ready'
+  }
   // 이벤트 순서대로 시각을 적는다(clock.now 는 비동기라 마지막 값만 남긴다).
   const stamp = () => {
     void host.services.clock.now().then(t => {
@@ -62,6 +107,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       switch (e.type) {
         case 'turn.start':
           st.activity = 'busy'
+          // 새 턴이 돌았다: 다음 메일 앞에서는 다시 compact 를 볼 수 있다.
+          compactedForMail = false
           break
         case 'turn.complete':
           // compact 중에 끝난 턴(드묾)은 compact 완료가 마저 풀어 준다.
@@ -82,7 +129,11 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     })
     // 메일함은 본 세션에서만. 듣는 순서상 위 상태가 먼저 바뀐 뒤 메일함이 턴 끝을 본다.
     if (opts.mail !== undefined) {
-      mailbox = createMailbox(host, { ...opts.mail, isIdle: () => st.active && st.activity === 'idle' })
+      mailbox = createMailbox(host, {
+        ...opts.mail,
+        isIdle: () => st.active && st.activity === 'idle',
+        beforeDeliver: compactBeforeMail,
+      })
       await mailbox.start().catch(() => false)
     }
 
