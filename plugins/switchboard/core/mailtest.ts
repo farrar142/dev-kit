@@ -58,7 +58,7 @@ export const fakeMail = (host: FakeHost) => {
 
   host.http.route(`${EP}/api/events/poll`, async ({ url, init }: { url: string; init: HttpInit }) => {
     if (down) throw new Error(`connect ECONNREFUSED (headers ${JSON.stringify(init.headers)})`)
-    if (init.headers?.Authorization !== `Bearer ${TOKEN}` || init.headers['X-Agent-Mail-Role'] !== ROLE) {
+    if (init.headers?.Authorization !== `Bearer ${TOKEN}` || init.headers['X-Switchboard-Role'] !== ROLE || init.headers['X-Agent-Mail-Role'] !== ROLE) {
       return { status: 401, text: 'unauthorized' }
     }
     const q = new URL(url).searchParams

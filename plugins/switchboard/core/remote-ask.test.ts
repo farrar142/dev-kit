@@ -69,7 +69,7 @@ const fakeServer = () => {
   const hex = (n: number) => n.toString(16).padStart(32, '0')
 
   const attach = (host: FakeHost, role: string) => {
-    const authed = (init: HttpInit) => init.headers?.Authorization === `Bearer ${TOKEN}` && init.headers['X-Agent-Mail-Role'] === role
+    const authed = (init: HttpInit) => init.headers?.Authorization === `Bearer ${TOKEN}` && init.headers['X-Switchboard-Role'] === role
     host.http.route(`${EP}/api/messages/`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (!authed(init)) return { status: 401 }
       const m = /\/api\/messages\/(\d+)(\/read)?$/.exec(url)
@@ -179,12 +179,15 @@ const fakeSink = () => {
 const session = async (
   server: ReturnType<typeof fakeServer>,
   clock: FakeClock,
-  o: { role?: string; profile?: boolean; bosses?: string[]; panel?: boolean } = {},
+  o: { role?: string; profile?: boolean; bosses?: string[]; panel?: boolean; isBoss?: boolean } = {},
 ) => {
   const role = o.role ?? ME
   const host = fakeHost({ clock, identity: { machine: 'box-w', cwd: '/work/repo', sessionId: 'sess-w' } })
   if (o.profile !== false) host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role, token: TOKEN }))
   server.attach(host, role)
+  // 새 서버(#130): whoami. 없으면 라우트가 없어 404(옛 서버, 전역 목록 판정).
+  const isBoss = o.isBoss
+  if (isBoss !== undefined) host.http.route(`${EP}/api/whoami`, () => ({ text: JSON.stringify({ role, base: role, group: 'g', global_boss: false, boss_of: [], is_boss: isBoss }) }))
   const logs: string[] = []
   const board = createSwitchboard(host, {
     log: t => void logs.push(t),
@@ -480,4 +483,20 @@ test('서버 클라이언트: list·poll·answer 는 계약의 경로로 부르�
     { path: '/api/questions/poll?after=3&timeout=25', method: 'GET', timeoutMs: 40_000 },
     { path: `/api/questions/${id}/answer`, method: 'POST', body: JSON.stringify({ answers: [{ selected: ['A'] }] }) },
   ])
+})
+
+test('대장 판정(#130): whoami 가 is_boss false 면 전역 목록의 대장이어도 참조 메일을 거르지 않고, true 면 목록 밖이어도 거른다', async () => {
+  for (const o of [
+    { role: BOSS, bosses: ['team/boss'], panel: true, isBoss: false, dropped: false },
+    { role: ME, bosses: [], panel: true, isBoss: true, dropped: true },
+  ]) {
+    const clock = fakeClock()
+    const server = fakeServer()
+    const w = await session(server, clock, o)
+    const id = `q_${'d'.repeat(32)}`
+    server.put(qMail(id, o.role))
+    await settle(clock)
+    expect(w.host.turns.length).toBe(o.dropped ? 0 : 1)
+    await w.board.stop()
+  }
 })

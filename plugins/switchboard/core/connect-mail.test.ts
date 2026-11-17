@@ -53,7 +53,7 @@ const fakeServer = (clock: FakeClock) => {
   const attach = (host: FakeHost) => {
     host.http.route(`${EP}/api/slots/`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const base = (init.headers['X-Agent-Mail-Role'] ?? '').replace(/-\d+$/, '')
+      const base = (init.headers['X-Switchboard-Role'] ?? '').replace(/-\d+$/, '')
       const action = url.slice(`${EP}/api/slots/`.length)
       const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
       let mine = slots.find(s => s.base === base && s.machine === b.machine && s.directory === b.directory)
@@ -82,16 +82,16 @@ const fakeServer = (clock: FakeClock) => {
     })
     host.http.route(`${EP}/api/messages`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const me = box(init.headers['X-Agent-Mail-Role'] ?? '')
+      const me = box(init.headers['X-Switchboard-Role'] ?? '')
       if (url === `${EP}/api/messages` && init.method === 'POST') {
         const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
-        sends.push({ role: init.headers['X-Agent-Mail-Role'] ?? '', key: init.headers['Idempotency-Key'], body: b })
+        sends.push({ role: init.headers['X-Switchboard-Role'] ?? '', key: init.headers['Idempotency-Key'], body: b })
         const fault = sendFaults.shift()
         if (fault !== undefined) return { status: fault, text: 'fault' }
         const key = init.headers['Idempotency-Key']
         const dup = key === undefined ? undefined : sends.slice(0, -1).find(s => s.key === key && mails.some(m => m.subject === s.body.subject))
         if (dup !== undefined) return { status: 200, text: '{}' }
-        const r = deliver(String(b.recipient), { sender: init.headers['X-Agent-Mail-Role'] ?? '', subject: String(b.subject), body: String(b.body) })
+        const r = deliver(String(b.recipient), { sender: init.headers['X-Switchboard-Role'] ?? '', subject: String(b.subject), body: String(b.body) })
 
         return r.mail === undefined ? { status: r.status, text: 'bad' } : { status: 201, text: JSON.stringify({ id: r.mail.id }) }
       }
@@ -104,7 +104,7 @@ const fakeServer = (clock: FakeClock) => {
     })
     host.http.route(`${EP}/api/events/poll`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const me = box(init.headers['X-Agent-Mail-Role'] ?? '')
+      const me = box(init.headers['X-Switchboard-Role'] ?? '')
       const q = new URL(url).searchParams
       const after = q.has('after') ? Number(q.get('after')) : -1
       const events = mails

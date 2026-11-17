@@ -1,6 +1,6 @@
 // 원격 질문 — 대장 쪽(#112): 대장 역할 세션이 Agent Mail 서버 질문을 끌어와 로컬 질문 패널에 올리고, 패널의 답을 서버로 보낸다.
-//  - 켜는 조건: 메일함의 지금 역할(번호 역할이면 바탕)이 대장 역할 목록(SWITCHBOARD_BOSS_ROLES, bossRolesConfig 와 같은 판정)에
-//    들 때. 아니면 서버를 부르지 않고 역할만 가끔 다시 본다(번호 역할을 늦게 받는 경우).
+//  - 켜는 조건: 대장 판정(core/boss.ts — 서버 whoami 의 is_boss, 옛 서버면 대장 역할 목록 SWITCHBOARD_BOSS_ROLES)이 참일
+//    때. 아니면 서버를 부르지 않고 역할만 가끔 다시 본다(번호 역할을 늦게 받는 경우).
 //  - 처음: GET /api/questions?status=pending 로 채우고(대기·can_answer 만 패널에), 패널에 남은 대기 원격 묶음 중 서버 대기
 //    목록에 없는 것은 닫는다(세션이 꺼진 사이 답이 났다). 커서는 그 목록과 최신 한 건의 seq 중 큰 값.
 //  - 그 뒤: GET /api/questions/poll?after=<커서> 긴 대기 반복. pending·can_answer 는 올리고, answered·withdrawn 은 패널에서 닫는다.
@@ -11,7 +11,7 @@
 import type { AgentHost, Timer } from './host'
 import type { Mailbox } from './mailbox'
 import { POLL_TIMEOUT_S } from './mailbox'
-import { baseOf } from './permission'
+import { isBossRole } from './boss'
 import type { RemoteAnswerOutcome } from './questions'
 import { createQuestionsApi } from './remote-questions'
 import type { QuestionsApi, RemoteAnswer, RemoteQuestion } from './remote-questions'
@@ -27,8 +27,10 @@ export type RemoteSink = {
 }
 
 export type RemoteInboxOptions = {
-  /** 대장 역할 목록(바탕 이름). 비면 아무 세션도 대장이 아니다. */
+  /** 대장 역할 목록(바탕 이름). 비면 아무 세션도 대장이 아니다. isBoss 가 있으면 쓰지 않는다. */
   bosses: readonly string[]
+  /** 대장 판정(core/boss.ts, whoami). 없으면 bosses 목록으로 본다. */
+  isBoss?: () => boolean
   sink: RemoteSink
   /** 긴 대기 한 번(초, 서버 상한 55). */
   timeoutS?: number
@@ -46,6 +48,8 @@ export type RemoteInbox = {
   answer: (id: string, answers: readonly RemoteAnswer[]) => Promise<RemoteAnswerOutcome>
   /** 지금 끌어오는 중인가(대장 역할이고 루프가 돈다). */
   active: () => boolean
+  /** 대장 판정이 바뀌었을 수 있다: 대장이 아니라 쉬는 중이면 곧 다시 본다. */
+  recheck: () => void
 }
 
 export const REMOTE_RETRY = { firstMs: 5_000, maxMs: 300_000 }
@@ -53,9 +57,7 @@ export const REMOTE_IDLE_MS = 60_000
 /** 이 세션이 올린 서버 id 를 이만큼 기억한다. */
 const REMEMBER = 500
 
-/** 이 역할이 대장인가(번호 역할이면 바탕으로 본다). */
-export const isBossRole = (role: string | null, bosses: readonly string[]) =>
-  role !== null && role !== '' && bosses.map(baseOf).includes(baseOf(role))
+export { isBossRole }
 
 export const createRemoteInbox = (
   host: Pick<AgentHost, 'services'>,
@@ -136,7 +138,7 @@ export const createRemoteInbox = (
       delay = Math.min(retry.maxMs, delay * 2)
     }
     while (live()) {
-      if (!isBossRole(mail.state().role, opts.bosses)) {
+      if (!(opts.isBoss ?? (() => isBossRole(mail.state().role, opts.bosses)))()) {
         polling = false
         cursor = null
         await sleep(idleMs)
@@ -176,6 +178,14 @@ export const createRemoteInbox = (
     void loop(generation)
   }
 
+  const recheck = () => {
+    if (!running || polling) return
+    const w = wake
+    wake = undefined
+    w?.timer.cancel()
+    w?.done()
+  }
+
   const stop = () => {
     running = false
     generation++
@@ -201,5 +211,5 @@ export const createRemoteInbox = (
     return { kind: 'failed', reason: `HTTP ${r.status}: ${r.error}` }
   }
 
-  return { start, stop, answer, active: () => running && polling }
+  return { start, stop, answer, active: () => running && polling, recheck }
 }

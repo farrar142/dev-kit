@@ -1,7 +1,17 @@
 // Claude 어댑터 시험(얕게): 포트 호출이 모드 API로 이어지는지만 본다.
 import { expect, test } from 'claude-code/testing'
 
-import { changeBy, claudeHost, wireClaudeEvents, createEmitter, createMidTurnBox, permissionSummary, submitOrigin } from '../adapters/claude'
+import {
+  changeBy,
+  claudeHost,
+  wireClaudeEvents,
+  createEmitter,
+  createMidTurnBox,
+  exportRole,
+  mailProfilePath,
+  permissionSummary,
+  submitOrigin,
+} from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 
 // 시험의 $ 는 플러그인 $ 의 일부만 가진 Engine 이다(clock·session.usage 등이 없다). 어댑터가 쓰는 것만 부른다.
@@ -104,4 +114,38 @@ test('Claude 어댑터: 다음 답 추천(prompt.suggest)은 입력 이벤트를
   on('prompt.suggest', () => ({ isShown: true }))
   await $.prompt.suggest({ text: '응, 옮겨 줘' } as any)
   expect(seen).toEqual([])
+})
+
+/** env 만 가진 가짜 $(#130 이름 시험). */
+const envSelf = (vars: Record<string, string>) => {
+  const env = { ...vars }
+  const self = asSelf({
+    env: {
+      get: async (k: string) => env[k],
+      set: async (k: string, v: string) => void (env[k] = v),
+    },
+    session: { info: async () => ({ platform: 'linux' }) },
+  })
+
+  return { self, env }
+}
+
+test('Claude 어댑터(#130): 번호 역할은 자식 셸에 SWITCHBOARD_ROLE·AGENT_MAIL_ROLE 둘 다로 넘긴다', async () => {
+  const { self, env } = envSelf({})
+  await exportRole(self, 'team/worker-2')
+  expect(env.SWITCHBOARD_ROLE).toBe('team/worker-2')
+  expect(env.AGENT_MAIL_ROLE).toBe('team/worker-2')
+})
+
+test('Claude 어댑터(#130): 프로필은 새 이름 우선, 옛 이름만 있어도 켜지고, 주소·토큰 덮어쓰기도 새 이름 우선', async () => {
+  const fresh = await mailProfilePath(envSelf({ SWITCHBOARD_PROFILE: 'w', AGENT_MAIL_PROFILE: 'old', HOME: '/home/u' }).self)
+  expect(fresh.paths?.[0]).toBe('/home/u/.config/switchboard/w.json')
+  const old = await mailProfilePath(envSelf({ AGENT_MAIL_PROFILE: 'old', HOME: '/home/u' }).self)
+  expect(old.paths).toEqual(['/home/u/.config/switchboard/old.json', '/home/u/.config/agent-mail/old.json'])
+  expect(old.override).toBe(undefined)
+  const over = await mailProfilePath(
+    envSelf({ SWITCHBOARD_PROFILE: 'w', HOME: '/home/u', SWITCHBOARD_ENDPOINT: 'http://new', AGENT_MAIL_ENDPOINT: 'http://old', AGENT_MAIL_TOKEN: 't-old' }).self,
+  )
+  expect(over.override).toEqual({ endpoint: 'http://new', token: 't-old' })
+  expect((await mailProfilePath(envSelf({ HOME: '/home/u' }).self)).paths).toBe(null)
 })

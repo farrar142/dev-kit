@@ -41,7 +41,7 @@ const fakeServer = (o: { strictState?: boolean; bosses?: string[] } = {}) => {
   const attach = (host: FakeHost) => {
     host.http.route(`${EP}/api/slots/`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401 }
-      const b0 = base(init.headers['X-Agent-Mail-Role'] ?? '')
+      const b0 = base(init.headers['X-Switchboard-Role'] ?? '')
       const action = url.slice(`${EP}/api/slots/`.length)
       const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
       if (action === 'release') return { text: '{}' }
@@ -63,11 +63,11 @@ const fakeServer = (o: { strictState?: boolean; bosses?: string[] } = {}) => {
     })
     host.http.route(`${EP}/api/messages`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401 }
-      const me = box(init.headers['X-Agent-Mail-Role'] ?? '')
+      const me = box(init.headers['X-Switchboard-Role'] ?? '')
       if (url === `${EP}/api/messages` && init.method === 'POST') {
         const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
-        sends.push({ from: init.headers['X-Agent-Mail-Role'] ?? '', key: init.headers['Idempotency-Key'], body: b })
-        const m = put({ to: String(b.recipient), sender: init.headers['X-Agent-Mail-Role'] ?? '', subject: String(b.subject), body: String(b.body), priority: 'normal' })
+        sends.push({ from: init.headers['X-Switchboard-Role'] ?? '', key: init.headers['Idempotency-Key'], body: b })
+        const m = put({ to: String(b.recipient), sender: init.headers['X-Switchboard-Role'] ?? '', subject: String(b.subject), body: String(b.body), priority: 'normal' })
 
         return { status: 201, text: JSON.stringify({ id: m.id }) }
       }
@@ -79,7 +79,7 @@ const fakeServer = (o: { strictState?: boolean; bosses?: string[] } = {}) => {
       return { text: JSON.stringify({ id: mail.id, body: mail.body, status: 'read' }) }
     })
     host.http.route(`${EP}/api/events/poll`, async ({ url, init }: { url: string; init: HttpInit }) => {
-      const me = box(init.headers?.['X-Agent-Mail-Role'] ?? '')
+      const me = box(init.headers?.['X-Switchboard-Role'] ?? '')
       const q = new URL(url).searchParams
       const after = q.has('after') ? Number(q.get('after')) : -1
       const timeout = Number(q.get('timeout') ?? '25')
@@ -106,7 +106,7 @@ const fakeServer = (o: { strictState?: boolean; bosses?: string[] } = {}) => {
     })
     host.http.route(`${EP}/api/permissions`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401 }
-      const who = init.headers['X-Agent-Mail-Role'] ?? ''
+      const who = init.headers['X-Switchboard-Role'] ?? ''
       if (url === `${EP}/api/permissions` && init.method === 'POST') {
         const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
         // 요청 시점 slot 의 parent 를 고정한다. 같은 base 면 무시.
@@ -273,6 +273,9 @@ test('권한: 부모·대장이 아닌 쪽의 답과 요청자 base 의 답은 �
   expect(trustedAnswer({ requester: 'team/worker-1' }, 'corp/boss', [])).toBe(true)
   expect(trustedAnswer({ requester: 'team/worker-1' }, 'team/worker', [])).toBe(false)
   expect(trustedAnswer({ requester: 'team/worker-1' }, '', [])).toBe(false)
+  // 서버가 whoami 로 협업 묶음을 안다(gated, #130): 묶음 대장의 답도 받고, 요청자 base 는 여전히 버린다.
+  expect(trustedAnswer({ requester: 'g/worker-1', parent: 'g/lead' }, 'g/boss', ['corp/boss'], true)).toBe(true)
+  expect(trustedAnswer({ requester: 'g/worker-1', parent: 'g/lead' }, 'g/worker-2', ['corp/boss'], true)).toBe(false)
 })
 
 test('권한: 도구·요약은 서버 바이트 한도로 자른다', () => {

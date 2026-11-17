@@ -1,11 +1,12 @@
 // 원격 질문(#106) 서버 클라이언트: Agent Mail 서버의 질문 API(/api/questions…)를 부른다.
 // 묻는 쪽(#111, remote-ask.ts)과 서버 질문을 끌어와 답하는 대장 쪽(#112)이 함께 쓴다.
-//  - 인증은 메일함의 call(같은 `Authorization: Bearer` + `X-Agent-Mail-Role`, 지금 번호 역할)로 한다. 토큰은 여기 오지 않는다.
+//  - 인증은 메일함의 call(같은 `Authorization: Bearer` + `X-Switchboard-Role`·옛 `X-Agent-Mail-Role`, 지금 번호 역할)로 한다. 토큰은 여기 오지 않는다.
 //  - 서버 계약: #106 댓글 「remote questions API」. 상태 코드는 그대로 돌려주고 뜻은 부르는 쪽이 정한다.
 //  - 응답 모양이 틀리면 ok:false(status 는 서버의 것)로 돌려준다. 연결 실패·시간 초과는 status null.
 import type { QuestionPanelQuestion } from '../types'
 import type { CallIo, Mailbox, MailEvent } from './mailbox'
 import { isSystemSender, POLL_TIMEOUT_S } from './mailbox'
+import { GROUP_REFUSAL, isGroupRefusal } from './wire'
 
 export type RemoteOption = { label: string; description: string; preview?: string }
 /** 서버 질문의 문항 하나(로컬 묶음의 문항에서 고른 것·기타 글 등 패널 상태를 뺀 것). */
@@ -122,6 +123,7 @@ const json = (text: string): unknown => {
 
 /** 오류 응답의 짧은 까닭(서버의 error·detail 글, 없으면 본문 앞부분). */
 const errorOf = (status: number, text: string): string => {
+  if (isGroupRefusal(status, text)) return GROUP_REFUSAL
   const j = json(text)
   const msg = isRecord(j) ? str(j.error) || str(j.detail) || str(j.message) : text
   const one = msg.replace(/\s+/g, ' ').trim().slice(0, 200)

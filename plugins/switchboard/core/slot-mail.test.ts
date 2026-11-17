@@ -55,7 +55,7 @@ const fakeServer = (clock: FakeClock) => {
     host.http.route(`${EP}/api/slots`, async ({ init }: { url: string; init: HttpInit }) => {
       if (legacy) return { status: 404, text: '404 page not found' }
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const base = (init.headers['X-Agent-Mail-Role'] ?? '').replace(/-\d+$/, '')
+      const base = (init.headers['X-Switchboard-Role'] ?? '').replace(/-\d+$/, '')
       const now = await clock.now()
       const out = rows
         .filter(r => r.base === base && live(r, now))
@@ -66,9 +66,9 @@ const fakeServer = (clock: FakeClock) => {
     host.http.route(`${EP}/api/slots/`, async ({ url, init }: { url: string; init: HttpInit }) => {
       if (legacy) return { status: 404, text: '404 page not found' }
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const base = (init.headers['X-Agent-Mail-Role'] ?? '').replace(/-\d+$/, '')
+      const base = (init.headers['X-Switchboard-Role'] ?? '').replace(/-\d+$/, '')
       const action = url.slice(`${EP}/api/slots/`.length)
-      slotBodies.push({ action, role: init.headers['X-Agent-Mail-Role'] ?? '', body: init.body ?? '' })
+      slotBodies.push({ action, role: init.headers['X-Switchboard-Role'] ?? '', body: init.body ?? '' })
       const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
       const now = await clock.now()
       const mine = rows.find(r => r.base === base && r.machine === b.machine && r.directory === b.directory)
@@ -117,7 +117,7 @@ const fakeServer = (clock: FakeClock) => {
     })
     host.http.route(`${EP}/api/events/poll`, ({ url, init }: { url: string; init: HttpInit }) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
-      const me = box(init.headers['X-Agent-Mail-Role'] ?? '')
+      const me = box(init.headers['X-Switchboard-Role'] ?? '')
       const q = new URL(url).searchParams
       const after = q.has('after') ? Number(q.get('after')) : -1
       const events = mails.filter(m => m.to === me && m.status === 'pending' && m.id > after).map(m => ({ id: m.id, sender: 'x/y', subject: `s${m.id}`, priority: 'normal' }))

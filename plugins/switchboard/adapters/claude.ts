@@ -4,14 +4,15 @@
 //  - compact·usage → $.session.compact·$.session.usage
 //  - 이벤트 → turn.start·turn.complete·prompt.edit·prompt.change·prompt.submit·session.compact 훅(wireClaudeEvents)
 //  - services → $.http·$.clock·$.fs
-//  - 메일함 프로필 경로 → agent-mail CLI 규칙(AGENT_MAIL_CONFIG_DIR·APPDATA·XDG_CONFIG_HOME·HOME·USERPROFILE, mailProfilePath)
+//  - 메일함 프로필 경로 → agent-mail CLI 규칙(SWITCHBOARD_PROFILE·SWITCHBOARD_CONFIG_DIR, 옛 AGENT_MAIL_*·APPDATA·XDG_CONFIG_HOME·HOME·USERPROFILE,
+//    mailProfilePath), 프로필 값 덮어쓰기 SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN(옛 AGENT_MAIL_ENDPOINT·AGENT_MAIL_TOKEN)
 //  - 메일 전 compact 설정 → SWITCHBOARD_COMPACT_TOKENS·SWITCHBOARD_COMPACT_INSTRUCTIONS(compactEnv)
 //  - 멈춤(D8) → classic.StopFailure(stop.failure)·classic.Notification(notification)·도구 호출 끝(tool.complete)
 //  - 원격 권한 설정 → SWITCHBOARD_PERMISSION_WAIT_SECONDS·SWITCHBOARD_BOSS_ROLES(permissionEnv), 요약 → permissionSummary
 import type { Hook, On } from 'claude-code'
 
 import type { AgentHost, HostEvent, HttpReply } from '../core/host'
-import { profileLocation } from '../core/profile'
+import { pickEnv, profileLocation } from '../core/profile'
 import type { ProfileEnv, ProfilePlatform } from '../core/profile'
 
 export type Self = Parameters<Hook<'session.start'>>[0]
@@ -164,12 +165,20 @@ export async function permissionEnv($: Self): Promise<{ wait: string | undefined
   }
 }
 
-/** 번호 역할을 자식 프로세스(세션의 Bash 등)에 넘긴다: `agent-mail read/ack/complete` 가 번호 메일함 기준으로 돈다(D8). */
+/**
+ * 번호 역할을 자식 프로세스(세션의 Bash 등)에 넘긴다: `agent-mail read/ack/complete` 가 번호 메일함 기준으로 돈다(D8).
+ * 새 이름 SWITCHBOARD_ROLE 과 옛 이름 AGENT_MAIL_ROLE 둘 다(CLI 가 옛 이름만 알 수 있다).
+ */
 export async function exportRole($: Self, role: string): Promise<void> {
+  try {
+    await $.env.set('SWITCHBOARD_ROLE', role)
+  } catch {
+    // 못 넘겨도 메일함은 간다.
+  }
   try {
     await $.env.set('AGENT_MAIL_ROLE', role)
   } catch {
-    // 못 넘겨도 메일함은 간다.
+    // 옛 이름만 아는 CLI 몫. 못 넘겨도 간다.
   }
 }
 
@@ -207,7 +216,9 @@ async function machineOf($: Self): Promise<string> {
  * 메일함 프로필 위치: agent-mail CLI 와 같은 규칙(core/profile.ts). paths 는 찾아볼 차례, problem 은 이름은 있는데
  * 위치를 못 정한 까닭(화면에 알린다). 둘 다 없으면 메일함 꺼짐. 파일 내용(토큰)은 코어가 fs 로 읽어 메모리에만 둔다.
  */
-export async function mailProfilePath($: Self): Promise<{ paths: string[] | null; problem?: string }> {
+export async function mailProfilePath(
+  $: Self,
+): Promise<{ paths: string[] | null; problem?: string; override?: { endpoint?: string; token?: string } }> {
   const get = async (read: () => Promise<string | undefined>) => {
     try {
       return await read()
@@ -222,7 +233,9 @@ export async function mailProfilePath($: Self): Promise<{ paths: string[] | null
     // 모르면 리눅스 규칙(XDG·HOME). Windows 는 APPDATA 가 있으면 아래에서 가린다.
   }
   const env: ProfileEnv = {
+    SWITCHBOARD_PROFILE: await get(() => $.env.get('SWITCHBOARD_PROFILE')),
     AGENT_MAIL_PROFILE: await get(() => $.env.get('AGENT_MAIL_PROFILE')),
+    SWITCHBOARD_CONFIG_DIR: await get(() => $.env.get('SWITCHBOARD_CONFIG_DIR')),
     AGENT_MAIL_CONFIG_DIR: await get(() => $.env.get('AGENT_MAIL_CONFIG_DIR')),
     APPDATA: await get(() => $.env.get('APPDATA')),
     XDG_CONFIG_HOME: await get(() => $.env.get('XDG_CONFIG_HOME')),
@@ -234,8 +247,12 @@ export async function mailProfilePath($: Self): Promise<{ paths: string[] | null
   const loc = profileLocation(platform, env)
   if ('off' in loc) return { paths: null }
   if ('problem' in loc) return { paths: null, problem: loc.problem }
+  // 프로필 값 덮어쓰기: 새 이름 먼저, 옛 이름. 값(토큰)은 기록하지 않는다.
+  const endpoint = pickEnv(await get(() => $.env.get('SWITCHBOARD_ENDPOINT')), await get(() => $.env.get('AGENT_MAIL_ENDPOINT')), '', '').value
+  const token = pickEnv(await get(() => $.env.get('SWITCHBOARD_TOKEN')), await get(() => $.env.get('AGENT_MAIL_TOKEN')), '', '').value
+  const override = { ...(endpoint === '' ? {} : { endpoint }), ...(token === '' ? {} : { token }) }
 
-  return { paths: loc.paths }
+  return { paths: loc.paths, ...(Object.keys(override).length === 0 ? {} : { override }) }
 }
 
 /** 메일 전 compact 설정 글: SWITCHBOARD_COMPACT_TOKENS(기본 200k, 0·off 면 끔)·SWITCHBOARD_COMPACT_INSTRUCTIONS. */

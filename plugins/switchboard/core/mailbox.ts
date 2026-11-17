@@ -13,6 +13,7 @@
 import type { AgentHost, Fs, Http, Timer } from './host'
 import { createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
+import { httpWhy, roleHeaders } from './wire'
 
 /** Agent Mail CLI 프로필(`~/.config/agent-mail/<이름>.json`). token 은 메모리에만 둔다. */
 export type MailProfile = { endpoint: string; role: string; token: string }
@@ -32,11 +33,13 @@ export type OutMail = { to: string; subject: string; body: string; key?: string 
 export type MailboxOptions = {
   /**
    * 프로필 파일의 절대 경로(여럿이면 앞에서부터 있는 것). null 이면 메일함은 꺼진다
-   * (AGENT_MAIL_PROFILE 없음, 또는 profileProblem).
+   * (SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음, 또는 profileProblem).
    */
   profilePath: string | readonly string[] | null
-  /** AGENT_MAIL_PROFILE 은 있는데 위치를 못 정했다: 켤 때 warn·log 로 한 번 알린다. */
+  /** 프로필 이름은 있는데 위치를 못 정했다: 켤 때 warn·log 로 한 번 알린다. */
   profileProblem?: string
+  /** 프로필 값 덮어쓰기(SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN, 옛 AGENT_MAIL_*). 빈 값은 무시한다. */
+  override?: { endpoint?: string; token?: string }
   /** 사람이 꼭 봐야 할 한 줄(토스트 등): 프로필을 못 찾음·못 읽음. 없으면 log 만. */
   warn?: (text: string) => void
   /** 지금 일반 메일 턴을 넣어도 되는가(세션이 유휴인가, 사용자 보류가 없는가). */
@@ -69,7 +72,7 @@ export type SlotConfig = {
   /** 단일 역할인데 -2 이상을 받았을 때(토스트 등). */
   warn?: (text: string) => void
   singleRoles?: readonly string[]
-  /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 AGENT_MAIL_ROLE 을 맞춘다). */
+  /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE·AGENT_MAIL_ROLE 을 맞춘다). */
   onRole?: (role: string) => void
 }
 
@@ -113,6 +116,11 @@ export type Mailbox = {
   onNotice: (fn: NoticeTap) => () => void
   /** 부모 주소(SWITCHBOARD_PARENT). 없으면 undefined. */
   parent: () => string | undefined
+  /**
+   * 구독이 (다시) 이어질 때마다(처음 연결·끊긴 뒤 다시 잇기·번호 역할이 바뀐 뒤) 그 역할로 부른다. 돌려준 함수로 끊는다.
+   * 대장 판정(core/boss.ts)이 이때 whoami 를 다시 묻는다.
+   */
+  onLive: (fn: (role: string) => void) => () => void
 }
 
 /** 한 번의 긴 대기(초). 서버 기본과 같고 상한(55초)보다 작다. */
@@ -311,6 +319,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   const urgentTaps = new Set<(e: MailEvent) => boolean>()
   /** 시스템 통지 글 바꾸는 쪽(onNotice). */
   const noticeTaps = new Set<NoticeTap>()
+  /** 이어짐을 듣는 쪽(onLive). */
+  const liveTaps = new Set<(role: string) => void>()
   /** 넣을 글. null 이면 넣지 않는다(듣는 쪽이 DROP_NOTICE). */
   const noticeOf = async (e: MailEvent, body: string): Promise<string | null> => {
     for (const fn of [...noticeTaps]) {
@@ -345,7 +355,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   /** 구독 루프를 시작했다(그 뒤의 번호 바뀜은 다시 잇기). */
   let polling = false
 
-  const headers = (p: MailProfile) => ({ Authorization: `Bearer ${p.token}`, 'X-Agent-Mail-Role': role ?? p.role })
+  const headers = (p: MailProfile) => roleHeaders(p.token, role ?? p.role)
 
   /** 번호 역할이 바뀌었다: 새 주소로 처음부터(커서 없이) 다시 잇는다. 이미 본 ID 는 known 이 거른다. */
   const setRole = (next: string) => {
@@ -408,6 +418,16 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     const connecting = status !== 'live'
     if (connecting) log(`switchboard 메일함: ${role ?? p.role} 구독 중`)
     status = 'live'
+    if (connecting) {
+      const now = role ?? p.role
+      for (const fn of [...liveTaps]) {
+        try {
+          fn(now)
+        } catch {
+          // 듣는 쪽의 잘못은 구독을 막지 않는다.
+        }
+      }
+    }
     if (!notified) {
       notified = true
       void notifyParent(epoch)
@@ -443,7 +463,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
         body: JSON.stringify({ recipient: m.to, subject: m.subject, body: m.body }),
       })
       if (r.ok) return true
-      why = `HTTP ${r.status}`
+      why = httpWhy(r.status, r.text)
       if (r.status >= 400 && r.status < 500) tries = 1
     } catch {
       // 오류 문구에 요청 머리(토큰)가 섞일 수 있어 옮기지 않는다.
@@ -702,7 +722,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   const start = async () => {
     if (profile !== null) return true
     const disabled = (why: string) => {
-      // AGENT_MAIL_PROFILE 이 있는데 조용히 꺼지면 안 된다: 화면에도 한 번.
+      // 프로필 이름이 있는데 조용히 꺼지면 안 된다: 화면에도 한 번.
       const line = `switchboard 메일함 꺼짐: ${why}`
       log(line)
       try {
@@ -725,6 +745,10 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       break
     }
     if ('error' in loaded) return disabled(loaded.error)
+    const ep = opts.override?.endpoint?.trim() ?? ''
+    const tk = opts.override?.token?.trim() ?? ''
+    if (ep !== '') loaded = { ...loaded, endpoint: ep.replace(/\/+$/, '') }
+    if (tk !== '') loaded = { ...loaded, token: tk }
     profile = loaded
     role = loaded.role
     status = 'connecting'
@@ -800,7 +824,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   }
 
   const takeover = async (): Promise<TakeoverResult> =>
-    slot === undefined ? { ok: false, reason: '번호 역할이 꺼져 있다(AGENT_MAIL_PROFILE 없음 등)' } : slot.takeover()
+    slot === undefined ? { ok: false, reason: '번호 역할이 꺼져 있다(SWITCHBOARD_PROFILE 없음 등)' } : slot.takeover()
 
   return {
     start,
@@ -820,6 +844,11 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       noticeTaps.add(fn)
 
       return () => void noticeTaps.delete(fn)
+    },
+    onLive: fn => {
+      liveTaps.add(fn)
+
+      return () => void liveTaps.delete(fn)
     },
     parent: () => {
       const v = opts.slot?.parent
