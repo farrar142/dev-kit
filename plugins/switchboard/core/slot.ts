@@ -17,6 +17,9 @@ export type SlotIdentity = { machine: string; directory: string; sessionId: stri
 /** 서버가 준 배정(쓰는 칸만). */
 export type SlotGrant = { role: string; base: string; number: number; otherActive: number; reclaimed: boolean }
 
+/** 응답에만 있는 칸: 이번 요청으로 서버가 라벨 주소 보관 메일을 이 세션에 옮긴 건수(#73 서버 계약 5, 0이면 없음). */
+type GrantReply = SlotGrant & { displaced?: string; heldDelivered?: number }
+
 export type SlotAuth = { endpoint: string; role: string; token: string }
 
 export type SlotOptions = {
@@ -70,7 +73,7 @@ export const duplicateWarning = (g: SlotGrant) =>
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-const parseGrant = (text: string): (SlotGrant & { displaced?: string }) | null => {
+const parseGrant = (text: string): GrantReply | null => {
   let raw: unknown
   try {
     raw = JSON.parse(text)
@@ -80,7 +83,7 @@ const parseGrant = (text: string): (SlotGrant & { displaced?: string }) | null =
   if (!isRecord(raw)) return null
   const { role, base, number } = raw
   if (typeof role !== 'string' || typeof base !== 'string' || typeof number !== 'number') return null
-  const g: SlotGrant & { displaced?: string } = {
+  const g: GrantReply = {
     role,
     base,
     number,
@@ -88,12 +91,13 @@ const parseGrant = (text: string): (SlotGrant & { displaced?: string }) | null =
     reclaimed: raw.reclaimed === true,
   }
   if (isRecord(raw.displaced) && typeof raw.displaced.role === 'string') g.displaced = raw.displaced.role
+  if (typeof raw.held_delivered === 'number' && raw.held_delivered > 0) g.heldDelivered = raw.held_delivered
 
   return g
 }
 
 type Action = 'register' | 'heartbeat' | 'takeover' | 'release'
-type Reply = { kind: 'ok'; grant: SlotGrant & { displaced?: string } } | { kind: 'status'; status: number } | { kind: 'error' }
+type Reply = { kind: 'ok'; grant: GrantReply } | { kind: 'status'; status: number } | { kind: 'error' }
 
 export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   const { http, clock } = host.services
@@ -158,7 +162,7 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     }
   }
 
-  const accept = (g: SlotGrant, how: 'register' | 'heartbeat' | 'takeover') => {
+  const accept = (g: GrantReply, how: 'register' | 'heartbeat' | 'takeover') => {
     const was = grant?.role
     grant = { role: g.role, base: g.base, number: g.number, otherActive: g.otherActive, reclaimed: g.reclaimed }
     if (failing) say(opts.log, `switchboard slot: 다시 이어짐(${g.role})`)
@@ -169,6 +173,8 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
       say(opts.log, `switchboard slot: ${g.role}${why} 로 구독한다`)
       opts.onRole(g.role)
     }
+    // 보관 메일은 서버가 이미 이 주소로 옮겼다(새 ID): 구독이 그대로 받는다. 여기서는 기록만.
+    if (g.heldDelivered !== undefined) say(opts.log, `switchboard slot: 라벨 ${opts.identity.label ?? '?'} 앞으로 보관된 메일 ${g.heldDelivered}건이 ${g.role} 로 왔다`)
     if (g.number >= 2 && isSingleRole(g.base, singles)) {
       if (warnedFor !== g.role) {
         warnedFor = g.role
