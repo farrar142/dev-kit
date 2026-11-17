@@ -17,7 +17,7 @@ import {
   wireStallEvents,
 } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
-import { mcpLedger } from '../adapters/ledger'
+import { mcpLedger, SERVER } from '../adapters/ledger'
 import {
   chatBlock,
   chatClosed,
@@ -328,6 +328,37 @@ function kit($: Self, e: RenderEvent) {
 /** 장부를 읽어 다른 곳(Orca 질문 패널 등)에서 닫힌 대기 묶음을 닫는다. */
 export const pollLedger = ($: Self) => panelOf($).poll()
 
+// 내장 질문 도구. 질문 패널을 쓸 수 있는 세션이면 막는다(#109).
+const ASK_USER_QUESTION = 'AskUserQuestion'
+// 질문 header 가 이 말로 시작하면 급한 확인으로 보고 통과시킨다.
+const URGENT = '급함'
+const ASK_DENY_REASON =
+  `switchboard: ${TOOL}로 같은 질문을 올려라(입력 모양이 같다). 답을 받기 전에 한 걸음도 못 나가는 급한 확인이면 ` +
+  `질문 header를 \`${URGENT}\`으로 시작해 AskUserQuestion을 다시 불러라.`
+
+const isUrgent = (questions: unknown): boolean =>
+  Array.isArray(questions) &&
+  questions.some(
+    (q: unknown) =>
+      typeof q === 'object' && q !== null && 'header' in q && typeof q.header === 'string' && q.header.trim().startsWith(URGENT),
+  )
+
+/**
+ * AskUserQuestion 을 막을 이유. 통과면 undefined.
+ * 막는 조건: 환경변수로 끄지 않았고, 급한 질문이 아니며, 질문 패널 MCP 서버(qp)가 이 세션에 붙어 있다.
+ * qp 판정은 $.mcp.connect(SERVER).isConnected: 서버가 꺼졌거나 실패했거나 승인 전이면 패널로 보낼 길이 없으니 통과.
+ */
+async function askUserQuestionDenial($: Self, questions: unknown): Promise<string | undefined> {
+  // 값이 1이면 막지 않는다($.env.get 은 글자 그대로의 이름만 받는다).
+  const allow = await $.env.get('SWITCHBOARD_ALLOW_ASK_USER_QUESTION').catch(() => undefined)
+  if (allow?.trim() === '1') return undefined
+  if (isUrgent(questions)) return undefined
+  const qp = await $.mcp.connect(SERVER).catch(() => undefined)
+  if (qp?.isConnected !== true) return undefined
+
+  return ASK_DENY_REASON
+}
+
 export const register: Register = on => {
   // 포트 이벤트(턴·입력·compact)를 코어로 넘긴다. 관찰만 하므로 세션 흐름은 그대로다.
   wireClaudeEvents(on, emitter, box)
@@ -417,6 +448,12 @@ export const register: Register = on => {
   on('tool.describe', { tool: RESOLVE_TOOL }, async (_$, e, next) => ({ ...(await next(e)), isDeferred: false }))
   // 장부 도구는 mod 내부용이다($.mcp.call 은 tool.call 을 거치지 않는다). 모델의 호출은 막는다.
   on('tool.call', { tool: SYNC_TOOL }, async () => ({ deny: 'switchboard: sync 는 질문 패널 내부용 도구다. 부르지 마라.' }))
+  // AskUserQuestion 은 세션을 블로킹한다(#109): 질문 패널을 쓸 수 있으면 막고 패널로 돌린다.
+  on('tool.call', { tool: ASK_USER_QUESTION }, async ($, e, next) => {
+    const reason = await askUserQuestionDenial($, e.questions)
+
+    return reason === undefined ? next(e) : { deny: reason }
+  })
 
   // 질문 도구 호출을 감싼다: 묶음을 쌓고 모델이 읽을 결과 글을 만들어 입력의 panel_result로
   // MCP 서버에 넘긴다(서버는 그 글을 그대로 돌려준다). next를 거쳐야 MCP 호출과 함께

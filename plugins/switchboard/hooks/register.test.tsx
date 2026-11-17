@@ -780,3 +780,58 @@ test('장부: 모델이 sync 도구를 부르면 막는다', async ($, on) => {
   const ran = await $.tool.call({ tool: 'mcp__plugin_switchboard_qp__sync', keys: [] } as any)
   expect(JSON.stringify(ran)).toContain('내부용')
 })
+
+// AskUserQuestion 가드(#109): 질문 패널(qp)이 붙은 세션이면 막고 패널로 돌린다.
+const ASK_INPUT = {
+  tool: 'AskUserQuestion',
+  questions: [{ question: '어느 DB를 쓸까요?', header: 'DB', multiSelect: false, options: [{ label: 'Postgres' }, { label: 'SQLite' }] }],
+}
+
+async function setupAskGuard($: any, on: any, opts: { qp?: boolean; allow?: string } = {}) {
+  const passed: any[] = []
+  on('env.get', (_: any, e: any) => ({ value: e.name === 'SWITCHBOARD_ALLOW_ASK_USER_QUESTION' ? opts.allow : undefined }))
+  on('mcp.connect', (_: any, e: any) => ({
+    value: opts.qp === false
+      ? { isConnected: false, reason: 'disabled', message: 'off' }
+      : { isConnected: true, server: `plugin:switchboard:${e.server}` },
+  }))
+  // 내장 도구 자리: 통과하면 여기까지 온다.
+  on('tool.call', { tool: 'AskUserQuestion' }, (_: any, e: any) => {
+    passed.push(e)
+
+    return { result: [{ type: 'text', text: 'answered' }] }
+  })
+  await setup($, on)
+
+  return passed
+}
+
+test('AskUserQuestion: qp가 붙은 세션이면 막고 질문 패널 도구로 안내한다', async ($, on) => {
+  const passed = await setupAskGuard($, on)
+  const ran: any = await $.tool.call(ASK_INPUT as any)
+  expect(passed.length).toBe(0)
+  expect(String(ran.deny)).toContain('mcp__plugin_switchboard_qp__ask')
+  expect(String(ran.deny)).toContain('급함')
+})
+
+test('AskUserQuestion: header가 「급함」으로 시작하는 질문이 하나라도 있으면 통과', async ($, on) => {
+  const passed = await setupAskGuard($, on)
+  const urgent = { ...ASK_INPUT, questions: [...ASK_INPUT.questions, { ...ASK_INPUT.questions[0], header: '급함: 배포' }] }
+  const ran: any = await $.tool.call(urgent as any)
+  expect(ran.deny).toBeUndefined()
+  expect(passed.length).toBe(1)
+})
+
+test('AskUserQuestion: qp 서버가 안 붙은 세션이면 통과', async ($, on) => {
+  const passed = await setupAskGuard($, on, { qp: false })
+  const ran: any = await $.tool.call(ASK_INPUT as any)
+  expect(ran.deny).toBeUndefined()
+  expect(passed.length).toBe(1)
+})
+
+test('AskUserQuestion: SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1 이면 통과', async ($, on) => {
+  const passed = await setupAskGuard($, on, { allow: '1' })
+  const ran: any = await $.tool.call(ASK_INPUT as any)
+  expect(ran.deny).toBeUndefined()
+  expect(passed.length).toBe(1)
+})
