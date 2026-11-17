@@ -63,7 +63,7 @@ plugins/
                                    보내기·닫기 전에 닫힘 장부 차지, 2초마다 장부를 읽어 Orca에서 닫힌 묶음 닫기(0.9.0)
     hooks/register.test.tsx        claude plugin test 로 도는 시험(쌓기·완료 막기·다중 선택·기타 입력·삭제·기록 지우기·preview·보내기·데스크톱 줄)
     types/index.d.ts               $.state 계약(queue, draft)
-  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.11.3, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
+  switchboard/                     question-panel을 대체하는 세션 교환대 mod(0.11.4, hooks 모듈·stdio MCP 서버). 질문 패널 동작은 question-panel 0.9.0 그대로
     core/host.ts                   AgentHost 포트: submitTurn·injectMidTurn?·compact?·usage·on(이벤트: 턴 시작·완료, 입력 변경·제출, compact 완료)·identity·services(http·clock·fs)·features
     core/switchboard.ts            에이전트를 모르는 코어: 본 세션에서만 켜지고 유휴·바쁨·compact 중·입력 중을 따라간다, compact(기능이 없으면 건너뜀), 메일함을 켜고 메일 전 compact 관문(compactBeforeMail·compactConfig)과 사람 입력 보류(holdAfterUserMs·holdConfig·noteUserInput)를 단다
     core/mailbox.ts                메일함(0.2.0): 프로필(endpoint·role·token, 토큰은 메모리에만)을 읽어 Agent Mail 긴 대기(/api/events/poll)를 커서로 구독, 일반 메일 ID를 유휴 때 한 줄 새 턴으로(바쁜 동안 온 것은 묶음, 중복 없음, 그새 읽힌 메일은 뺌), 끊기면 1초→60초로 늘려 다시 잇기, 넣기 직전 관문(beforeDeliver), 긴급 메일 끼워 넣기·즉시 read(본문 2000자 상한)
@@ -183,6 +183,10 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-17 — switchboard 0.11.4: 질문 올릴 때 패널 자리 알림 없애기 (#128)
+
+- 질문 도구를 부를 때 패널이 아직 자리를 못 잡았어도 「질문 패널이 아직 자리를 못 잡았습니다」 줄을 대화창에 남기지 않는다. 패널은 그대로 열기를 기다리고, 명시적으로 패널을 여는 명령(/questions 등)의 「열지 못했습니다」 안내는 그대로다.
 
 ### 2026-11-17 — switchboard 0.11.3: 긴 작업 턴 뒤에는 읽기 보류 없음 (#125)
 

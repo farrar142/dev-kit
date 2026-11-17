@@ -547,9 +547,7 @@ export const register: Register = on => {
       chatBlock(batch),
     ].join('\n')
     if (mode === 'panel') {
-      void $.ui.open({ id: PANE, title: TITLE }).then(opened => {
-        if (!opened.isPlaced) $.ui.log(`질문 패널이 아직 자리를 못 잡았습니다: ${opened.reason}`)
-      })
+      void $.ui.open({ id: PANE, title: TITLE })
     }
 
     const ran = await next({ ...e, panel_result: panelResult, panel_echo: panelEcho, panel_closed: chatClosed(before), panel_key: key })
