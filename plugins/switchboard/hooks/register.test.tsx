@@ -60,6 +60,7 @@ async function setup(
   on: any,
   surfaces: string[] = ['desktop'],
   server: (e: any) => any = (e: any) => ({ result: callAsk(e).content }),
+  placed = true,
 ) {
   clockRef.value = mock.clock(on)
   const submitted: string[] = []
@@ -73,7 +74,7 @@ async function setup(
   on('ui.open', () => {
     paneUp.value = true
 
-    return { value: { isPlaced: true } }
+    return { value: placed ? { isPlaced: true } : { isPlaced: false, reason: 'no-room' } }
   })
   on('ui.panes', () => ({ value: paneUp.value ? [{ id: 'questions', title: '질문', isPlaced: true }] : [] }))
   on('ui.close', (_: any, e: any) => {
@@ -111,6 +112,21 @@ test('도구 호출로 질문이 쌓이고 패널에 나온다', async ($, on) =
     expect(await ui.find({ type: 'Text', text: /DB/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('ui.open이 isPlaced:false여도 질문 올릴 때 ui.log 없음', async ($, on) => {
+  const logs: string[] = []
+  on('ui.log', (_: any, e: any) => {
+    logs.push(JSON.stringify(e))
+
+    return { value: undefined }
+  })
+  await setup($, on, ['desktop'], undefined, false)
+  const ran = await $.tool.call(INPUT as any)
+  expect(JSON.stringify(ran)).toContain('패널에 올렸다')
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(logs.filter(l => l.includes('자리'))).toEqual([])
 })
 
 test('다 답하기 전에는 완료가 막히고, 답하면 제출 함수가 바른 글로 불린다', async ($, on) => {
