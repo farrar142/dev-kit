@@ -231,6 +231,7 @@ my-private-repo
 | 훅 | 언제 | 하는 일 |
 |---|---|---|
 | UserPromptSubmit `prompt.js` | 입력에 문제 신호(오류·에러·안 돼·깨짐·뜨는데·느려·장애·실패·이상해·왜 …·버그·멈춤, 4xx·5xx 숫자, Traceback, Exception, error·fail·crash …) | 「증상 → 직접 원인 → 근본 원인(무엇이 바뀌었나)을 시각 상관·변경 이력·로그로 확인하고 답에 `근본 원인:` 줄, 모르면 `근본 원인: 미확인 — <다음 확인할 것>`, `diagnosing-bugs` 스킬」 문맥을 넣는다. 막지 않는다 |
+| Stop `stop.js` | 턴이 끝날 때 | 이번 턴 답에 단정한 `근본 원인:` 줄이 있는데 모양 있는 `증거:` 줄이 없으면 한 번 되돌려(exit 2) 증거를 붙이거나 `미확인 — …`으로 바꾸게 한다 |
 | PreToolUse(Bash) `gate.js` | `gh pr create`·`gh issue create`·`switchboard send`·`switchboard reply`(경로·`.exe` 꼴, 옛 `agent-mail`도) | 수정·장애 보고로 보이는데 `근본 원인:` 줄(`Root cause:`, `## 근본 원인` 절도)이 없으면 막고(exit 2) 고칠 법을 알린다 |
 
 수정으로 보는 기준(잘못 막지 않는 쪽으로 좁게):
@@ -250,6 +251,15 @@ my-private-repo
 - 끄기: `ROOT_CAUSE_OFF=1`.
 - 홈은 `os.homedir()`로 찾아 `HOME`이 없는 Windows(PowerShell)에서도 돈다. Git Bash의 `/c/…`·`~/…` 본문 파일 경로도 읽는다.
 
+Stop 훅(`stop.js`):
+
+- 답 글은 Stop 입력의 `last_assistant_message`를 먼저 쓰고, 이번 턴(마지막 사람·주입 user 메시지 뒤. 도구 결과만 담은 메시지는 경계가 아니다)의 transcript 글을 더해 본다. 기록이 아직 없으면 0.3초 뒤 한 번 다시 읽고, 그래도 못 찾으면 통과한다.
+- 걸리는 줄: `근본 원인:` 값이 단정일 때. `해당 없음 — …`·`미확인 — …`은 걸리지 않는다. 코드 펜스·인용(`>`) 안의 줄은 뺀다. 줄 정의는 `gate.js`와 같은 모듈(`hooks/rootline.js`)에서 쓴다.
+- 통과: `증거:` 줄 값에 백틱 명령, 경로(`/`·`\`), `#번호`, 커밋 sha(16진 7자 이상), 시각(`HH:MM`), `파일:줄` 중 하나가 있다. 「증거: 확인함」은 통과하지 못한다.
+- 한 턴에 한 번만 되돌린다(`stop_hook_active`가 true면 통과).
+- 이번 턴 도구 호출이 0인 단정은 막지 않고 기록만 한다: `ROOT_CAUSE_LOG`, 없으면 `$XDG_STATE_HOME/root-cause/no-tool-assertions.jsonl`(보통 `~/.local/state/root-cause/…`). 한 줄에 시각·세션 id·단정 줄(200자까지). 오탐 비율을 잰 뒤 막을지 정한다.
+- 끄기는 같은 `ROOT_CAUSE_OFF=1`. SubagentStop은 다루지 않는다.
+
 ## 소개 글
 
 왜 이렇게 만들었는지는 아래 글에 적었다.
@@ -260,6 +270,12 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-19 — root-cause 0.2.0: 근본 원인 줄에 증거를 요구하는 Stop 훅 (#153)
+
+- 대화창 보고의 단정한 `근본 원인:` 줄에 `증거:` 줄이 없으면 턴을 한 번 되돌린다. 「근본 원인 줄」 정의는 `rootline.js` 한 곳으로 모아 `gate.js`와 같이 쓴다.
+- 도구 호출 0인 단정은 막지 않고 로컬 jsonl에 기록만 한다.
+- 시험: root-cause 25건.
 
 ### 2026-11-18 — switchboard 0.12.6·issue-track 0.9.2: 옛 이름 남은 것 (#149)
 
