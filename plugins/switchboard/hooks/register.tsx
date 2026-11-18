@@ -536,7 +536,9 @@ export const register: Register = on => {
     const remote = board === undefined ? { kind: 'local' as const, reason: null } : await board.askRemote(questions, { http: hookHttp($) })
     if (remote.kind === 'remote') {
       const text = remoteAskText(remote.id, remote.asker, RESOLVE_TOOL, remote.here)
-      const ran = await next({ ...e, panel_result: text, panel_echo: text, panel_closed: chatClosed(await read($, queue)) })
+      // panel_remote(#142): Orca 터미널 세션의 agent.tool.after 훅이 이 호출로 터미널 카드(oN)를 따로 만들지 않게 서버 id 를 싣는다.
+      // 같은 질문의 Orca 카드는 대장 끌어오기가 원격 카드로 하나만 올린다(답이 터미널로 한 번 더 들어가지 않게).
+      const ran = await next({ ...e, panel_result: text, panel_echo: text, panel_closed: chatClosed(await read($, queue)), panel_remote: remote.id })
       // 모델이 질문을 모르게 됐으면(서버 꺼짐·훅이 막음) 서버 질문도 거둔다.
       if (ran.deny !== undefined || ran.isError === true) await board?.withdrawRemote(remote.id, { http: hookHttp($) })
 

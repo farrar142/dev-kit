@@ -13,6 +13,7 @@ import {
   isResolveTool,
   asBatches,
   batchFromTool,
+  remoteAskId,
   clearSent,
   complete,
   withDefaults,
@@ -87,6 +88,21 @@ test('다른 도구, 터미널이 없는 호출(채팅 세션 등), 질문이 �
   assert.equal(batchFromTool({ ...EVENT, tool: 'Bash' }, 1, 'o1'), null)
   assert.equal(batchFromTool({ ...EVENT, terminalId: undefined }, 1, 'o1'), null)
   assert.equal(batchFromTool({ ...EVENT, input: { questions: [] } }, 1, 'o1'), null)
+})
+
+// switchboard remoteAskText 의 첫 줄(서버 질문으로 올렸을 때 모델이 읽는 결과 글).
+const RQ = `q_${'b'.repeat(32)}`
+const REMOTE_OUT = [{ type: 'text', text: `원격 질문 ${RQ} 로 올렸다(Agent Mail 서버, 묻는 역할 team/boss). 이 세션의 질문 패널과 관리 대시보드에 뜬다.` }]
+
+test('원격 질문 호출(#142)은 터미널 카드를 만들지 않는다: 입력의 panel_remote 나 결과 글의 서버 id 로 안다', () => {
+  assert.equal(remoteAskId({ ...EVENT, output: REMOTE_OUT }), RQ)
+  assert.equal(batchFromTool({ ...EVENT, output: REMOTE_OUT }, 1, 'o69'), null)
+  const tagged = { ...EVENT, input: { ...(EVENT.input as object), panel_remote: RQ }, output: 'ok' }
+  assert.equal(remoteAskId(tagged), RQ)
+  assert.equal(batchFromTool(tagged, 1, 'o69'), null)
+  // 모양이 틀린 panel_remote·로컬 묶음 결과는 그대로 카드가 된다.
+  assert.equal(remoteAskId({ ...EVENT, input: { ...(EVENT.input as object), panel_remote: 'q_bad' }, output: 'ok' }), null)
+  assert.equal(batchFromTool(EVENT, 1, 'o1') !== null, true)
 })
 
 test('답 줄은 한 줄이고 묶음 ID·질문·고른 라벨·번호를 담는다', () => {

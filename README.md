@@ -228,6 +228,14 @@ my-private-repo
 
 ## 바뀐 것
 
+### 2026-11-18 — switchboard 0.12.3·Orca 질문 패널 0.7.1: 원격 질문의 Orca 답이 두 번 들어가던 것 (#142)
+
+- 원인: Orca 터미널 세션의 `agent.tool.after` 훅(`orca-plugins/question-panel/worker/main.ts`)이 서버 질문으로 올린 `ask` 호출에도 터미널 카드를 만들었다. 결과 글에 「질문 묶음 qN」이 없어 `o<N>` id를 붙였고, 같은 질문의 원격 카드(대장 끌어오기가 올린 `v: 2` 파일)와 카드가 둘이 됐다. 원격 카드 답은 서버·세션으로 한 번, `oN` 카드 답은 터미널에 「[질문 패널 답 oN] …」으로 한 번 더 들어갔다.
+- switchboard: 서버 질문으로 올린 `ask`는 MCP 호출 입력에 `panel_remote: q_…`를 싣는다.
+- Orca 질문 패널: 입력의 `panel_remote` 또는 결과 글의 「원격 질문 q_… 로 올렸다」가 있으면 훅에서 카드를 만들지 않는다(옛 switchboard도 결과 글로 걸린다). 서버 질문의 Orca 카드는 원격 카드 하나뿐이고, 그 답은 장부 → 대장 switchboard → 서버(200이면 답 메일, 403이면 거두고 세션에 직접) 한 길로 한 번 들어간다. 대장 세션이 아닌 Orca 터미널 세션의 서버 질문도 터미널 카드가 생기지 않는다.
+- Orca 질문 패널은 따로 설치한다(`orca-plugins/question-panel/README.md` 「설치」). 0.7.0 그대로면 `oN` 카드가 계속 생긴다.
+- 시험: mod 240건(`claude plugin test plugins/switchboard`), MCP 22건(`node --test plugins/switchboard/mcp`), `tsc --noEmit -p plugins/switchboard` 초록, Orca 72건(Orca 설치의 `orca-test-register.mjs`로 `node --test`). Orca 쪽 tsc 는 `.orca/types`를 만들지 못해 못 돌렸다.
+
 ### 2026-11-18 — issue-track 0.9.0: update-plugins 원격 PowerShell·모든 범위·범위별 판 검증 (#140, #127)
 
 - 원격 셸 판별: 설정 `update.shells: {"<별칭>": "powershell"|"posix"}`가 먼저, 없으면 `ssh <별칭> 'echo $PSVersionTable.PSVersion.Major'`가 숫자면 PowerShell, 아니면 posix. PowerShell 원격은 `PATH=` 접두 없이 `Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude plugin update <id> --scope local; exit $LASTEXITCODE` 꼴로 돈다(작은따옴표는 `''`). posix 원격은 그대로 `cd '<폴더>' && PATH="$HOME/.local/bin:$PATH" claude …`.
