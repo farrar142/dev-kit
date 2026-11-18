@@ -11,7 +11,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-456'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 const LEASE_MS = 3 * HEARTBEAT_MS
 
 type Row = { base: string; number: number; machine: string; directory: string; until: number; presence: Record<string, unknown> }

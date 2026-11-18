@@ -1,5 +1,6 @@
 // PreToolUse(Bash): 고치기·넘기기 관문.
-// gh pr create · gh issue create · agent-mail send · agent-mail reply 의 제목·본문이
+// gh pr create · gh issue create · switchboard send · switchboard reply 의 제목·본문이
+// (옛 CLI 이름 agent-mail send·reply 도 3단계 전까지 함께 거른다)
 // 버그·오류·장애·소음 수정으로 보이는데 `근본 원인:` 줄(또는 `## 근본 원인` 절)이 없으면 막는다(exit 2 + 고칠 법).
 //
 // 수정으로 보는 기준(잘못 막지 않는 쪽으로 좁게)
@@ -41,6 +42,9 @@ function findDir(cmd, idx, baseCwd) {
   return dir;
 }
 
+// 메일함 CLI 이름. agent-mail 은 옛 이름이다 — 3단계에 제거.
+const MAIL_CLIS = new Set(['switchboard', 'agent-mail']);
+
 const progName = (w) => path.basename(w).replace(/\.(exe|cmd|bat|ps1)$/i, '');
 
 // 단순 명령 → { kind, args } | { shell, script } | null
@@ -53,7 +57,7 @@ function readTrigger(words, heredocs) {
   if (prog === 'gh' && (rest[0] === 'pr' || rest[0] === 'issue') && rest[1] === 'create') {
     return { kind: `${rest[0]}-create`, args: rest.slice(2) };
   }
-  if (prog === 'agent-mail') {
+  if (MAIL_CLIS.has(prog)) {
     let j = 0;
     while (j < rest.length && rest[j].startsWith('-')) {
       if (!rest[j].includes('=') && (rest[j] === '--profile' || rest[j] === '--role')) j++;
@@ -128,7 +132,7 @@ function readMessage(t) {
       body.push(v);
     } else readFile(v);
   }
-  // agent-mail 은 본문이 없으면 stdin 을 읽는다
+  // switchboard(옛 agent-mail) CLI 는 본문이 없으면 stdin 을 읽는다
   if (!sawBody && t.kind.startsWith('mail')) {
     if (t.heredocs.length) body.push(...t.heredocs);
   }
@@ -185,13 +189,13 @@ function fixReason(title, body, signals, mail = false) {
 const LABEL = {
   'pr-create': 'gh pr create',
   'issue-create': 'gh issue create',
-  'mail-send': 'agent-mail send',
-  'mail-reply': 'agent-mail reply',
+  'mail-send': 'switchboard send',
+  'mail-reply': 'switchboard reply',
 };
 
 function check(cmd, cwd) {
   if (disabled()) return null;
-  if (!/\bgh\b|agent-mail/.test(cmd)) return null;
+  if (!/\bgh\b|switchboard|agent-mail/.test(cmd)) return null; // agent-mail: 옛 이름, 3단계에 제거
   const triggers = findTriggers(cmd, cwd);
   if (!triggers.length) return null;
   const signals = loadSignals();

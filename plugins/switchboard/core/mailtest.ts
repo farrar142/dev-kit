@@ -10,7 +10,7 @@ import type { SwitchboardOptions } from './switchboard'
 export const EP = 'http://mail.test'
 export const ROLE = 'team/worker'
 export const TOKEN = 'tok-SECRET-123'
-export const PROFILE = '/home/u/.config/agent-mail/worker.json'
+export const PROFILE = '/home/u/.config/switchboard/worker.json'
 
 /** 가짜 Agent Mail: 계약(#73 댓글)의 긴 대기를 흉내 낸다. pending 만, id 오름차순, after 보다 큰 것만. */
 export const fakeMail = (host: FakeHost) => {

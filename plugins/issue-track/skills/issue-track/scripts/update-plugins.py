@@ -17,10 +17,10 @@
 powershell은 `ssh <별칭> "Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude …; exit $LASTEXITCODE"`.
 한 기계가 실패해도 나머지는 계속한다. reload·재시작은 하지 않는다.
 
-그다음 「옛 판으로 떠 있는 세션」을 찾는다: `agent-mail status --json`(설정의 메일 프로필)에서 online이고
+그다음 「옛 판으로 떠 있는 세션」을 찾는다: `switchboard status --json`(설정의 메일 프로필)에서 online이고
 registered_at이 그 기계 세션 플러그인(기본 switchboard)의 lastUpdated보다 이른 세션. 세션의 machine 이름과
 ssh 별칭이 다르면 설정 update.machines로 잇는다(기본: 로컬은 hostname, 원격은 별칭 그대로).
-agent-mail이 없거나 실패하면 그 표는 건너뛴다고만 찍는다.
+CLI는 `switchboard`를 먼저 찾고 없을 때만 옛 이름 `agent-mail`을 쓴다. 둘 다 없거나 실패하면 그 표는 건너뛴다고만 찍는다.
 
 설정: ~/.config/dev-kit/issue-track.json(환경변수 DEV_KIT_CONFIG로 바꾼다)의 update 절.
 예시는 이 스킬 폴더의 issue-track.example.json.
@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -95,9 +96,9 @@ def repr_ps(s: str) -> str:
 def run_cmd(host: str, argv: list[str], cwd: str | None = None, shell: str = POSIX) -> Result:
     """host가 LOCAL이면 여기서, 아니면 `ssh <host> '<원격 셸 한 줄>'`으로 돌린다."""
     env = os.environ.copy()
-    # 부른 세션의 역할이 설정의 프로필과 어긋나면 agent-mail이 거절한다.
-    env.pop("AGENT_MAIL_ROLE", None)
+    # 부른 세션의 역할이 설정의 프로필과 어긋나면 switchboard CLI가 거절한다.
     env.pop("SWITCHBOARD_ROLE", None)
+    env.pop("AGENT_MAIL_ROLE", None)  # 옛 이름. 3단계에 제거
     if host == LOCAL:
         full, run_cwd = argv, cwd
     else:
@@ -409,8 +410,19 @@ def stale_sessions(status_text: str, reports: list[MachineReport], machines: dic
     return out
 
 
+def mail_cli(which: Callable[[str], str | None] = shutil.which) -> str:
+    """메일함 CLI 이름: `switchboard`가 있으면 그것, 없을 때만 옛 이름 `agent-mail`(3단계에 제거).
+    둘 다 없으면 `switchboard`(실행이 실패해 표를 건너뛴다)."""
+    if which("switchboard"):
+        return "switchboard"
+    if which("agent-mail"):  # 옛 이름. 3단계에 제거
+        return "agent-mail"
+    return "switchboard"
+
+
 def main(argv: list[str] | None = None, run: Runner = run_cmd,
-         hostname: Callable[[], str] = socket.gethostname) -> int:
+         hostname: Callable[[], str] = socket.gethostname,
+         which: Callable[[str], str | None] = shutil.which) -> int:
     for stream in (sys.stdout, sys.stderr):  # Windows 로캘(cp949)에서 한국어 출력이 깨지지 않게
         reconf = getattr(stream, "reconfigure", None)
         if reconf:
@@ -449,10 +461,11 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
 
     if not a.no_sessions:
         machines = {LOCAL: hostname(), **cfg.get("machines", {})}
-        argv_s = ["agent-mail", "status", "--json"]
+        cli = mail_cli(which)
+        argv_s = [cli, "status", "--json"]
         if cfg.get("mail_profile"):
             argv_s = ["env", f"SWITCHBOARD_PROFILE={cfg['mail_profile']}",
-                      f"AGENT_MAIL_PROFILE={cfg['mail_profile']}", *argv_s]  # 뒤쪽은 옛 CLI용
+                      f"AGENT_MAIL_PROFILE={cfg['mail_profile']}", *argv_s]  # 뒤쪽은 옛 CLI용. 3단계에 제거
         r = run(LOCAL, argv_s)
         print()
         try:
@@ -460,7 +473,7 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
                 raise ValueError(last_line(r))
             old_sessions = stale_sessions(r.out, reports, machines, cfg.get("session_plugin", "switchboard"))
         except (ValueError, json.JSONDecodeError) as e:
-            print(f"옛 판 세션: agent-mail status를 못 읽어 건너뛴다({e})")
+            print(f"옛 판 세션: {cli} status를 못 읽어 건너뛴다({e})")
         else:
             print("옛 판으로 떠 있는 세션:" if old_sessions else "옛 판으로 떠 있는 세션: 없음")
             for s in old_sessions:

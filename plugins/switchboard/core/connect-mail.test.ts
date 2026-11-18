@@ -11,7 +11,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-789'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 
 type Mail = { id: number; to: string; sender: string; subject: string; body: string; status: 'pending' | 'read' | 'held'; addressedTo?: string; heldId?: number }
 

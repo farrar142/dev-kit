@@ -542,7 +542,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
 
   const mail = (): MailboxState => mailbox?.state() ?? { status: 'off', cursor: null, queued: [], role: null }
   const takeover = async (): Promise<TakeoverResult> =>
-    mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음)' } : mailbox.takeover()
+    mailbox === undefined ? { ok: false, reason: '메일함이 꺼져 있다(SWITCHBOARD_PROFILE 없음)' } : mailbox.takeover()
 
   const askPermission = async (a: PermissionAsk, io?: { http?: Pick<Http, 'fetch'> }): Promise<PermissionAnswer | null> => {
     const p = permissions
@@ -571,7 +571,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
 
   const withdrawRemote = async (id: string, io?: { http?: Pick<Http, 'fetch'> }): Promise<WithdrawResult> => {
     const r = remote
-    if (!st.active || r === undefined) return { ok: false, status: null, reason: '메일함이 꺼져 있음(SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음)' }
+    if (!st.active || r === undefined) return { ok: false, status: null, reason: '메일함이 꺼져 있음(SWITCHBOARD_PROFILE 없음)' }
     try {
       return await r.ask.withdraw(id, io?.http === undefined ? {} : { http: io.http })
     } catch {

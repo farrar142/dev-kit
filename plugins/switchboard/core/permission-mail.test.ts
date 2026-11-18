@@ -10,7 +10,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-d8'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 // 새 시스템 보낸이(#144). 권한 메일·서버 시스템 통지가 이 이름으로도 돈다.
 const SYSTEM = 'switchboard/system'
 
@@ -349,7 +349,7 @@ test('통지: 안 풀리는 오류는 부모와 대장에게, 기다림은 부�
   w.board.stop()
 })
 
-test('번호 역할: 받은 <base>-N 을 onRole 로 넘긴다(어댑터가 자식 프로세스의 AGENT_MAIL_ROLE 로 쓴다)', async () => {
+test('번호 역할: 받은 <base>-N 을 onRole 로 넘긴다(어댑터가 자식 프로세스의 SWITCHBOARD_ROLE 로 쓴다)', async () => {
   const clock = fakeClock()
   const server = fakeServer()
   const a = await session(server, clock, { machine: 'box-a' })
