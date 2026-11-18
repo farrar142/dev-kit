@@ -5,7 +5,10 @@
 //  - 긴급(priority=urgent, D4): 본문을 바쁘면 다음 도구 호출 뒤에 끼워 넣고 유휴면 새 턴으로 넣은 뒤 read 로 표시한다.
 //  - 연결 통지(D7): SWITCHBOARD_PARENT 가 있으면 처음 이어졌을 때 부모에게 「연결됨(주소·라벨·기계·폴더)」 시스템 통지를 보낸다.
 //    받는 쪽은 시스템 통지(제목이 SYSTEM_SUBJECT_PREFIX 로 시작)를 ID 대신 본문 그대로, 일반 메일 뒤 일반 시점에 넣고 read 로 표시한다.
-//  - 서버 시스템 통지(D8): 보낸이가 `agent-mail/system`(·`-N`)인 일반 메일(멈춤·라벨 미연결)도 시스템 통지 길로 넣는다.
+//  - 서버 시스템 통지(D8): 보낸이가 `switchboard/system`(옛 `agent-mail/system`, 둘 다 `-N`)인 일반 메일(멈춤·라벨 미연결)도
+//    시스템 통지 길로 넣는다.
+//  - 질문 답 메일(#144): 시스템 보낸이의 `[질문 답] …` 메일을 듣는 쪽(onNotice)이 이 세션 몫으로 가져가면 긴급과 같은 길로
+//    바로 넣는다(사람 보류·입력 중 미룸을 타지 않는다). 가져가지 않은 사본은 평소 시스템 통지 길로.
 //    긴급 메일은 onUrgent 듣는 쪽(권한 답 기다리기)이 가져가면 넣지 않고 read 로만 표시한다.
 //  - 라벨 메일(D7): `label:<base>/<라벨>` 앞 보관 메일은 서버가 register 때 번호 주소로 옮긴다(새 ID). 번호를 받은 뒤 커서 없이
 //    구독을 시작하므로 따로 할 일은 없다.
@@ -150,8 +153,14 @@ export const DROP_NOTICE: NoticeDrop = { drop: true }
 /** 시스템 통지 듣는 쪽: 넣을 글, 다음 듣는 쪽으로(null), 또는 넣지 않기(DROP_NOTICE). */
 export type NoticeTap = (e: MailEvent, body: string) => Promise<string | null | NoticeDrop>
 
-/** 서버가 쓰는 예약 보낸이(#73 서버 계약 6): `agent-mail/system` 과 `agent-mail/system-N`. */
-export const isSystemSender = (sender: string | undefined) => sender !== undefined && /^agent-mail\/system(-\d+)?$/.test(sender)
+/** 서버가 쓰는 예약 보낸이(#73 서버 계약 6): `switchboard/system`(·`-N`), 옛 이름 `agent-mail/system`(·`-N`). */
+export const SYSTEM_SENDER = /^(switchboard|agent-mail)\/system(-\d+)?$/
+export const isSystemSender = (sender: string | undefined) => sender !== undefined && SYSTEM_SENDER.test(sender)
+/** 서버 질문 답 메일 제목 머리(묻는 역할 앞: `[질문 답] <id> <첫 header>`, 참조 사본: `[질문 답] <id> <asker> <첫 header>`). */
+export const ANSWER_SUBJECT_PREFIX = '[질문 답] '
+/** 질문 답 메일 꼴(시스템 보낸이, 제목 `[질문 답] `). 이 세션 몫인지는 onNotice 듣는 쪽이 정한다. */
+export const isAnswerMail = (e: Pick<MailEvent, 'sender' | 'subject' | 'priority'>) =>
+  e.priority !== 'urgent' && isSystemSender(e.sender) && (e.subject ?? '').startsWith(ANSWER_SUBJECT_PREFIX)
 export const isSystemNotice = (e: MailEvent) =>
   e.priority !== 'urgent' && ((e.subject ?? '').startsWith(SYSTEM_SUBJECT_PREFIX) || isSystemSender(e.sender))
 
@@ -304,6 +313,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let awaitingTurn = false
   /** 넣으려고 기다리는 시스템 통지(받은 순). 일반 메일 뒤에 넣는다. */
   let noticeQ: MailEvent[] = []
+  /** 바로 길에서 본문을 받아 둔 채 평소 길로 넘긴 통지 ID(본문 GET 이 read 로 바꿨을 수 있어 pending 확인에서 빼지 않는다). */
+  const fetched = new Set<number>()
   /** 이번 start 에서 연결 통지를 보냈다(보내는 중 포함). */
   let notified = false
   /** start 마다 올린다(stop 뒤 늦게 도는 연결 통지 재시도를 버린다). */
@@ -314,6 +325,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let me: { machine: string; directory: string; sessionId: string } | null = null
   /** 넣으려고 기다리는 긴급 메일(받은 순). */
   let urgentQ: MailEvent[] = []
+  /** 긴급 길로 넣으려는 질문 답 메일(#144, 받은 순). */
+  let answerQ: MailEvent[] = []
   let urgentBusy = false
   /** 긴급 메일 가로채는 쪽(onUrgent). */
   const urgentTaps = new Set<(e: MailEvent) => boolean>()
@@ -321,8 +334,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   const noticeTaps = new Set<NoticeTap>()
   /** 이어짐을 듣는 쪽(onLive). */
   const liveTaps = new Set<(role: string) => void>()
-  /** 넣을 글. null 이면 넣지 않는다(듣는 쪽이 DROP_NOTICE). */
-  const noticeOf = async (e: MailEvent, body: string): Promise<string | null> => {
+  /** 듣는 쪽이 가져간 글(DROP_NOTICE 면 null). 아무도 가져가지 않으면 undefined. */
+  const claimed = async (e: MailEvent, body: string): Promise<string | null | undefined> => {
     for (const fn of [...noticeTaps]) {
       try {
         const text = await fn(e, body)
@@ -334,7 +347,13 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       }
     }
 
-    return noticeText(e, body)
+    return undefined
+  }
+  /** 넣을 글. null 이면 넣지 않는다(듣는 쪽이 DROP_NOTICE). */
+  const noticeOf = async (e: MailEvent, body: string): Promise<string | null> => {
+    const text = await claimed(e, body)
+
+    return text === undefined ? noticeText(e, body) : text
   }
   /** 가로챈 긴급 메일: 넣지 않고 read 로만. */
   const tapped = (e: MailEvent) => {
@@ -438,6 +457,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       known.add(e.id)
       if (e.priority === 'urgent' && tapped(e)) void markRead(p, e.id)
       else if (e.priority === 'urgent') urgentQ.push(e)
+      else if (isAnswerMail(e)) answerQ.push(e)
       else if (isSystemNotice(e)) noticeQ.push(e)
       else queued.push(e.id)
     }
@@ -561,15 +581,36 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
    */
   const deliverUrgent = async (): Promise<void> => {
     const p = profile
-    if (urgentBusy || urgentQ.length === 0 || p === null) return
+    if (urgentBusy || (urgentQ.length === 0 && answerQ.length === 0) || p === null) return
     const act = opts.activity?.() ?? (opts.isIdle() ? 'idle' : 'busy')
     if (act === 'compacting') return
     urgentBusy = true
     const items = urgentQ
+    const answers = answerQ
     urgentQ = []
+    answerQ = []
     let failed = false
+    /** 넣지 않고 read 로만 표시할 것(듣는 쪽이 DROP_NOTICE). */
+    let dropped: MailEvent[] = []
+    let sent: MailEvent[] = []
     try {
       const texts = await Promise.all(items.map(async e => urgentText(e, await bodyOf(p, e))))
+      // 질문 답 메일(#144): 이 세션 몫(듣는 쪽이 글을 준 것)만 여기서. 아무도 가져가지 않은 사본은 평소 통지 길로.
+      for (const e of answers) {
+        const body = await bodyOf(p, e)
+        const text = await claimed(e, body)
+        if (text === undefined) {
+          fetched.add(e.id)
+          noticeQ.push({ ...e, body })
+        } else if (text === null) dropped.push(e)
+        else {
+          texts.push(text)
+          sent.push(e)
+        }
+      }
+      await Promise.all(dropped.map(e => markRead(p, e.id)))
+      dropped = []
+      if (texts.length === 0) return
       const text = texts.join('\n\n')
       const canInject = host.features.midTurnInject && host.injectMidTurn !== undefined
       let attached = false
@@ -584,14 +625,16 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
           kick()
         })
       }
-      await Promise.all(items.map(e => markRead(p, e.id)))
+      await Promise.all([...items, ...sent].map(e => markRead(p, e.id)))
     } catch {
       failed = true
       urgentQ = [...items, ...urgentQ]
+      // 아직 넣지 않은 답 메일만 되돌린다(평소 길로 넘긴 사본은 noticeQ 에 있다).
+      answerQ = [...sent, ...dropped, ...answers.filter(e => !sent.includes(e) && !dropped.includes(e) && !fetched.has(e.id)), ...answerQ]
       clock.after(RETRY_MIN_MS * 5, () => void deliverUrgent())
     } finally {
       urgentBusy = false
-      if (!failed && urgentQ.length > 0) void deliverUrgent()
+      if (!failed && (urgentQ.length > 0 || answerQ.length > 0)) void deliverUrgent()
       else if (!failed) kick()
     }
   }
@@ -628,7 +671,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     void (async () => {
       // 바쁜 동안 세션이 스스로 읽은 통지는 넣지 않는다.
       const live = new Set(await stillPending(p, items.map(e => e.id)))
-      items = items.filter(e => live.has(e.id))
+      items = items.filter(e => live.has(e.id) || fetched.has(e.id))
+      for (const e of items) fetched.delete(e.id)
       if (profile === null || items.length === 0) return
       if (!opts.isIdle() || (await gate()) === 'wait') {
         noticeQ = [...items, ...noticeQ]
@@ -662,7 +706,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
 
   const kick = () => {
     // 긴급이 넣어지는 중이면 일반은 그 뒤에(입력 줄 순서: 긴급 → 일반).
-    if (urgentBusy || urgentQ.length > 0) return
+    if (urgentBusy || urgentQ.length > 0 || answerQ.length > 0) return
     if (delivering || awaitingTurn || profile === null) return
     if (!opts.isIdle()) {
       noteHeld()

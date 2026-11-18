@@ -11,7 +11,8 @@ import type { FakeClock, FakeHost } from './testing'
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-d8'
 const PROFILE = '/home/u/.config/agent-mail/p.json'
-const SYSTEM = 'agent-mail/system'
+// 새 시스템 보낸이(#144). 권한 메일·서버 시스템 통지가 이 이름으로도 돈다.
+const SYSTEM = 'switchboard/system'
 
 type Mail = { id: number; to: string; sender: string; subject: string; body: string; priority: string; task_id?: string; status: 'pending' | 'read' }
 type Perm = { id: string; requester: string; parent?: string; tool: string; summary: string; status: string; decision?: string; note?: string; answered_by?: string }
