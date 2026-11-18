@@ -50,7 +50,7 @@ const fakeServer = () => {
   const questions: (RemoteQuestion & { asker: string })[] = []
   const posted: { role: string; body: unknown }[] = []
   const calls: string[] = []
-  let mode: 'ok' | 403 | 409 | 400 | 'down' = 'ok'
+  let mode: 'ok' | 403 | 409 | 400 | 500 | 'down' = 'ok'
   let getDown = false
   let nextMail = 1
   let seq = 0
@@ -103,6 +103,7 @@ const fakeServer = () => {
         if (mode === 403) return { status: 403, text: JSON.stringify({ error: 'can_ask is off' }) }
         if (mode === 400) return { status: 400, text: JSON.stringify({ error: 'header too long' }) }
         if (mode === 409) return { status: 409, text: JSON.stringify({ error: 'nobody can answer' }) }
+        if (mode === 500) return { status: 500, text: JSON.stringify({ error: 'boom' }) }
         const body = JSON.parse(init.body ?? '{}') as { questions: RemoteQuestion['questions'] }
         posted.push({ role, body })
         const q = {
@@ -242,14 +243,14 @@ test('원격 질문: 프로필이 있으면 서버 질문으로 올린다(패널
   await w.board.stop()
 })
 
-test('원격 질문: 403·409·400·연결 실패면 로컬 패널로(까닭을 남긴다)', async () => {
+test('원격 질문: 403·400·5xx·연결 실패면 로컬 패널로(까닭을 남긴다)', async () => {
   const clock = fakeClock()
   const server = fakeServer()
   const w = await session(server, clock)
-  const cases: [403 | 409 | 400 | 'down', RegExp][] = [
+  const cases: [403 | 400 | 500 | 'down', RegExp][] = [
     [403, /can_ask 꺼짐, 403/],
-    [409, /답할 대장 역할이 없음\(409\)/],
     [400, /400: header too long/],
+    [500, /서버 오류\(HTTP 500/],
     ['down', /서버에 닿지 않음/],
   ]
   for (const [mode, why] of cases) {
@@ -368,15 +369,12 @@ test('대장 세션(#120): 참조 메일은 거르고 다른 시스템 통지는
   await b.board.stop()
 })
 
-test('대장 세션(#120): 대장 역할이 물은 질문의 답(대장 판정 전·패널 없는 세션에서 올라간 것)은 여전히 「[질문 패널 답 …]」으로 넣는다', async () => {
+test('대장 세션(#120·#138): 대장이 스스로 물은 질문의 답은 여전히 「[질문 패널 답 …]」으로 한 번 넣는다', async () => {
   const clock = fakeClock()
   const server = fakeServer()
-  // 대장 세션은 ask 를 서버에 올리지 않으므로(#136) 같은 역할의 패널 없는 세션이 올린다.
-  const a = await session(server, clock, { role: BOSS, bosses: ['team/boss'], panel: false })
-  const r = await a.board.askRemote(QS)
-  if (r.kind !== 'remote') throw new Error('remote 가 아님')
-  await a.board.stop()
   const b = await session(server, clock, { role: BOSS, bosses: ['team/boss'], panel: true })
+  const r = await b.board.askRemote(QS)
+  if (r.kind !== 'remote') throw new Error('remote 가 아님')
   server.answer(r.id, [{ selected: ['Postgres'] }, { selected: ['검색'] }])
   await settle(clock)
   expect(b.host.turns.length).toBe(1)
@@ -504,27 +502,56 @@ test('대장 판정(#130): whoami 가 is_boss false 면 전역 목록의 대장�
   }
 })
 
-test('대장 세션(#136): ask 는 서버에 올리지 않고 로컬(까닭 없음 — 409 안내 없음)', async () => {
+test('대장 세션(#138): ask 도 서버에 먼저 올린다(201 이면 서버 질문, 결과 글은 이 세션 패널에 뜬다고 적는다)', async () => {
   const clock = fakeClock()
   const server = fakeServer()
   // whoami 판정(is_boss=true)과 옛 서버의 전역 목록 판정 둘 다.
   for (const o of [{ isBoss: true }, { bosses: ['team/boss'] }]) {
+    const before = server.posted.length
     const b = await session(server, clock, { role: BOSS, panel: true, ...o })
-    server.setMode(409)
-    expect(await b.board.askRemote(QS)).toEqual({ kind: 'local', reason: null })
-    expect(server.calls.filter(c => c.startsWith('POST /api/questions'))).toEqual([])
-    expect(b.logs.join('\n')).not.toMatch(/409/)
+    const r = await b.board.askRemote(QS)
+    if (r.kind !== 'remote') throw new Error('remote 가 아님')
+    expect(r.here).toBe(true)
+    expect(server.posted.length).toBe(before + 1)
+    const text = remoteAskText(r.id, r.asker, 'resolve', r.here)
+    expect(text).toContain('이 세션의 질문 패널과 관리 대시보드에 뜬다')
+    expect(text).not.toContain('띄우지 않는다')
     await b.board.stop()
   }
 })
 
-test('대장 아닌 세션(#136): whoami 가 대장 아님이면 지금처럼 올리고 409 면 로컬로 까닭을 남긴다', async () => {
+test('대장 아닌 세션(#138): 서버 질문 결과 글은 이 세션 패널에 띄우지 않는다고 적는다', async () => {
   const clock = fakeClock()
   const server = fakeServer()
-  const w = await session(server, clock, { role: BOSS, panel: true, isBoss: false })
-  server.setMode(409)
+  const w = await session(server, clock)
   const r = await w.board.askRemote(QS)
-  expect(r).toEqual({ kind: 'local', reason: '답할 대장 역할이 없음(409)' })
-  expect(server.calls.filter(c => c.startsWith('POST /api/questions')).length).toBe(1)
+  if (r.kind !== 'remote') throw new Error('remote 가 아님')
+  expect(r.here).toBe(false)
+  expect(remoteAskText(r.id, r.asker, 'resolve', r.here)).toContain('이 세션의 질문 패널에는 띄우지 않는다')
   await w.board.stop()
+})
+
+test('409(#138, 옛 서버): 대장이든 아니든 로컬로, 결과에 까닭을 붙이지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  for (const o of [{ isBoss: true, panel: true }, { isBoss: false }]) {
+    const b = await session(server, clock, { role: BOSS, ...o })
+    server.setMode(409)
+    const before = server.calls.filter(c => c.startsWith('POST /api/questions')).length
+    expect(await b.board.askRemote(QS)).toEqual({ kind: 'local', reason: null })
+    expect(server.calls.filter(c => c.startsWith('POST /api/questions')).length).toBe(before + 1)
+    await b.board.stop()
+  }
+})
+
+test('대장 세션(#138): 서버 불통·5xx 면 로컬로 까닭을 붙인다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const b = await session(server, clock, { role: BOSS, panel: true, isBoss: true })
+  server.setMode('down')
+  expect(await b.board.askRemote(QS)).toEqual({ kind: 'local', reason: '서버에 닿지 않음' })
+  server.setMode(500)
+  const r = await b.board.askRemote(QS)
+  expect(r.kind === 'local' ? r.reason : '').toMatch(/HTTP 500/)
+  await b.board.stop()
 })

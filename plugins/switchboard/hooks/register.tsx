@@ -535,7 +535,7 @@ export const register: Register = on => {
     // (묻는 쪽이 스스로 답하지 않게 — remote-ask.ts 머리말). 못 올리면 까닭을 결과 글에 적고 로컬 패널로.
     const remote = board === undefined ? { kind: 'local' as const, reason: null } : await board.askRemote(questions, { http: hookHttp($) })
     if (remote.kind === 'remote') {
-      const text = remoteAskText(remote.id, remote.asker, RESOLVE_TOOL)
+      const text = remoteAskText(remote.id, remote.asker, RESOLVE_TOOL, remote.here)
       const ran = await next({ ...e, panel_result: text, panel_echo: text, panel_closed: chatClosed(await read($, queue)) })
       // 모델이 질문을 모르게 됐으면(서버 꺼짐·훅이 막음) 서버 질문도 거둔다.
       if (ran.deny !== undefined || ran.isError === true) await board?.withdrawRemote(remote.id, { http: hookHttp($) })

@@ -147,8 +147,15 @@ export const panelQuestions = (items: readonly RemoteItem[]): QuestionPanelQuest
 export const remoteAnswers = (b: QuestionPanelBatch): RemoteAnswer[] =>
   b.questions.map(q => (q.other.trim() === '' ? { selected: [...q.picked] } : { selected: [...q.picked], other: q.other.trim() }))
 
-/** 서버에 답을 보낸 결과: ok(200), closed(409·404 — 이미 답함·거둠·없음), failed(연결 실패 등, 다시 해 볼 수 있음). */
-export type RemoteAnswerOutcome = { kind: 'ok' } | { kind: 'closed'; reason: string } | { kind: 'failed'; reason: string }
+/**
+ * 서버에 답을 보낸 결과: ok(200), closed(409·404 — 이미 답함·거둠·없음), failed(연결 실패 등, 다시 해 볼 수 있음),
+ * self(이 세션이 물은 질문이라 서버가 답을 받지 않았다 — text 를 이 세션 입력으로 넣는다, #138).
+ */
+export type RemoteAnswerOutcome =
+  | { kind: 'ok' }
+  | { kind: 'closed'; reason: string }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'self'; text: string }
 /** 원격 묶음의 답을 서버로 보내는 길(대장 세션의 코어). */
 export type RemoteAnswerPort = { answer: (id: string, answers: RemoteAnswer[]) => Promise<RemoteAnswerOutcome> }
 
@@ -338,11 +345,14 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify, remote
       return
     }
     if (r.kind === 'closed') await setVia(b.id, 'remote-taken')
+    if (r.kind === 'self') send(r.text, () => notify('답을 세션에 넣지 못했습니다.'))
     if (b.key !== undefined) await sync({ close: { key: b.key, state: 'answered', by: 'claude' } })
     notify(
       r.kind === 'ok'
         ? `${b.id} 답을 서버에 보냈습니다(원격 질문 · ${b.remote?.asker || '?'}).`
-        : `${b.id}은(는) 이미 답이 났거나 거둔 질문이라 닫았습니다(${r.reason}).`,
+        : r.kind === 'self'
+          ? `${b.id} 답을 세션에 보냈습니다.`
+          : `${b.id}은(는) 이미 답이 났거나 거둔 질문이라 닫았습니다(${r.reason}).`,
     )
   }
 
@@ -520,6 +530,7 @@ export const createQuestionPanel = ({ queue, draft, host, ledger, notify, remote
       }
       const r = await sendRemote(b, answers)
       if (r.kind === 'ok') log?.(`switchboard 질문: ${b.id}(원격 ${b.remote?.id ?? '?'}) Orca 답을 서버에 보냈다`)
+      else if (r.kind === 'self') send(r.text, () => notify('답을 세션에 넣지 못했습니다.'))
       else if (r.kind === 'closed') await setVia(b.id, 'remote-taken')
       else {
         // 대기로 되돌린다: 장부의 Orca 기록이 남아 있어 다음 장부 보기에서 다시 보낸다.
