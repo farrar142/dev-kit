@@ -279,3 +279,20 @@ test('Stop: 입력이 마지막 답 글을 직접 주면 그것을 쓴다', () =
   const r = run(STOP, { hook_event_name: 'Stop', transcript_path: file, last_assistant_message: '근본 원인: 캐시 만료.' }, { ROOT_CAUSE_LOG: logPath });
   assert.ok(blocked(r));
 });
+
+test('HTTP 4xx·5xx: 영문자·_ 가 붙은 숫자(16진 ID·sha)에는 걸리지 않는다', () => {
+  for (const t of ['q_7d415b54', 'abc500def', '커밋 7f404ab', '[질문 패널 답 q_7d415b54] 발행 = 예']) {
+    assert.strictEqual(prompt(t).stdout, '', t);
+  }
+});
+
+test('HTTP 4xx·5xx: 한글이 붙거나 낱말로 선 숫자는 그대로 잡힌다', () => {
+  for (const t of ['502 떠요', '500에러', 'HTTP 404', 'status 503']) {
+    assert.match(prompt(t).stdout, /HTTP 4xx·5xx/, t);
+  }
+});
+
+test('질문 패널 답은 선택지 라벨에 신호 낱말이 있어도 검사하지 않는다', () => {
+  assert.strictEqual(prompt('[질문 패널 답 q_1] 배포 = 실패 시 되돌림').stdout, '');
+  assert.notStrictEqual(prompt('배포 실패 시 되돌림').stdout, '');
+});

@@ -24,7 +24,7 @@ const BUILTIN = [
   ['버그', /버그/],
   ['먹통·죽음', /먹통|죽었|죽어|죽음|터졌|터짐|튕/],
   ['멈춤', /멈췄|멈춰|멈춤|안\s?열/],
-  ['HTTP 4xx·5xx', /(?<![\d.,:/#-])[45]\d{2}(?![\d.,:/]|\s*(?:개|줄|자|명|원|건|초|분|번|쪽|ms|px|[KMG]B|%|lines?|items?|tokens?)\b|\s*(?:개|줄|자|명|원|건|초|분|번|쪽))/],
+  ['HTTP 4xx·5xx', /(?<![\w.,:/#-])[45]\d{2}(?![\w.,:/]|\s*(?:개|줄|자|명|원|건|초|분|번|쪽|ms|px|[KMG]B|%|lines?|items?|tokens?)\b|\s*(?:개|줄|자|명|원|건|초|분|번|쪽))/],
   ['Traceback', /Traceback/],
   ['Exception', /Exception|\bpanic(?:ked)?\b|segfault/i],
   ['error', /\berrors?\b|\bfail(?:s|ed|ing|ure)?\b|\bbroken\b|\bcrash(?:es|ed|ing)?\b|\bbug\b|\boutage\b|\bregression\b|\bnot working\b|\bdoesn'?t work\b|\btimed? ?out\b/i],
