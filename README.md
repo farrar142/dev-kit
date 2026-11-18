@@ -17,6 +17,7 @@
 /plugin install context-cap@dev-kit
 /plugin install harden@dev-kit
 /plugin install leak-guard@dev-kit
+/plugin install root-cause@dev-kit
 ```
 
 - 받기: `/plugin marketplace update dev-kit`.
@@ -94,6 +95,11 @@ plugins/
   leak-guard/                      공개 저장소 유출 막는 PreToolUse(Bash) 훅(Node)
     hooks/leak-guard.js            git commit·push·gh pr create/edit 직전에 나갈 추가분만 내장 패턴+사용자 금지어로 검사
     tests/                         임시 git 저장소·가짜 gh 시험(`node --test plugins/leak-guard/tests`, 리눅스·macOS)
+  root-cause/                      근본 원인 관문 훅(Node)
+    hooks/prompt.js                UserPromptSubmit: 문제 신호가 있는 입력에 「증상 → 직접 원인 → 근본 원인을 증거로, 답에 `근본 원인:` 줄」 문맥
+    hooks/gate.js                  PreToolUse(Bash): gh pr/issue create·agent-mail send/reply가 수정·장애 보고로 보이는데 `근본 원인:` 줄이 없으면 막는다
+    hooks/signals.js, shell.js     신호 낱말(내장+사용자 목록)·끄기, 셸 명령 읽기(leak-guard 파서를 옮김)
+    tests/                         가짜 훅 입력 시험(`node --test plugins/root-cause/tests`, Windows 포함)
 orca-plugins/
   question-panel/                  Orca 플러그인(마켓플레이스 밖): question-panel 질문을 Orca 사이드바 카드로, 답은 그 터미널(채팅 세션은 오케스트레이션 메일함)로, 닫힘 장부로 Claude Code 패널과 상태를 맞춤, question-panel·switchboard 도구 이름 둘 다, 터미널 탭 세션의 질문 파일(0.6.0)
 ```
@@ -115,6 +121,7 @@ orca-plugins/
 | context-cap | 훅만 | `claude --agent issue-worker` 본 세션은 기본으로, 그 밖에는 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 준 세션에서만 켜진다. 아래 「context-cap 쓰는 법」 |
 | harden | `harden` | 같은 실수가 두 번째로 나왔다, 「재발 방지」「다시는 이러지 않게」「규칙에 추가해」「메모리에 적어 둬」 |
 | leak-guard | 훅만 | 설치하면 늘 켜진다. 공개 저장소에서 `git commit`·`git push`·`gh pr create`/`edit` 직전에만 검사한다. 아래 「leak-guard 쓰는 법」 |
+| root-cause | 훅만 | 설치하면 늘 켜진다. 문제 신고 입력에 근본 원인 문맥을 넣고, 원인 줄 없는 수정·장애 보고를 막는다. 아래 「root-cause 쓰는 법」 |
 
 ## question-panel → switchboard 이전
 
@@ -217,6 +224,32 @@ my-private-repo
 - 금지어 목록 자체를 공개 저장소에 두지 않는다. 기계마다 저장소 밖에 두거나 비공개 저장소·동기화 폴더에서 링크한다.
 - 시험(`node --test plugins/leak-guard/tests`)은 가짜 `gh`가 셸 스크립트라 리눅스·macOS에서 돈다. 훅 자체는 Windows Git Bash에서도 돈다(`/c/...` 경로를 바꿔 읽는다).
 
+## root-cause 쓰는 법
+
+증상만 막고 「왜 처음에 일어났나」를 건너뛰지 못하게 한다. 사례: 배포 때마다 캐시 연결 오류가 쌓여 경고로 낮추고 걸러내기로 했는데, 진짜 원인은 배포가 떠다니는 태그(`redis:7-alpine` 같은)의 기반 이미지를 매번 pull해 상류가 새 이미지를 낼 때마다 상태 있는 컨테이너가 다시 만들어지던 것이었다.
+
+| 훅 | 언제 | 하는 일 |
+|---|---|---|
+| UserPromptSubmit `prompt.js` | 입력에 문제 신호(오류·에러·안 돼·깨짐·뜨는데·느려·장애·실패·이상해·왜 …·버그·멈춤, 4xx·5xx 숫자, Traceback, Exception, error·fail·crash …) | 「증상 → 직접 원인 → 근본 원인(무엇이 바뀌었나)을 시각 상관·변경 이력·로그로 확인하고 답에 `근본 원인:` 줄, 모르면 `근본 원인: 미확인 — <다음 확인할 것>`, `diagnosing-bugs` 스킬」 문맥을 넣는다. 막지 않는다 |
+| PreToolUse(Bash) `gate.js` | `gh pr create`·`gh issue create`·`agent-mail send`·`agent-mail reply` | 수정·장애 보고로 보이는데 `근본 원인:` 줄(`Root cause:`, `## 근본 원인` 절도)이 없으면 막고(exit 2) 고칠 법을 알린다 |
+
+수정으로 보는 기준(잘못 막지 않는 쪽으로 좁게):
+
+- 제목(`--title`·`-t`, 메일 `--subject`)이 `fix:`·`fix(…):`·`hotfix`·`bugfix` 꼴이거나 문제 신호 낱말이 있다. 단 `feat:`·`docs:`·`chore:`·`test:`·`refactor:` 같은 머리말이나 「추가·도입·문서·감지·알림·처리」 같은 기능 낱말이 있으면 제목의 신호 낱말은 보지 않는다.
+- 본문(`--body`·`-b`, `--body-file`·`-F`는 파일 내용, `-`·메일 stdin은 heredoc)에 문제 신호 바로 뒤에 소음 동사(경고로 낮춤·걸러냄·억제·무시·우회, suppress·silence·ignore)가 붙은 구절이 있다. 메일은 수정 동사(고쳤·해결했·재시작으로, fixed·resolved)도 본다.
+
+통과:
+
+- 원인 줄이 있다. 빈 `근본 원인:`은 치지 않는다. 수정이 아니면 `근본 원인: 해당 없음 — <까닭>`으로 넘긴다.
+- 짧은 확인 메일: 본문 80자 이하 + 받음·확인·완료·접수·감사·ok 같은 낱말.
+- 본문 파일을 못 읽거나 명령 글을 읽지 못하면 통과한다(관문이지 보안 경계가 아니다).
+
+설정:
+
+- 사용자 신호 목록(저장소 밖): `ROOT_CAUSE_SIGNALS`, 없으면 `$XDG_CONFIG_HOME/root-cause/signals.txt`(보통 `~/.config/root-cause/signals.txt`). 한 줄에 정규식 하나(JavaScript, 대소문자 무시), `#` 주석. 틀린 줄은 건너뛴다. 두 훅이 같이 쓴다.
+- 끄기: `ROOT_CAUSE_OFF=1`.
+- 홈은 `os.homedir()`로 찾아 `HOME`이 없는 Windows(PowerShell)에서도 돈다. Git Bash의 `/c/…`·`~/…` 본문 파일 경로도 읽는다.
+
 ## 소개 글
 
 왜 이렇게 만들었는지는 아래 글에 적었다.
@@ -227,6 +260,12 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-18 — root-cause 0.1.0: 근본 원인 관문 (#146)
+
+- 새 플러그인. 문제 신고 입력에 근본 원인 문맥을 넣는 UserPromptSubmit 훅과, 수정·장애 보고(`gh pr create`·`gh issue create`·`agent-mail send`·`reply`)에 `근본 원인:` 줄이 없으면 막는 PreToolUse(Bash) 훅. 위 「root-cause 쓰는 법」.
+- 이 저장소의 지난 PR 72건·이슈 74건에 돌려 보니 PR 2건(그중 1건은 실제 수정), 이슈 5건(모두 실제 버그 신고)이 걸렸다.
+- 시험: `node --test plugins/root-cause/tests` 13건.
 
 ### 2026-11-18 — switchboard 0.12.4: 새 시스템 보낸이 `switchboard/system`과 질문 답 바로 넣기 (#144)
 
