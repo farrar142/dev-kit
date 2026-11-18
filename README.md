@@ -39,7 +39,7 @@ plugins/
       scripts/worker-stats.py      작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트
       reference/parallel-runs.md   체인 여럿을 나란히 돌릴 때의 함정(리뷰 포크, 통합 tip, 의미 충돌, compose -p)
       reference/remote-session.md  한 건을 원격 기계 작업자 세션에 맡기기: 이슈 → Orca로 세션 → 지시서 메일 → 착수 확인 → 보고 뒤 세션 닫기
-      scripts/update-plugins.py    로컬·원격(ssh 별칭) 기계에서 마켓·플러그인 갱신 → 기계×플러그인 버전 표, 옛 판으로 떠 있는 세션 목록
+      scripts/update-plugins.py    로컬·원격(ssh 별칭, posix·PowerShell) 기계에서 마켓·플러그인을 모든 범위에서 갱신 → 범위별 판 표(옛 판이 남으면 종료 코드 1), 옛 판으로 떠 있는 세션 목록
       issue-track.example.json     사용자 설정(`~/.config/dev-kit/issue-track.json`, `DEV_KIT_CONFIG`) 예시 — 가짜 값
   django-asgi/
     skills/django-asgi-perf/       ASGI 점검표 → reference/ (연결 풀, async 미들웨어, SSE 스냅샷·스트림 거르기), examples/
@@ -227,6 +227,12 @@ my-private-repo
 - [짧은 개발 팁 모음](https://sandcorp.co.kr/tips)
 
 ## 바뀐 것
+
+### 2026-11-18 — issue-track 0.9.0: update-plugins 원격 PowerShell·모든 범위·범위별 판 검증 (#140, #127)
+
+- 원격 셸 판별: 설정 `update.shells: {"<별칭>": "powershell"|"posix"}`가 먼저, 없으면 `ssh <별칭> 'echo $PSVersionTable.PSVersion.Major'`가 숫자면 PowerShell, 아니면 posix. PowerShell 원격은 `PATH=` 접두 없이 `Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude plugin update <id> --scope local; exit $LASTEXITCODE` 꼴로 돈다(작은따옴표는 `''`). posix 원격은 그대로 `cd '<폴더>' && PATH="$HOME/.local/bin:$PATH" claude …`.
+- `plugin list --json`의 설치를 범위마다(user·project·local, 폴더마다) 갱신하고, 끝에 다시 읽어 「범위별 판」 표(기계·플러그인·범위·폴더·판·최신·상태)를 찍는다. 최신 판은 그 기계 마켓 클론(`plugin marketplace list --json`의 `installLocation`)의 `marketplace.json` 항목 version, 없으면 source 폴더의 `.claude-plugin/plugin.json`. 못 읽으면 그 기계에 깔린 가장 높은 판.
+- 종료 코드 1: 기계 명령(마켓 갱신·목록) 실패, 갱신 명령 실패, 최신보다 옛 판이 남은 설치(표 아래 「옛 판이 남은 설치」). Windows 경로의 폴더 이름(`C:\work\proj` → `proj`)도 표에 나온다.
 
 ### 2026-11-18 — switchboard 0.12.2: 대장 질문도 서버 먼저 (#138)
 

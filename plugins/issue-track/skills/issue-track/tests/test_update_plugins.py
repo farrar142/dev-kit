@@ -28,15 +28,25 @@ def inst(pid, version, updated="2026-01-01T00:00:00Z", scope="user", project=Non
 class FakeMachines:
     """기계마다 설치 목록을 들고, `claude plugin update`가 오면 새 판으로 바꾼다."""
 
-    def __init__(self, machines, latest, fail=(), status=None):
+    def __init__(self, machines, latest, fail=(), status=None, ps_hosts=(), markets=None, files=None):
         self.machines = machines  # host -> list[install]
         self.latest = latest  # (id) -> (version, lastUpdated)
         self.fail = set(fail)  # (host, 단계) — 단계: "market", "list", 플러그인 id
         self.status = status
+        self.ps_hosts = set(ps_hosts)  # 셸 판별에 PowerShell로 답하는 기계
+        self.markets = markets or {}  # host -> 마켓 클론 installLocation
+        self.files = files or {}  # (host, 경로) -> 내용
         self.calls = []
+        self.shells = []  # (host, argv[0], shell)
 
-    def __call__(self, host, argv, cwd=None):
+    def __call__(self, host, argv, cwd=None, shell=up.POSIX):
         self.calls.append((host, tuple(argv), cwd))
+        self.shells.append((host, argv[0], shell))
+        if shell == up.RAW:
+            return up.Result(0, "5\r\n" if host in self.ps_hosts else ".PSVersion.Major\n", "")
+        if argv[:4] == ["claude", "plugin", "marketplace", "list"]:
+            loc = self.markets.get(host)
+            return up.Result(0, json.dumps([{"name": "kit", "installLocation": loc}] if loc else []), "")
         if argv[:3] == ["claude", "plugin", "marketplace"]:
             if (host, "market") in self.fail:
                 return up.Result(255, "", "ssh: connect to host remote-2 port 22: Connection refused")
@@ -50,14 +60,25 @@ class FakeMachines:
             if (host, pid) in self.fail:
                 return up.Result(1, "", "Error: network down")
             for e in self.machines[host]:
-                if e["id"] == pid and e["scope"] == argv[5]:
+                if e["id"] == pid and e["scope"] == argv[5] and up.is_older(e["version"], self.latest[pid][0]):
                     e["version"], e["lastUpdated"] = self.latest[pid]
             return up.Result(0, "ok", "")
+        if argv[0] in ("cat", "Get-Content") or (len(argv) > 1 and argv[1] == "-c"):
+            text = self.files.get((host, argv[-1]))
+            return up.Result(0, text, "") if text is not None else up.Result(1, "", "no such file")
         if "agent-mail" in argv:
             if self.status is None:
                 return up.Result(127, "", "agent-mail: not found")
             return up.Result(0, json.dumps(self.status), "")
         raise AssertionError(f"모르는 명령 {argv}")
+
+
+def row(out, *cells):
+    """표에서 앞 칸들이 cells인 줄을 칸 목록으로."""
+    for l in out.splitlines():
+        if l.split()[:len(cells)] == list(cells):
+            return l.split()
+    raise AssertionError(f"{cells} 줄 없음:\n{out}")
 
 
 def run_main(fake, args, config=None, hostname="box-local"):
@@ -84,9 +105,9 @@ class UpdatePlugins(unittest.TestCase):
         code, out = run_main(fake, ["--hosts", "remote-1", "--no-sessions"], {"update": {"marketplace": "kit"}})
         self.assertEqual(code, 0)
         self.assertIn(("remote-1", ("claude", "plugin", "marketplace", "update", "kit"), None), fake.calls)
-        lines = out.splitlines()
-        self.assertTrue(any(l.split() == ["issue-track", "0.7.0→0.8.0", "0.8.0"] for l in lines), out)
-        self.assertTrue(any(l.split() == ["switchboard", "-", "0.8.0→0.9.0"] for l in lines), out)
+        self.assertEqual(row(out, "local", "issue-track"), ["local", "issue-track", "user", "-", "0.7.0→0.8.0", "0.8.0", "최신"])
+        self.assertEqual(row(out, "remote-1", "issue-track"), ["remote-1", "issue-track", "user", "-", "0.8.0", "0.8.0", "최신"])
+        self.assertEqual(row(out, "remote-1", "switchboard"), ["remote-1", "switchboard", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
         self.assertNotIn("other", out)  # 다른 마켓 플러그인은 건드리지 않는다
 
     def test_local_scope_update_runs_in_project_folder_with_scope_flag(self):
@@ -95,7 +116,7 @@ class UpdatePlugins(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(("local", ("claude", "plugin", "update", "switchboard@kit", "--scope", "local"), "/w/app"),
                       fake.calls)
-        self.assertIn("switchboard (local:app)", out)
+        self.assertEqual(row(out, "local", "switchboard"), ["local", "switchboard", "local", "app", "0.8.0→0.9.0", "0.9.0", "최신"])
 
     def test_one_machine_failing_does_not_stop_others(self):
         fake = FakeMachines({
@@ -106,10 +127,11 @@ class UpdatePlugins(unittest.TestCase):
         code, out = run_main(fake, ["--no-sessions"],
                              {"update": {"marketplace": "kit", "hosts": ["remote-1", "remote-2"]}})
         self.assertEqual(code, 1)
-        row = next(l for l in out.splitlines() if l.startswith("issue-track"))
-        self.assertEqual(row.split(), ["issue-track", "0.7.0→0.8.0", "실패", "실패(0.7.0)"])
+        self.assertEqual(row(out, "local", "issue-track")[-1], "최신")
+        self.assertEqual(row(out, "remote-1"), ["remote-1", "-", "-", "-", "-", "-", "실패"])
+        self.assertEqual(row(out, "remote-2", "issue-track")[-1], "실패")
         self.assertIn("- remote-1: marketplace update 실패: ssh: connect to host remote-2 port 22: Connection refused", out)
-        self.assertIn("- remote-2 issue-track: Error: network down", out)
+        self.assertIn("- remote-2 issue-track (user): Error: network down", out)
 
     def test_missing_marketplace_is_config_error(self):
         code, _ = run_main(FakeMachines({}, LATEST), ["--local-only"])
@@ -215,7 +237,7 @@ class UpdatePlugins(unittest.TestCase):
     def test_remote_claude_setting_used_only_for_remote_hosts(self):
         calls = []
 
-        def fake(host, argv, cwd=None):
+        def fake(host, argv, cwd=None, shell=up.POSIX):
             calls.append((host, argv[0]))
             return up.Result(0, "[]" if "list" in argv else "ok", "")
 
@@ -223,6 +245,101 @@ class UpdatePlugins(unittest.TestCase):
         up.update_machine(fake, up.LOCAL, "kit", "/opt/bin/claude")
         self.assertEqual({c for h, c in calls if h == "mac"}, {"/opt/bin/claude"})
         self.assertEqual({c for h, c in calls if h == up.LOCAL}, {"claude"})
+
+    def test_powershell_remote_line_has_no_path_prefix_and_sets_location(self):
+        calls = []
+
+        class P:
+            returncode, stdout, stderr = 0, "", ""
+
+        orig = up.subprocess.run
+        up.subprocess.run = lambda argv, **kw: calls.append(argv) or P()
+        try:
+            up.run_cmd("win", ["claude", "plugin", "update", "switchboard@kit", "--scope", "local"],
+                       "C:\\work\\it's proj", shell=up.POWERSHELL)
+            up.run_cmd("win", ["claude", "plugin", "list", "--json"], shell=up.POWERSHELL)
+            up.run_cmd("win", ["C:\\Program Files\\claude.exe", "plugin", "list"], shell=up.POWERSHELL)
+        finally:
+            up.subprocess.run = orig
+        self.assertEqual(calls[0][:4], ["ssh", "-o", "BatchMode=yes", "win"])
+        self.assertEqual(calls[0][-1], "Set-Location -LiteralPath 'C:\\work\\it''s proj' -ErrorAction Stop; "
+                                       "claude plugin update switchboard@kit --scope local; exit $LASTEXITCODE")
+        self.assertEqual(calls[1][-1], "claude plugin list --json; exit $LASTEXITCODE")
+        self.assertEqual(calls[2][-1], "& 'C:\\Program Files\\claude.exe' plugin list; exit $LASTEXITCODE")
+        self.assertNotIn("PATH=", "".join(c[-1] for c in calls))
+
+    def test_shell_from_config_skips_probe_and_probe_detects_powershell(self):
+        machines = {"local": [], "win": [inst("switchboard@kit", "0.8.0")],
+                    "ps-auto": [inst("switchboard@kit", "0.8.0")], "linux": [inst("switchboard@kit", "0.8.0")]}
+        fake = FakeMachines(machines, LATEST, ps_hosts={"ps-auto"})
+        code, _ = run_main(fake, ["--hosts", "win,ps-auto,linux", "--no-sessions"],
+                           {"update": {"marketplace": "kit", "shells": {"win": "powershell"}}})
+        self.assertEqual(code, 0)
+        probed = {h for h, _, sh in fake.shells if sh == up.RAW}
+        self.assertEqual(probed, {"ps-auto", "linux"})  # 설정에 있는 win과 로컬은 묻지 않는다
+        used = {h: {sh for hh, a, sh in fake.shells if hh == h and sh != up.RAW} for h in machines}
+        self.assertEqual(used, {"local": {up.POSIX}, "win": {up.POWERSHELL},
+                                "ps-auto": {up.POWERSHELL}, "linux": {up.POSIX}})
+
+    def test_windows_local_scope_updates_in_its_folder_and_every_scope_is_listed(self):
+        fake = FakeMachines({"local": [], "win": [
+            inst("switchboard@kit", "0.8.0"),
+            inst("switchboard@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
+        ]}, LATEST, ps_hosts={"win"})
+        code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
+        self.assertEqual(code, 0)
+        self.assertIn(("win", ("claude", "plugin", "update", "switchboard@kit", "--scope", "local"), "C:\\work\\proj"),
+                      fake.calls)
+        self.assertIn(("win", ("claude", "plugin", "update", "switchboard@kit", "--scope", "user"), None), fake.calls)
+        self.assertEqual(row(out, "win", "switchboard", "user"), ["win", "switchboard", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
+        self.assertEqual(row(out, "win", "switchboard", "local"), ["win", "switchboard", "local", "proj", "0.8.0→0.9.0", "0.9.0", "최신"])
+
+    def test_older_than_market_clone_fails_with_code_1(self):
+        # 갱신 명령은 성공했지만 local 범위가 마켓 클론의 판(plugin.json)보다 옛 판으로 남는다.
+        clone = "C:\\Users\\me\\.claude\\plugins\\marketplaces\\kit"
+        fake = FakeMachines({"local": [], "win": [
+            inst("switchboard@kit", "0.9.0"),
+            inst("switchboard@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
+        ]}, {"switchboard@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, ps_hosts={"win"},
+            markets={"win": clone},
+            files={("win", clone + "/.claude-plugin/marketplace.json"):
+                   json.dumps({"plugins": [{"name": "switchboard", "source": "./plugins/switchboard"}]}),
+                   ("win", clone + "/plugins/switchboard/.claude-plugin/plugin.json"): json.dumps({"version": "0.9.0"})})
+        code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
+        self.assertEqual(code, 1)
+        self.assertEqual(row(out, "win", "switchboard", "user")[-2:], ["0.9.0", "최신"])
+        self.assertEqual(row(out, "win", "switchboard", "local")[-3:], ["0.8.0", "0.9.0", "옛판"])
+        self.assertIn("- win switchboard (local:proj) 0.8.0", out)
+        self.assertIn(("win", "Get-Content", up.POWERSHELL), fake.shells)
+
+    def test_market_clone_newer_than_every_install_fails(self):
+        fake = FakeMachines({"local": [inst("switchboard@kit", "0.8.0")]},
+                            {"switchboard@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, markets={"local": "/m/kit"},
+                            files={("local", "/m/kit/.claude-plugin/marketplace.json"):
+                                   json.dumps({"plugins": [{"name": "switchboard", "version": "1.0.0"}]})})
+        code, out = run_main(fake, ["--marketplace", "kit", "--local-only", "--no-sessions"])
+        self.assertEqual(code, 1)
+        self.assertEqual(row(out, "local", "switchboard")[-3:], ["0.8.0", "1.0.0", "옛판"])
+
+    def test_remote_list_failure_after_update_fails_with_code_1(self):
+        fake = FakeMachines({"local": [], "win": [inst("switchboard@kit", "0.8.0")]}, LATEST,
+                            fail=[("win", "list")], ps_hosts={"win"})
+        code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
+        self.assertEqual(code, 1)
+        self.assertEqual(row(out, "win")[-1], "실패")
+        self.assertIn("- win: plugin list 실패: boom", out)
+
+    def test_folder_name_handles_windows_and_posix_paths(self):
+        self.assertEqual(up.folder_name("C:\\work\\proj\\"), "proj")
+        self.assertEqual(up.folder_name("/w/app/"), "app")
+        self.assertEqual(up.folder_name(""), "")
+
+    def test_shells_read_from_config_ignores_unknown_values(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with open(path, "w") as f:
+                json.dump({"update": {"shells": {"win": "powershell", "box": "cmd"}}}, f)
+            self.assertEqual(up.load_update_config(path)["shells"], {"win": "powershell"})
 
     def test_remote_claude_read_from_config(self):
         with tempfile.TemporaryDirectory() as d:
