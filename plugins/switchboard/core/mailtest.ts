@@ -1,4 +1,4 @@
-// 메일함 시험 도우미: 가짜 Agent Mail 서버(긴 대기, #73 댓글 계약)와 메일함을 켠 코어 준비. 시험에서만 쓴다.
+// 메일함 시험 도우미: 가짜 switchboard 서버(긴 대기, #73 댓글 계약)와 메일함을 켠 코어 준비. 시험에서만 쓴다.
 import { flush } from './testing'
 import type { CompactBehavior, FakeHost } from './testing'
 import { fakeHost } from './testing'
@@ -12,7 +12,7 @@ export const ROLE = 'team/worker'
 export const TOKEN = 'tok-SECRET-123'
 export const PROFILE = '/home/u/.config/switchboard/worker.json'
 
-/** 가짜 Agent Mail: 계약(#73 댓글)의 긴 대기를 흉내 낸다. pending 만, id 오름차순, after 보다 큰 것만. */
+/** 가짜 switchboard 서버: 계약(#73 댓글)의 긴 대기를 흉내 낸다. pending 만, id 오름차순, after 보다 큰 것만. */
 export const fakeMail = (host: FakeHost) => {
   const mails: { id: number; status: 'pending' | 'read'; priority: string; body: string }[] = []
   /** 서버에 들어온 읽음 처리(POST …/read, GET 메일 하나). */

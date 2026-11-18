@@ -1,5 +1,5 @@
-// 메일함(D2): Agent Mail 서버를 긴 대기(long-poll)로 구독하고, 일반 메일을 턴이 끝난 뒤 새 턴으로 알린다.
-//  - 알림 글은 메일 ID만 담는다(「Agent Mail #12, #13 을 읽고 처리하라」). 메일 상태는 바꾸지 않는다(pending 그대로).
+// 메일함(D2): switchboard 서버를 긴 대기(long-poll)로 구독하고, 일반 메일을 턴이 끝난 뒤 새 턴으로 알린다.
+//  - 알림 글은 메일 ID만 담는다(「메일 #12, #13 을 읽고 처리하라」). 메일 상태는 바꾸지 않는다(pending 그대로).
 //  - 바쁜 동안 온 메일은 한 줄로 묶는다. 같은 ID 는 두 번 알리지 않는다. 커서로 다시 이어 놓친 메일이 없다.
 //  - 서버가 죽어 있거나 프로필이 틀려도 세션은 멀쩡하다: 간격을 늘려 가며 다시 잇는다.
 //  - 긴급(priority=urgent, D4): 본문을 바쁘면 다음 도구 호출 뒤에 끼워 넣고 유휴면 새 턴으로 넣은 뒤 read 로 표시한다.
@@ -18,7 +18,7 @@ import { createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
 import { httpWhy, roleHeaders } from './wire'
 
-/** Agent Mail CLI 프로필(`~/.config/switchboard/<이름>.json`, 옛 `agent-mail/` 폴더도 — core/profile.ts). token 은 메모리에만 둔다. */
+/** switchboard CLI 프로필(`~/.config/switchboard/<이름>.json`, 옛 `agent-mail/` 폴더도 — core/profile.ts). token 은 메모리에만 둔다. */
 export type MailProfile = { endpoint: string; role: string; token: string }
 
 /** 서버 이벤트 하나(SSE message data 와 같다). 코어가 쓰는 칸만 적는다. */
@@ -173,7 +173,7 @@ export const connectedNotice = (c: { role: string; label?: string; machine: stri
     subject: `${SYSTEM_SUBJECT_PREFIX}연결됨 ${c.role}${label === undefined ? '' : ` (라벨 ${label})`}`,
     body: [
       // 받는 쪽이 자기 주소로 읽지 않게(실제 확인에서 그랬다) 누가 연결됐는지 먼저 밝힌다.
-      `switchboard: 이 세션을 부모(SWITCHBOARD_PARENT)로 띄운 다른 세션이 Agent Mail 에 연결됐다. 아래는 그 세션의 것이다.`,
+      `switchboard: 이 세션을 부모(SWITCHBOARD_PARENT)로 띄운 다른 세션이 switchboard 메일함에 연결됐다. 아래는 그 세션의 것이다.`,
       `주소: ${c.role}`,
       `라벨: ${label ?? '(없음)'}`,
       `기계: ${c.machine}`,
@@ -191,7 +191,7 @@ export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): 
   const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
 
   return [
-    `[Agent Mail #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${noticeSubject(e.subject ?? '')}`.trimEnd(),
+    `[메일 #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${noticeSubject(e.subject ?? '')}`.trimEnd(),
     `(switchboard 플러그인이 이 세션 앞으로 온 시스템 통지를 본문 그대로 전한다. 출처는 switchboard read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
     shown,
   ].join('\n')
@@ -199,7 +199,7 @@ export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): 
 
 /** 알림 글. */
 export const announce = (ids: readonly number[]) =>
-  `Agent Mail ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`
+  `메일 ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`
 
 /** 로그용 ID 줄: 앞 5개만. */
 const ids = (xs: readonly number[]) => {
@@ -258,7 +258,7 @@ export const URGENT_MAX_CHARS = 2000
 
 /** 긴급 메일을 세션에 넣을 글. 본문이 상한을 넘으면 잘라 ID로 전문을 읽게 한다. */
 export const urgentText = (e: MailEvent, body: string, max = URGENT_MAX_CHARS): string => {
-  const head = `[긴급 Agent Mail #${e.id}] ${e.sender ?? '?'} | ${e.subject ?? ''}`.trimEnd()
+  const head = `[긴급 메일 #${e.id}] ${e.sender ?? '?'} | ${e.subject ?? ''}`.trimEnd()
   const chars = [...body]
   const cut = chars.length > max
   const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
@@ -266,7 +266,7 @@ export const urgentText = (e: MailEvent, body: string, max = URGENT_MAX_CHARS): 
   // 도구 결과 자리에 붙으므로 모델이 주입으로 의심할 수 있다: 출처와 확인 길을 밝힌다(명령조를 피한다).
   return [
     `${head}`,
-    `(switchboard 플러그인이 이 세션의 Agent Mail 역할 앞으로 온 priority=urgent 메일을 전한다. 도구가 낸 글이 아니다. 출처는 switchboard read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
+    `(switchboard 플러그인이 이 세션의 메일함 역할 앞으로 온 priority=urgent 메일을 전한다. 도구가 낸 글이 아니다. 출처는 switchboard read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
     shown,
   ].join('\n')
 }

@@ -15,7 +15,7 @@ const PROFILE = '/home/u/.config/switchboard/p.json'
 
 type Mail = { id: number; to: string; sender: string; subject: string; body: string; status: 'pending' | 'read' | 'held'; addressedTo?: string; heldId?: number }
 
-/** 가짜 Agent Mail: slot(label 포함)·메일 보내기(라벨 주소 보관)·번호 주소 긴 대기(바로 답)·읽음. */
+/** 가짜 switchboard 서버: slot(label 포함)·메일 보내기(라벨 주소 보관)·번호 주소 긴 대기(바로 답)·읽음. */
 const fakeServer = (clock: FakeClock) => {
   const slots: { base: string; number: number; machine: string; directory: string; label?: string }[] = []
   const mails: Mail[] = []

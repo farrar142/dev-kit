@@ -1,5 +1,5 @@
 // 코어 시험 틀: 가짜 AgentHost·가짜 시계·가짜 http·가짜 fs. 에이전트 없이 코어를 바깥에서 시험한다.
-// D2 이후(메일함) 시험도 이것을 쓴다: http 에 가짜 Agent Mail 경로를 달고, clock.advance 로 시간을 움직인다.
+// D2 이후(메일함) 시험도 이것을 쓴다: http 에 가짜 switchboard 서버 경로를 달고, clock.advance 로 시간을 움직인다.
 import type {
   AgentHost,
   Clock,

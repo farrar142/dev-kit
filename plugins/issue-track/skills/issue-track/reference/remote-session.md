@@ -1,6 +1,6 @@
 # 원격 세션에 한 건 맡기기
 
-「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 지시와 보고는 Agent Mail로 오간다 — 주소·프로필 규칙은 [switchboard.md](switchboard.md).
+「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 지시와 보고는 메일로 오간다 — 주소·프로필 규칙은 [switchboard.md](switchboard.md).
 
 ## 설정
 
@@ -10,7 +10,7 @@
 |---|---|
 | `environment` | 작업자를 띄울 Orca 원격 환경 이름(`orca terminal create --environment`) |
 | `model` | 작업자 기본 모델(`claude --model`). 티켓이 무거우면 [SKILL.md](../SKILL.md) 「1. 모델 고르기」로 바꾼다 |
-| `my_mail_profile` | 나(맡기는 쪽)의 Agent Mail 프로필 |
+| `my_mail_profile` | 나(맡기는 쪽)의 메일함 프로필 |
 | `report_to` | 작업자가 보고를 보낼 역할 주소(보통 나의 역할) |
 | `repos.<owner/name>.folder` | 원격 기계의 그 저장소 작업 폴더 |
 | `repos.<owner/name>.worker_role` · `worker_profile` | 그 폴더 작업자의 메일 역할과 프로필 |
@@ -57,7 +57,7 @@ python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts
 | `marketplace` | 갱신할 마켓 이름 |
 | `hosts` | 원격 기계 ssh 별칭 목록(`ssh <별칭> '<명령>'`이 비밀번호 없이 돼야 한다) |
 | `mail_profile` | `switchboard status`를 읽을 프로필 |
-| `machines` | ssh 별칭(로컬은 `local`) → Agent Mail이 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
+| `machines` | ssh 별칭(로컬은 `local`) → switchboard가 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
 | `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
 | `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). posix 원격은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
 | `shells` | ssh 별칭 → 원격 셸(`posix`·`powershell`). 없는 별칭은 `ssh <별칭> 'echo $PSVersionTable.PSVersion.Major'`로 판별한다. PowerShell은 접두 없이 `Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude plugin update <id> --scope local; exit $LASTEXITCODE` |

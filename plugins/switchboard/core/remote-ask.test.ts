@@ -1,4 +1,4 @@
-// 원격 질문 — 묻는 쪽(#111): 가짜 Agent Mail 서버(#106 댓글 「remote questions API」)로 코어를 돌린다.
+// 원격 질문 — 묻는 쪽(#111): 가짜 switchboard 서버(#106 댓글 「remote questions API」)로 코어를 돌린다.
 import { expect, test } from 'claude-code/testing'
 
 import type { QuestionPanelQuestion } from '../types'
