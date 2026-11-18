@@ -134,12 +134,26 @@ export const batchIdFrom = (output: JsonValue | undefined): string | null => {
 }
 
 /**
- * 질문 패널 도구 호출이면 묶음을 만든다. 터미널을 모르면(답을 넣을 곳이 없으면) null.
+ * 원격 질문(Agent Mail 서버 질문, switchboard 0.11.0+)으로 올린 호출이면 그 서버 id(q_…). 아니면 null(0.7.1, #142).
+ * switchboard 0.12.3+ 는 입력에 panel_remote 로 싣고, 옛 판은 결과 글 「원격 질문 q_… 로 올렸다」로만 알린다.
+ * 이 호출로는 카드를 만들지 않는다: 서버 질문의 카드는 대장 세션의 switchboard 가 원격 카드(v 2 질문 파일)로 따로 올리고,
+ * 여기서 터미널 카드를 또 만들면 같은 질문의 답이 터미널로 한 번 더 들어간다.
+ */
+export const remoteAskId = (e: Pick<ToolEvent, 'input' | 'output'>): string | null => {
+  if (isRecord(e.input) && typeof e.input.panel_remote === 'string' && REMOTE_ID_RE.test(e.input.panel_remote)) return e.input.panel_remote
+  if (e.output === undefined) return null
+  const m = JSON.stringify(e.output).match(/원격 질문 (q_[0-9a-f]{32}) ?로 올렸다/)
+
+  return m === null ? null : m[1]
+}
+
+/**
+ * 질문 패널 도구 호출이면 묶음을 만든다. 터미널을 모르면(답을 넣을 곳이 없으면) null. 원격 질문 호출이면 null.
  * fallbackId 는 결과에서 ID를 못 찾았을 때 쓴다.
  */
 export const batchFromTool = (e: ToolEvent, now: number, fallbackId: string): Batch | null => {
   if (!isAskTool(e.tool) || e.terminalId === undefined || e.terminalId === '') return null
-  if (!isRecord(e.input)) return null
+  if (!isRecord(e.input) || remoteAskId(e) !== null) return null
   const questions = normalize(e.input.questions)
   if (questions.length === 0) return null
 

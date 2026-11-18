@@ -647,6 +647,60 @@ test('대장 자기 질문(#138): 서버에 닿지 않아 패널 답을 넣었�
   await s.board.stop()
 })
 
+/** Orca 질문 패널(0.7.0+)이 원격 카드 답을 장부 기록에 남긴 것을 흉내 낸다. */
+const orcaAnswers = (s: Awaited<ReturnType<typeof session>>, batch: string) => {
+  const b = s.queue.value().find(x => x.id === batch)!
+  s.ledger.records.set(b.key!, { key: b.key!, id: b.id, state: 'answered', by: 'orca', at: 2, answers: [{ selected: ['SQLite'] }, { selected: ['검색'] }] })
+}
+
+test('대장 자기 질문(#142): Orca 사이드바 답은 서버가 받으면(200) 답 메일로 세션에 한 번만 들어간다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const { s, id, batch } = await bossAsks(server, clock)
+  orcaAnswers(s, batch)
+  await s.panel.poll()
+  await settle(clock)
+  await s.panel.poll()
+  await settle(clock)
+  expect(server.answered.map(a => a.id)).toEqual([id])
+  expect(s.host.turns.length).toBe(1)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 어느 DB를 쓸까요? = SQLite`)
+  await s.board.stop()
+})
+
+test('대장 자기 질문(#142): Orca 사이드바 답을 서버가 받지 않으면(403) 세션에 한 번 넣고, 뒤에 오는 장부 보기·답 메일로 다시 넣지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  server.setOwnerOnly(true)
+  const { s, id, batch } = await bossAsks(server, clock)
+  orcaAnswers(s, batch)
+  await s.panel.poll()
+  await settle(clock)
+  await s.panel.poll()
+  await settle(clock)
+  expect(server.answered).toEqual([])
+  expect(server.questions[0]!.status).toBe('withdrawn')
+  expect(s.host.turns.length).toBe(1)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 어느 DB를 쓸까요? = SQLite`)
+  expect(s.queue.value().filter(b => b.status === 'pending')).toEqual([])
+  await s.board.stop()
+})
+
+test('원격 질문 대장(#142): 남의 질문을 Orca 사이드바로 답하면 서버로 한 번 가고 대장 세션에는 아무것도 넣지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const q = server.ask()
+  const s = await session(server, clock)
+  orcaAnswers(s, s.queue.value()[0]!.id)
+  await s.panel.poll()
+  await settle(clock)
+  await s.panel.poll()
+  await settle(clock)
+  expect(server.answered.map(a => a.id)).toEqual([q.id])
+  expect(s.host.turns).toEqual([])
+  await s.board.stop()
+})
+
 test('대장 자기 질문(#138): 대시보드가 먼저 답하면 패널 묶음은 닫히고 답 메일만 한 번 들어간다', async () => {
   const clock = fakeClock()
   const server = fakeServer()

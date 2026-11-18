@@ -117,6 +117,11 @@ orca plugin open local.question-panel --panel questions --json
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
 
+## 0.7.1 — 원격 질문 호출에는 터미널 카드를 만들지 않는다 (switchboard 0.12.3, #142)
+
+- 서버 질문으로 올린 `ask` 호출(입력 `panel_remote: q_…`, 또는 결과 글 「원격 질문 q_… 로 올렸다」)은 `agent.tool.after` 훅에서 카드를 만들지 않는다. 0.7.0은 이 호출에 `o<N>` 터미널 카드를 만들어, 대장 세션의 원격 카드와 함께 같은 질문 카드가 둘이 되고 `oN` 답이 터미널로 한 번 더 들어갔다.
+- 시험: 72건(훅 거르기 2건 추가).
+
 ## 0.7.0 — 원격 질문 카드 (switchboard 0.11.0, #112)
 
 - 대장 역할 세션의 switchboard 가 Agent Mail 서버 질문을 끌어와 질문 폴더에 `v: 2` 파일(`remote: {id: q_…, asker}`)로 남긴다. 이 패널은 그것을 카드로 띄우고 경로 배지에 「원격 질문 · <묻는 역할>」을 보인다. `v: 2`는 `remote`가 맞아야 받는다(옛 패널은 `v: 2`를 버린다).

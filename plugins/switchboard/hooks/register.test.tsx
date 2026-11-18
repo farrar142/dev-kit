@@ -863,6 +863,7 @@ test('AskUserQuestion: SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1 이면 통과', asy
 // 원격 질문(#111): 프로필이 있는 세션의 ask 는 서버 질문으로, resolve 는 거두기로. 서버는 http.fetch 자리에서 흉내 낸다.
 const RID = `q_${'c'.repeat(32)}`
 
+const forwarded: any[] = []
 async function setupRemote($: any, on: any, ask: { status: number; text: string } | 'down') {
   const hits: { url: string; method: string }[] = []
   on('env.get', (_: any, e: any) => ({ value: ({ AGENT_MAIL_PROFILE: 'sbtest', AGENT_MAIL_CONFIG_DIR: '/cfg' } as Record<string, string>)[e.name] }))
@@ -885,7 +886,11 @@ async function setupRemote($: any, on: any, ask: { status: number; text: string 
 
     return reply(404, { error: 'not found' })
   })
-  const submitted = await setup($, on)
+  const submitted = await setup($, on, ['desktop'], (e: any) => {
+    forwarded.push(e)
+
+    return { result: callAsk(e).content }
+  })
 
   return { hits, submitted }
 }
@@ -898,6 +903,10 @@ test('원격 질문: 프로필이 있으면 서버 질문으로 올리고 로컬
   const text = textOf(ran)
   expect(text).toContain(`원격 질문 ${RID} 로 올렸다`)
   expect(text).not.toMatch(/질문 묶음 q\d/)
+  // Orca 훅이 터미널 카드를 따로 만들지 않게 서버 id 를 입력에 싣는다(#142). 로컬 묶음 key 는 없다.
+  const fwd = forwarded.at(-1)
+  expect(fwd.panel_remote).toBe(RID)
+  expect(fwd.panel_key).toBeUndefined()
   expect(hits.some(h => h.method === 'POST' && h.url === 'http://mail.test/api/questions')).toBe(true)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' } as any)
   expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeUndefined()

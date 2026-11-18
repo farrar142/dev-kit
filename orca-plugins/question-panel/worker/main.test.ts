@@ -37,7 +37,7 @@ const fakeIo = (
     pollMs: null,
   }
 
-  return { io, runs, removed, ledger }
+  return { io, runs, removed, ledger, files }
 }
 
 const worker = { default: createWorker(fakeIo().io), deactivate, FOCUS_WAIT_MS }
@@ -869,6 +869,27 @@ test('원격 질문 카드: 답은 터미널에 넣지 않고 장부 기록에 �
   assert.equal(r2.ok, false)
   await w.deactivate()
   await w2.deactivate()
+})
+
+test('원격 질문(#142): 대장 자기 질문 호출 훅은 카드를 만들지 않고, 원격 카드 하나의 답은 터미널에 넣지 않는다', async () => {
+  const f = fakeIo([])
+  const host = mockHost({ results: { 'terminal.sendText': { accepted: true } } })
+  const w = await mountWorker({ default: createWorker(f.io), deactivate }, { host })
+  // 대장 세션이 서버 질문으로 올린 ask 호출(결과 글에 서버 id, 입력에 panel_remote).
+  const out = `원격 질문 ${RID} 로 올렸다(Agent Mail 서버, 묻는 역할 team/boss). 이 세션의 질문 패널과 관리 대시보드에 뜬다.`
+  await w.hooks.fire('agent.tool.after', { ...ASK, tool: 'mcp__plugin_switchboard_qp__ask', output: out })
+  await w.hooks.fire('agent.tool.after', { ...ASK, tool: 'mcp__plugin_switchboard_qp__ask', input: { ...ASK.input, panel_remote: RID }, output: 'ok' })
+  assert.deepEqual(w.host.data().storage.batches ?? [], [])
+  // 대장 poll 이 올린 원격 카드(v 2)만 하나 뜬다.
+  f.files.push(remoteInbox())
+  await w.request('qp.refresh', {})
+  const list = (w.host.data().storage.batches ?? []) as { id: string; remote?: { id: string } }[]
+  assert.deepEqual(list.map(b => [b.id, b.remote?.id]), [['q2', RID]])
+  const r = (await w.request('qp.answer', { id: 'q2', terminalId: 'term_1', picks: [[0], [1]] })) as { ok: boolean }
+  assert.equal(r.ok, true)
+  assert.deepEqual(host.callsOf('terminal.sendText'), [])
+  assert.equal(JSON.parse(f.ledger.get(RKEY) ?? '{}').by, 'orca')
+  await w.deactivate()
 })
 
 test('원격 질문 파일: v2 는 remote 가 있어야 받고, remote 가 틀리면 버린다', async () => {

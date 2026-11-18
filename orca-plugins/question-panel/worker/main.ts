@@ -27,6 +27,7 @@ import {
   asBatches,
   batchFromInbox,
   batchFromTool,
+  remoteAskId,
   CHAT_VIA,
   closedIdsOf,
   closeFromInbox,
@@ -267,6 +268,12 @@ export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorker
     // mod 가 질문 호출에 붙인 panel_closed: 그새 대화창 글로 답해 닫힌 묶음들(0.4.4).
     if (event.terminalId !== undefined && event.terminalId !== '') {
       await closeChat(event.terminalId, closedIdsOf(event.input), Date.now(), 'hook panel_closed')
+    }
+    const rid = remoteAskId(event)
+    if (rid !== null) {
+      log(`hook: 원격 질문 ${rid} — 터미널 카드는 만들지 않는다(대장 세션이 원격 카드로 올린다)`)
+
+      return
     }
     // 폴더 읽기(ingest)도 저장소를 고친다. 끝나기를 기다리고, 저장 직전에 다시 읽어 덮어쓰지 않는다.
     await ingest()
