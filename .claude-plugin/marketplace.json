@@ -57,6 +57,11 @@
       "name": "leak-guard",
       "source": "./plugins/leak-guard",
       "description": "공개 저장소 유출 막는 PreToolUse 훅(node): git commit·git push·gh pr create/edit 직전에 나갈 추가분(diff + 줄·커밋 메시지·PR 제목·본문)만 내장 비밀 패턴과 저장소 밖 사용자 금지어 파일(~/.config/leak-guard/patterns.txt)로 검사해 걸리면 파일:줄과 패턴 이름만 알리고 막는다. 공개 저장소에서만, 예외는 줄의 leak-guard:allow 표시"
+    },
+    {
+      "name": "root-cause",
+      "source": "./plugins/root-cause",
+      "description": "근본 원인 관문 훅(node): 문제 신고 입력(오류·장애·실패·4xx/5xx·Traceback …)에 「증상 → 직접 원인 → 근본 원인을 증거로, 답에 `근본 원인:` 줄」 문맥을 넣고, gh pr/issue create·agent-mail send/reply가 수정·장애 보고로 보이는데 `근본 원인:` 줄이 없으면 막는다. 사용자 신호 목록 ~/.config/root-cause/signals.txt, 끄기 ROOT_CAUSE_OFF=1"
     }
   ]
 }
