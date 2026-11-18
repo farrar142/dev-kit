@@ -16,7 +16,7 @@ test('긴급: 바쁜 세션에는 다음 도구 호출 뒤에 본문이 들어�
   host.toolCall()
   await flush()
   expect(host.injected.length).toBe(1)
-  expect(host.injected[0]).toContain(`[긴급 Agent Mail #${id}] team/lead | s${id}`)
+  expect(host.injected[0]).toContain(`[긴급 메일 #${id}] team/lead | s${id}`)
   expect(host.injected[0]).toContain('배포 멈춰라')
   expect(mail.status(id)).toBe('read')
   expect(host.turns).toEqual([]) // 새 턴을 만들지 않는다.
@@ -52,7 +52,7 @@ test('긴급: 본문이 상한을 넘으면 자르고 전문을 읽을 ID를 붙
   const text = urgentText({ id: 42, sender: 'a/b', subject: 'x' }, long)
   expect(text).toContain('가'.repeat(URGENT_MAX_CHARS))
   expect(text).not.toContain('가'.repeat(URGENT_MAX_CHARS + 1))
-  expect(text).toContain('전문은 agent-mail read 42')
+  expect(text).toContain('전문은 switchboard read 42')
   expect(urgentText({ id: 7 }, '짧음')).not.toContain('전문은')
 
   const { host, mail } = await setup()

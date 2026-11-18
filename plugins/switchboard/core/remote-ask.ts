@@ -1,4 +1,4 @@
-// 원격 질문 — 묻는 쪽(#111): 프로필이 있는 세션의 ask 를 Agent Mail 서버 질문으로 올리고, 답 메일을 세션 입력으로 바꾸고,
+// 원격 질문 — 묻는 쪽(#111): 프로필이 있는 세션의 ask 를 switchboard 서버 질문으로 올리고, 답 메일을 세션 입력으로 바꾸고,
 // resolve 를 거두기로 잇는다.
 //  - 올리기: POST /api/questions(대장 세션도, #138). 201 이면 서버 질문, 403(can_ask 꺼짐)·409(옛 서버: 답할 대장 없음 — 결과에
 //    까닭을 붙이지 않는다)·400(모양)·연결 실패·5xx 면 로컬 패널로.
@@ -159,8 +159,8 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
 export const remoteAskText = (id: string, asker: string, resolveTool: string, here = false) =>
   [
     here
-      ? `원격 질문 ${id} 로 올렸다(Agent Mail 서버, 묻는 역할 ${asker || '?'}). 이 세션의 질문 패널과 관리 대시보드에 뜬다.`
-      : `원격 질문 ${id} 로 올렸다(Agent Mail 서버, 묻는 역할 ${asker || '?'}). 이 세션의 질문 패널에는 띄우지 않는다 — 대장 세션의 패널이나 관리 대시보드에서 사람이 답한다.`,
+      ? `원격 질문 ${id} 로 올렸다(switchboard 서버, 묻는 역할 ${asker || '?'}). 이 세션의 질문 패널과 관리 대시보드에 뜬다.`
+      : `원격 질문 ${id} 로 올렸다(switchboard 서버, 묻는 역할 ${asker || '?'}). 이 세션의 질문 패널에는 띄우지 않는다 — 대장 세션의 패널이나 관리 대시보드에서 사람이 답한다.`,
     `질문을 대화창에 다시 쓰지 말고 「원격 질문으로 올렸습니다(${id})」 정도로 짧게 말하고 턴을 마쳐라. AskUserQuestion으로 다시 묻지 마라.`,
     `답은 「[질문 패널 답 ${id}] 질문 = 고른 것」 메시지로 온다(세션이 compact·재시작돼도 역할 주소 메일로 온다). 답을 받기 전에 필요 없어지면 ${resolveTool}(id=${id})로 거둬라.`,
   ].join('\n')

@@ -64,6 +64,8 @@ const BASH_ALLOW = [
   /^gh\s+run\s+(view|list)(\s|$)/,
   /^(python3?|py)\s+\S*wait-(ci|deploy)\.py(\s|$)/,
   /^orca\s+orchestration\s+(send|reply)(\s|$)/,
+  /^((SWITCHBOARD_PROFILE|SWITCHBOARD_ROLE)=\S+\s+)*(\S*[\\/])?switchboard(\.exe)?\s+(send|reply|complete|ack)(\s|$)/,
+  // 옛 이름 agent-mail·AGENT_MAIL_PROFILE: 3단계에 제거
   /^(AGENT_MAIL_PROFILE=\S+\s+)?(\S*\/)?agent-mail\s+(send|reply|complete|ack)(\s|$)/,
   /^(kill|fuser\s+-k)(\s|$)/,
 ];

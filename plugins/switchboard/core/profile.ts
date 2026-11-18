@@ -1,19 +1,20 @@
-// Agent Mail 프로필 파일 위치. agent-mail CLI(cmd/agent-mail/cli.go configPath)와 같은 규칙을 따른다:
+// 메일함 프로필 파일 위치. switchboard CLI(configPath)와 같은 규칙을 따른다:
 //  - 이름: `SWITCHBOARD_PROFILE`, 없으면 옛 이름 `AGENT_MAIL_PROFILE`(영문·숫자·`-`·`_`, 64자 이하). `default` 는 `config.json`.
 //  - 폴더: `SWITCHBOARD_CONFIG_DIR`(없으면 옛 `AGENT_MAIL_CONFIG_DIR`)이 있으면 그 폴더 바로 아래, 없으면 Go
 //    `os.UserConfigDir()` 아래 `switchboard/` 먼저, 그다음 옛 `agent-mail/`
 //    (Windows `%APPDATA%`, macOS `~/Library/Application Support`, 그 밖 `$XDG_CONFIG_HOME` → `~/.config`).
 //  - 홈: `HOME` → `USERPROFILE`(Windows 의 Claude 프로세스에는 HOME 이 없다).
-// 옛 switchboard 가 보던 `~/.config/agent-mail` 은 CLI 자리와 다를 때 뒤의 후보로 남긴다(옮기기 전 파일).
+// 옛 자리 `~/.config/agent-mail` 은 CLI 자리와 다를 때 뒤의 후보로 남긴다(옮기기 전 파일).
+// 옛 이름(AGENT_MAIL_*·agent-mail 폴더)은 대체값으로만 읽는다. // 3단계에 제거
 
 export type ProfilePlatform = 'windows' | 'macos' | 'linux' | 'wsl' | 'unknown'
 
 /** 규칙이 읽는 환경변수. 없으면 undefined. */
 export type ProfileEnv = {
   SWITCHBOARD_PROFILE?: string | undefined
-  AGENT_MAIL_PROFILE?: string | undefined
+  AGENT_MAIL_PROFILE?: string | undefined // 3단계에 제거
   SWITCHBOARD_CONFIG_DIR?: string | undefined
-  AGENT_MAIL_CONFIG_DIR?: string | undefined
+  AGENT_MAIL_CONFIG_DIR?: string | undefined // 3단계에 제거
   APPDATA?: string | undefined
   XDG_CONFIG_HOME?: string | undefined
   HOME?: string | undefined
@@ -38,7 +39,7 @@ export const pickEnv = (fresh: string | undefined, old: string | undefined, fres
 const join = (sep: string, base: string, ...parts: string[]) => [base.replace(/[\\/]+$/, ''), ...parts].join(sep)
 
 export const profileLocation = (platform: ProfilePlatform, env: ProfileEnv): ProfileLocation => {
-  const picked = pickEnv(env.SWITCHBOARD_PROFILE, env.AGENT_MAIL_PROFILE, 'SWITCHBOARD_PROFILE', 'AGENT_MAIL_PROFILE')
+  const picked = pickEnv(env.SWITCHBOARD_PROFILE, env.AGENT_MAIL_PROFILE, 'SWITCHBOARD_PROFILE', 'AGENT_MAIL_PROFILE') // 옛 이름은 3단계에 제거
   const name = picked.value
   if (name === '') return { off: true }
   // 경로 글자가 든 이름은 다른 파일을 읽게 되므로 받지 않는다(CLI 도 같은 이름 규칙으로 거절한다).
@@ -47,7 +48,7 @@ export const profileLocation = (platform: ProfilePlatform, env: ProfileEnv): Pro
   const win = platform === 'windows'
   const sep = win ? '\\' : '/'
   const home = clean(env.HOME) || clean(env.USERPROFILE)
-  const override = pickEnv(env.SWITCHBOARD_CONFIG_DIR, env.AGENT_MAIL_CONFIG_DIR, '', '').value
+  const override = pickEnv(env.SWITCHBOARD_CONFIG_DIR, env.AGENT_MAIL_CONFIG_DIR, '', '').value // 옛 이름은 3단계에 제거
   if (override !== '') return { paths: [join(sep, override, file)] }
 
   let dir = ''
@@ -61,9 +62,9 @@ export const profileLocation = (platform: ProfilePlatform, env: ProfileEnv): Pro
     dir = xdg !== '' ? xdg : home !== '' ? join(sep, home, '.config') : ''
   }
   const paths: string[] = []
-  // 새 폴더(switchboard) 먼저, 없으면 옛 폴더(agent-mail).
+  // 프로필마다 새 폴더(switchboard) 먼저, 없으면 옛 폴더(agent-mail). // 3단계에 제거(옛 폴더)
   if (dir !== '') paths.push(join(sep, dir, 'switchboard', file), join(sep, dir, 'agent-mail', file))
-  // 옛 자리(~/.config/agent-mail): CLI 자리와 다를 때만 뒤에 둔다.
+  // 옛 자리(~/.config/agent-mail): CLI 자리와 다를 때만 뒤에 둔다. // 3단계에 제거
   if (home !== '') {
     const legacy = join(sep, home, '.config', 'agent-mail', file)
     if (!paths.includes(legacy)) paths.push(legacy)

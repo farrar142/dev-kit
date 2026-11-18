@@ -1,4 +1,4 @@
-// 원격 질문 — 묻는 쪽(#111): 가짜 Agent Mail 서버(#106 댓글 「remote questions API」)로 코어를 돌린다.
+// 원격 질문 — 묻는 쪽(#111): 가짜 switchboard 서버(#106 댓글 「remote questions API」)로 코어를 돌린다.
 import { expect, test } from 'claude-code/testing'
 
 import type { QuestionPanelQuestion } from '../types'
@@ -13,7 +13,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-q'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 // 서버 시스템 보낸이: 새 이름(#144). 옛 이름도 알아본다.
 const SYSTEM = 'switchboard/system'
 const OLD_SYSTEM = 'agent-mail/system'

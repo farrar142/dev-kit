@@ -866,7 +866,7 @@ const RID = `q_${'c'.repeat(32)}`
 const forwarded: any[] = []
 async function setupRemote($: any, on: any, ask: { status: number; text: string } | 'down') {
   const hits: { url: string; method: string }[] = []
-  on('env.get', (_: any, e: any) => ({ value: ({ AGENT_MAIL_PROFILE: 'sbtest', AGENT_MAIL_CONFIG_DIR: '/cfg' } as Record<string, string>)[e.name] }))
+  on('env.get', (_: any, e: any) => ({ value: ({ SWITCHBOARD_PROFILE: 'sbtest', SWITCHBOARD_CONFIG_DIR: '/cfg' } as Record<string, string>)[e.name] }))
   on('fs.exists', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' }))
   on('fs.read', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' ? JSON.stringify({ endpoint: 'http://mail.test', role: 'team/worker', token: 'tok' }) : '' }))
   on('http.fetch', (_: any, e: any) => {
@@ -940,7 +940,7 @@ const BID = `q_${'d'.repeat(32)}`
 async function setupBoss($: any, on: any, bosses: string) {
   const hits: { url: string; method: string; body?: string }[] = []
   on('env.get', (_: any, e: any) => ({
-    value: ({ AGENT_MAIL_PROFILE: 'sbboss', AGENT_MAIL_CONFIG_DIR: '/cfg', SWITCHBOARD_BOSS_ROLES: bosses } as Record<string, string>)[e.name],
+    value: ({ SWITCHBOARD_PROFILE: 'sbboss', SWITCHBOARD_CONFIG_DIR: '/cfg', SWITCHBOARD_BOSS_ROLES: bosses } as Record<string, string>)[e.name],
   }))
   on('fs.exists', (_: any, e: any) => ({ value: e.path === '/cfg/sbboss.json' }))
   on('fs.read', (_: any, e: any) => ({ value: e.path === '/cfg/sbboss.json' ? JSON.stringify({ endpoint: 'http://mail.test', role: 'team/lead', token: 'tok' }) : '' }))

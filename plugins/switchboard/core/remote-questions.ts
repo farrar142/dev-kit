@@ -1,4 +1,4 @@
-// 원격 질문(#106) 서버 클라이언트: Agent Mail 서버의 질문 API(/api/questions…)를 부른다.
+// 원격 질문(#106) 서버 클라이언트: switchboard 서버의 질문 API(/api/questions…)를 부른다.
 // 묻는 쪽(#111, remote-ask.ts)과 서버 질문을 끌어와 답하는 대장 쪽(#112)이 함께 쓴다.
 //  - 인증은 메일함의 call(같은 `Authorization: Bearer` + `X-Switchboard-Role`·옛 `X-Agent-Mail-Role`, 지금 번호 역할)로 한다. 토큰은 여기 오지 않는다.
 //  - 서버 계약: #106 댓글 「remote questions API」. 상태 코드는 그대로 돌려주고 뜻은 부르는 쪽이 정한다.

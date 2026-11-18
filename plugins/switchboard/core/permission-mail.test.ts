@@ -1,4 +1,4 @@
-// D8 원격 권한 답·서버 시스템 통지·멈춤 통지·번호 역할 넘기기: 가짜 Agent Mail 서버(#73 서버 계약 4·6)로 코어를 돌린다.
+// D8 원격 권한 답·서버 시스템 통지·멈춤 통지·번호 역할 넘기기: 가짜 switchboard 서버(#73 서버 계약 4·6)로 코어를 돌린다.
 import { expect, test } from 'claude-code/testing'
 
 import type { HttpInit } from './host'
@@ -10,7 +10,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-d8'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 // 새 시스템 보낸이(#144). 권한 메일·서버 시스템 통지가 이 이름으로도 돈다.
 const SYSTEM = 'switchboard/system'
 
@@ -314,7 +314,7 @@ test('통지: 서버 시스템 보낸이(멈춤·라벨 미연결)의 일반 메
   await clock.advance(EMPTY_GAP_MS)
   await flush()
   const text = lead.host.turns.join('\n')
-  expect(text).toContain(`[Agent Mail #${m.id} 시스템 통지] ${SYSTEM} | offline: team/worker-1`)
+  expect(text).toContain(`[메일 #${m.id} 시스템 통지] ${SYSTEM} | offline: team/worker-1`)
   expect(text).toContain('label 81, machine box-w')
   expect(text).not.toContain('을 읽고 처리하라')
   expect(m.status).toBe('read')

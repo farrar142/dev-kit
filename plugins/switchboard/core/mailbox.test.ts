@@ -1,4 +1,4 @@
-// 메일함(D2) 코어 시험: 가짜 어댑터와 가짜 Agent Mail 서버(긴 대기)로 바깥에서 본다.
+// 메일함(D2) 코어 시험: 가짜 어댑터와 가짜 switchboard 서버(긴 대기)로 바깥에서 본다.
 // 보는 것: 어떤 메일이 언제 어떤 글로 세션에 들어가는가, 서버에 무엇을 보내는가(토큰이 새지 않는가).
 import { expect, test } from 'claude-code/testing'
 
@@ -16,7 +16,7 @@ test('메일함: 유휴 세션은 메일 한 통으로 깨어나 ID만 담은 �
   const id = mail.send()
   await flush()
   expect(host.turns).toEqual([announce([id])])
-  expect(host.turns[0]).toBe('Agent Mail #1 을 읽고 처리하라(agent-mail read <ID>).')
+  expect(host.turns[0]).toBe('메일 #1 을 읽고 처리하라(switchboard read <ID>).')
 })
 
 test('메일함: 바쁜 동안 쌓인 메일은 턴이 끝난 뒤 한 줄로 묶인다', async () => {

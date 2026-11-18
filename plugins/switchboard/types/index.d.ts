@@ -38,7 +38,7 @@ export type QuestionPanelBatch = {
    */
   key?: string
   /**
-   * 원격 질문(switchboard 0.11.0, 대장 세션): Agent Mail 서버 질문을 끌어와 올린 묶음. 답은 세션 턴이 아니라 서버(POST answer)로 간다.
+   * 원격 질문(switchboard 0.11.0, 대장 세션): switchboard 서버 질문을 끌어와 올린 묶음. 답은 세션 턴이 아니라 서버(POST answer)로 간다.
    * via remote-answered: 다른 곳(대시보드·다른 대장)에서 답함, remote-withdrawn: 묻는 쪽이 거둠, remote-taken: 보냈더니 이미 답함·거둠(409).
    */
   remote?: QuestionPanelRemote

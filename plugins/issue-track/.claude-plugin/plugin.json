@@ -1,6 +1,6 @@
 {
   "name": "issue-track",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "GitHub 이슈 한 트랙 조율 흐름 — issue-track 스킬, issue-worker·errand 에이전트, 원격 세션 맡기기, 플러그인 갱신 스크립트",
   "author": { "name": "farrar142" },
   "repository": "https://github.com/farrar142/dev-kit"
