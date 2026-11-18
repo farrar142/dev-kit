@@ -10,8 +10,12 @@ const CONTEXT = [
   '`diagnosing-bugs` 스킬이 있으면 그것을 쓴다.',
 ].join('\n');
 
+// 질문 패널 답은 사용자가 고른 선택지를 옮긴 글이라 문제 신고가 아니다.
+const PANEL_ANSWER = /^\s*\[질문 패널 답/;
+
 function contextFor(prompt) {
   if (disabled()) return null;
+  if (PANEL_ANSWER.test(prompt || '')) return null;
   const hits = signalHits(prompt || '');
   if (!hits.length) return null;
   return `${CONTEXT}\n(신호: ${hits.slice(0, 4).join(', ')})`;
