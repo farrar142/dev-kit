@@ -195,3 +195,87 @@ test('원인 줄 있는 메일·짧은 확인 메일·일반 보고는 통과', 
 test('bash -c 안의 명령도 본다', () => {
   assert.ok(blocked(bash("bash -c \"gh pr create --title 'fix: 오류' --body '고침'\"")));
 });
+
+// ── Stop ──
+
+const STOP = path.join(__dirname, '..', 'hooks', 'stop.js');
+const logPath = path.join(tmp, 'state', 'log.jsonl');
+
+function transcript(name, entries) {
+  const f = path.join(tmp, name);
+  fs.writeFileSync(f, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  return f;
+}
+const userMsg = (text) => ({ type: 'user', message: { role: 'user', content: text } });
+const toolUse = () => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} }] } });
+const toolResult = () => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] } });
+const say = (text) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });
+
+let seq = 0;
+// 도구 호출 1회 + 답 글 text 인 턴으로 Stop 을 돌린다.
+function stop(text, extra = {}, { tools = true, env = {} } = {}) {
+  const file = transcript(`t${seq++}.jsonl`, [userMsg('원인이 뭐야'), ...(tools ? [toolUse(), toolResult()] : []), say(text)]);
+  return run(STOP, { hook_event_name: 'Stop', transcript_path: file, ...extra }, { ROOT_CAUSE_LOG: logPath, ...env });
+}
+
+test('Stop: 단정한 근본 원인 + 증거 없음 → 막고 고칠 법을 말한다', () => {
+  const r = stop('근본 원인: 배포가 매번 이미지를 새로 받는다.');
+  assert.ok(blocked(r));
+  assert.match(r.stderr, /증거:/);
+  assert.match(r.stderr, /미확인 — /);
+});
+
+test('Stop: 모양 있는 증거는 통과한다', () => {
+  for (const ev of ['`docker ps` 출력', 'deploy/app.yml 14행', '이슈 #153', '커밋 1edebe4', '03:12 로그', 'src/a.js:42']) {
+    const r = stop(`근본 원인: 태그가 떠다닌다.\n증거: ${ev}`);
+    assert.strictEqual(r.status, 0, ev + r.stderr);
+  }
+});
+
+test('Stop: 「증거: 확인함」은 막는다', () => {
+  assert.ok(blocked(stop('근본 원인: 캐시 만료.\n증거: 확인함')));
+});
+
+test('Stop: 해당 없음·미확인은 통과한다', () => {
+  assert.strictEqual(stop('근본 원인: 해당 없음 — 기능 추가').status, 0);
+  assert.strictEqual(stop('**근본 원인:** 미확인 — 로그부터 본다').status, 0);
+});
+
+test('Stop: 코드 펜스·인용 안의 줄은 보지 않는다', () => {
+  assert.strictEqual(stop('예시:\n```\n근본 원인: 캐시 만료\n```').status, 0);
+  assert.strictEqual(stop('> 근본 원인: 캐시 만료').status, 0);
+});
+
+test('Stop: stop_hook_active 면 통과한다', () => {
+  assert.strictEqual(stop('근본 원인: 캐시 만료.', { stop_hook_active: true }).status, 0);
+});
+
+test('Stop: transcript 를 못 읽으면 통과한다', () => {
+  const r = run(STOP, { hook_event_name: 'Stop', transcript_path: path.join(tmp, 'nope.jsonl') }, { ROOT_CAUSE_LOG: logPath });
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(run(STOP, { hook_event_name: 'Stop' }).status, 0);
+});
+
+test('Stop: 도구 호출 0 + 단정은 막지 않고 한 줄 기록한다', () => {
+  try { fs.unlinkSync(logPath); } catch {}
+  const r = stop('근본 원인: 캐시 만료.', {}, { tools: false });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const rows = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  assert.strictEqual(rows.length, 1);
+  assert.match(JSON.parse(rows[0]).claims[0], /캐시 만료/);
+});
+
+test('Stop: 턴 경계는 사람·주입 메시지다(이전 턴의 줄은 보지 않는다)', () => {
+  const file = transcript('prev.jsonl', [userMsg('a'), toolUse(), toolResult(), say('근본 원인: 캐시 만료.'), userMsg('[주입] 다음'), toolUse(), toolResult(), say('끝냈습니다.')]);
+  assert.strictEqual(run(STOP, { hook_event_name: 'Stop', transcript_path: file }, { ROOT_CAUSE_LOG: logPath }).status, 0);
+});
+
+test('Stop: 끄기 스위치를 따른다', () => {
+  assert.strictEqual(stop('근본 원인: 캐시 만료.', {}, { env: { ROOT_CAUSE_OFF: '1' } }).status, 0);
+});
+
+test('Stop: 입력이 마지막 답 글을 직접 주면 그것을 쓴다', () => {
+  const file = transcript(`t${seq++}.jsonl`, [userMsg('x'), toolUse(), toolResult()]);
+  const r = run(STOP, { hook_event_name: 'Stop', transcript_path: file, last_assistant_message: '근본 원인: 캐시 만료.' }, { ROOT_CAUSE_LOG: logPath });
+  assert.ok(blocked(r));
+});

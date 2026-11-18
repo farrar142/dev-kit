@@ -18,6 +18,7 @@ const os = require('os');
 const path = require('path');
 const { parseCommands } = require('./shell');
 const { loadSignals, disabled, readStdin } = require('./signals');
+const { hasRootCause } = require('./rootline');
 
 const LEAD = new Set(['{', '!', 'then', 'do', 'else', 'elif', 'if', 'while', 'until', 'time', 'command', 'exec', 'nohup', 'env', 'sudo']);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash']);
@@ -138,10 +139,6 @@ function readMessage(t) {
   }
   return { title: title.join('\n'), body: body.join('\n'), unreadable };
 }
-
-const ROOT_LINE = /^[ \t>*_-]*(?:\*\*|__)?(?:근본\s?원인|root[ -]?cause)(?:\*\*|__)?\s*[:：]\s*(?:\*\*|__)?\s*\S.{1,}/im;
-const ROOT_HEAD = /^#{1,6}\s*(?:근본\s?원인|root[ -]?cause)[^\n]*\n+\s*\S/im;
-const hasRootCause = (text) => ROOT_LINE.test(text) || ROOT_HEAD.test(text);
 
 const FIX_TITLE = /^\s*(?:\[[^\]]*\]\s*)*(?:(?:hot|bug)?fix(?:\([^)]*\))?!?\s*[:：]|hotfix\b|bugfix\b)|\bhotfix\b/i;
 const NON_FIX_TITLE = /^\s*(?:\[[^\]]*\]\s*)*(?:feat|feature|docs?|chore|test|tests|refactor|style|build|ci|release)(?:\([^)]*\))?!?\s*[:：]/i;
