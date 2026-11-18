@@ -8,12 +8,15 @@
 //  - 연결 실패·서버 오류는 간격을 두 배씩 늘려(상한 있음) 다시 해 본다. 400(커서가 틀림)이면 처음부터 다시 채운다.
 //  - 답: POST /api/questions/{id}/answer. 200 ok, 409·404 closed(이미 답함·거둠·없음), 그 밖 failed.
 //    답은 이 세션의 턴으로 넣지 않는다 — 묻는 세션이 답 메일로 받는다.
+//  - 자기 질문(#138): 이 역할이 물은 질문(own)은 can_answer 가 거짓이어도 한 번 올린다(묻는 쪽은 패널에 따로 띄우지 않는다).
+//    패널 답은 서버로 먼저 보내고, 서버가 받지 않으면(403·연결 실패 등) 거두고(withdraw) 답 글을 이 세션에 직접 넣게
+//    돌려준다(self). 그때 settle 로 뒤에 오는 답 메일을 막는다.
 import type { AgentHost, Timer } from './host'
 import type { Mailbox } from './mailbox'
 import { POLL_TIMEOUT_S } from './mailbox'
 import { isBossRole } from './boss'
 import type { RemoteAnswerOutcome } from './questions'
-import { createQuestionsApi } from './remote-questions'
+import { createQuestionsApi, remoteAnswerText } from './remote-questions'
 import type { QuestionsApi, RemoteAnswer, RemoteQuestion } from './remote-questions'
 
 /** 패널 쪽(어댑터가 질문 패널 코어로 잇는다). */
@@ -39,6 +42,10 @@ export type RemoteInboxOptions = {
   /** 대장이 아닐 때 역할을 다시 볼 간격(ms). */
   idleMs?: number
   log?: (text: string) => void
+  /** 이 역할이 물은 질문인가(remote-ask owns). */
+  own?: (q: RemoteQuestion) => boolean
+  /** 자기 질문의 답을 세션에 직접 넣는다: 뒤에 오는 답 메일을 막는다(remote-ask settle). */
+  settle?: (id: string) => void
 }
 
 export type RemoteInbox = {
@@ -85,6 +92,15 @@ export const createRemoteInbox = (
     seen.push(id)
     if (seen.length > REMEMBER) seen.shift()
   }
+  /** 패널에 올린 자기 질문(답 글을 만들 문항). */
+  const owned = new Map<string, RemoteQuestion>()
+  const isOwn = (q: RemoteQuestion) => {
+    try {
+      return opts.own?.(q) === true
+    } catch {
+      return false
+    }
+  }
 
   const sleep = (ms: number) =>
     new Promise<void>(done => {
@@ -98,13 +114,19 @@ export const createRemoteInbox = (
   const take = async (q: RemoteQuestion) => {
     try {
       if (q.status === 'pending') {
-        if (!q.can_answer || seen.includes(q.id)) return
+        const own = isOwn(q)
+        if ((!q.can_answer && !own) || seen.includes(q.id)) return
         remember(q.id)
+        if (own) {
+          owned.set(q.id, q)
+          if (owned.size > REMEMBER) owned.delete(owned.keys().next().value as string)
+        }
         await opts.sink.offer(q)
         log(`switchboard 질문: 원격 질문 ${q.id}(${q.asker || '?'})을 패널에 올렸다`)
 
         return
       }
+      owned.delete(q.id)
       await opts.sink.close(q)
     } catch {
       // 패널에 못 올려도 루프는 간다.
@@ -205,6 +227,17 @@ export const createRemoteInbox = (
     }
     if (r.status === 409) return { kind: 'closed', reason: '이미 답이 났거나 거둔 질문(409)' }
     if (r.status === 404) return { kind: 'closed', reason: '서버에 없는 질문(404)' }
+    const mine = owned.get(id)
+    if (mine !== undefined) {
+      // 자기 질문을 서버가 답으로 받지 않았다(대표만 답하는 질문 등): 거두고 답은 이 세션에 직접 넣는다.
+      opts.settle?.(id)
+      owned.delete(id)
+      const w = await api.withdraw(id)
+      if (!w.ok && w.status === 409) log(`switchboard 질문: 원격 질문 ${id}은 이미 답이 났거나 거둬졌다 — 패널 답을 넣는다`)
+      log(`switchboard 질문: 원격 질문 ${id}(자기 질문) 패널 답을 세션에 넣는다(서버 답 ${r.status ?? '연결 실패'})`)
+
+      return { kind: 'self', text: remoteAnswerText({ ...mine, answers: [...answers], answered_by: '이 세션 패널' }) }
+    }
     if (r.status === null) return { kind: 'failed', reason: '서버에 닿지 않음' }
     if (r.status === 403) return { kind: 'failed', reason: '이 역할은 이 질문에 답할 수 없음(403)' }
 

@@ -34,14 +34,38 @@ const ITEMS: RemoteItem[] = [
   { header: '기능', question: '넣을 기능은?', options: [{ label: '검색', description: '' }, { label: '알림', description: '' }], multiSelect: true },
 ]
 
-/** 가짜 서버: 메일 긴 대기(늘 빔)와 질문 API(목록·poll·답). down 이면 질문 API 가 연결 실패. */
+type Mail = { id: number; to: string; sender: string; subject: string; body: string; task_id: string; status: 'pending' | 'read' }
+
+/**
+ * 가짜 서버: 메일 긴 대기(답 메일)와 질문 API(올리기·목록·poll·보기·답·거두기). down 이면 질문 API 가 연결 실패.
+ * ownerOnly 면 묻는 쪽과 같은 base 의 답은 403(대표만 답하는 대장 자기 질문, #138).
+ */
 const fakeServer = () => {
   const questions: RemoteQuestion[] = []
   const answered: { id: string; role: string; body: unknown }[] = []
   const calls: string[] = []
+  const mails: Mail[] = []
   let seq = 0
   let down = false
+  let ownerOnly = false
   let waiters: (() => void)[] = []
+  let mailWaiters: (() => void)[] = []
+  /** 서버처럼 묻는 역할 앞으로 답 메일을 보낸다. */
+  const mailAnswer = (q: RemoteQuestion) => {
+    const lines = q.questions.map((item, i) => `${item.header}: ${item.question} = ${q.answers?.[i]?.selected.join(', ') ?? ''}`)
+    mails.push({
+      id: mails.length + 1,
+      to: q.asker,
+      sender: 'agent-mail/system',
+      subject: `[질문 답] ${q.id} ${q.questions[0]!.header}`,
+      body: [...lines, `답한 쪽: ${q.answered_by}`].join('\n'),
+      task_id: q.id,
+      status: 'pending',
+    })
+    const w = mailWaiters
+    mailWaiters = []
+    for (const done of w) done()
+  }
   const base = (role: string) => role.replace(/-\d+$/, '')
   const hex = (n: number) => n.toString(16).padStart(32, '0')
   const bump = (q: RemoteQuestion) => {
@@ -54,12 +78,28 @@ const fakeServer = () => {
 
   const attach = (host: FakeHost, role: string) => {
     const authed = (init: HttpInit) => init.headers?.Authorization === `Bearer ${TOKEN}` && init.headers['X-Switchboard-Role'] === role
-    host.http.route(`${EP}/api/events/poll`, async ({ url }: { url: string; init: HttpInit }) => {
-      const timeout = Number(new URL(url).searchParams.get('timeout') ?? '25')
-      await new Promise<void>(done => void host.clock.after(timeout * 1000, done))
-      const after = Number(new URL(url).searchParams.get('after') ?? '0')
+    host.http.route(`${EP}/api/messages/`, ({ url }: { url: string; init: HttpInit }) => {
+      const m = /\/api\/messages\/(\d+)(\/read)?$/.exec(url)
+      const mail = m === null ? undefined : mails.find(x => x.id === Number(m[1]))
+      if (mail === undefined) return { status: 404 }
+      mail.status = 'read'
 
-      return { text: JSON.stringify({ events: [], cursor: Math.max(0, after) }) }
+      return { text: JSON.stringify({ id: mail.id, body: mail.body, status: 'read' }) }
+    })
+    host.http.route(`${EP}/api/events/poll`, async ({ url }: { url: string; init: HttpInit }) => {
+      const q = new URL(url).searchParams
+      const after = q.has('after') ? Number(q.get('after')) : -1
+      const timeout = Number(q.get('timeout') ?? '25')
+      const list = () => mails.filter(m => m.to === role && m.status === 'pending' && m.id > after)
+      if (list().length === 0 && timeout > 0) {
+        await new Promise<void>(done => {
+          mailWaiters.push(done)
+          host.clock.after(timeout * 1000, done)
+        })
+      }
+      const events = list().map(m => ({ id: m.id, sender: m.sender, subject: m.subject, priority: 'normal', task_id: m.task_id }))
+
+      return { text: JSON.stringify({ events, cursor: events.length > 0 ? events[events.length - 1]!.id : Math.max(after, 0) }) }
     })
     host.http.route(`${EP}/api/questions`, async ({ url, init }: { url: string; init: HttpInit }) => {
       if (!authed(init)) return { status: 401 }
@@ -82,6 +122,24 @@ const fakeServer = () => {
 
         return { text: JSON.stringify({ questions: got.map(q => view(q, role)), cursor: got.length > 0 ? got[got.length - 1]!.seq : after }) }
       }
+      if (u.pathname === '/api/questions' && init.method === 'POST') {
+        const body = JSON.parse(init.body ?? '{}') as { questions: RemoteItem[] }
+        const q = ask(role, body.questions)
+
+        return { status: 201, text: JSON.stringify(view(q, role)) }
+      }
+      const one = /^\/api\/questions\/(q_[0-9a-f]+)(\/withdraw)?$/.exec(u.pathname)
+      if (one !== null) {
+        const q = questions.find(x => x.id === one[1])
+        if (q === undefined) return { status: 404, text: JSON.stringify({ error: 'not found' }) }
+        if (one[2] === undefined) return { text: JSON.stringify(view(q, role)) }
+        if (base(q.asker) !== base(role)) return { status: 403, text: JSON.stringify({ error: 'forbidden' }) }
+        if (q.status !== 'pending') return { status: 409, text: JSON.stringify({ error: 'not pending' }) }
+        q.status = 'withdrawn'
+        bump(q)
+
+        return { text: JSON.stringify(view(q, role)) }
+      }
       if (u.pathname === '/api/questions' && (init.method ?? 'GET') === 'GET') {
         const status = u.searchParams.get('status')
         const limit = Number(u.searchParams.get('limit') ?? '100')
@@ -95,6 +153,7 @@ const fakeServer = () => {
       const m = /^\/api\/questions\/(q_[0-9a-f]+)\/answer$/.exec(u.pathname)
       const q = m === null ? undefined : questions.find(x => x.id === m[1])
       if (q === undefined) return { status: 404, text: JSON.stringify({ error: 'not found' }) }
+      if (ownerOnly && base(q.asker) === base(role)) return { status: 403, text: JSON.stringify({ error: 'owner answers' }) }
       if (q.status !== 'pending') return { status: 409, text: JSON.stringify({ error: 'not pending' }) }
       const body = JSON.parse(init.body ?? '{}') as { answers: RemoteAnswer[] }
       answered.push({ id: q.id, role, body })
@@ -102,6 +161,7 @@ const fakeServer = () => {
       q.answers = body.answers
       q.answered_by = role
       bump(q)
+      mailAnswer(q)
 
       return { text: JSON.stringify(view(q, role)) }
     })
@@ -134,7 +194,9 @@ const fakeServer = () => {
     answered,
     calls,
     ask,
+    mails,
     setDown: (v: boolean) => void (down = v),
+    setOwnerOnly: (v: boolean) => void (ownerOnly = v),
     /** 대시보드가 먼저 답한다. */
     dashboard: (id: string) => {
       const q = questions.find(x => x.id === id)!
@@ -142,6 +204,7 @@ const fakeServer = () => {
       q.answers = q.questions.map(i => ({ selected: [i.options[0]!.label] }))
       q.answered_by = 'dashboard'
       bump(q)
+      mailAnswer(q)
     },
     withdraw: (id: string) => {
       const q = questions.find(x => x.id === id)!
@@ -254,10 +317,10 @@ test('원격 질문 대장: 시작할 때 대기 목록으로 채우고, 뒤에 
   const clock = fakeClock()
   const server = fakeServer()
   const first = server.ask()
-  // 대장 자신의 base 가 물은 것(can_answer false)은 올리지 않는다.
-  server.ask('team/lead-2')
+  // 대장 자신의 base 가 물은 것(can_answer false)도 자기 질문이라 올린다(#138).
+  const own = server.ask('team/lead-2')
   const s = await session(server, clock)
-  expect(s.queue.value().map(b => b.remote?.id)).toEqual([first.id])
+  expect(s.queue.value().map(b => b.remote?.id)).toEqual([first.id, own.id])
   const b = s.queue.value()[0]!
   expect(b.remote).toEqual({ id: first.id, asker: ASKER })
   expect(b.questions.map(q => q.question)).toEqual(['어느 DB를 쓸까요?', '넣을 기능은?'])
@@ -266,10 +329,10 @@ test('원격 질문 대장: 시작할 때 대기 목록으로 채우고, 뒤에 
 
   const second = server.ask('other/dev')
   await settle(clock)
-  expect(s.queue.value().map(b => b.remote?.id)).toEqual([first.id, second.id])
-  expect(s.queue.value()[1]!.remote?.asker).toBe('other/dev')
+  expect(s.queue.value().map(b => b.remote?.id)).toEqual([first.id, own.id, second.id])
+  expect(s.queue.value()[2]!.remote?.asker).toBe('other/dev')
   // 패널에 올린 묶음은 장부 도구로 Orca 질문 패널 폴더에도 남긴다.
-  expect(s.ledger.offers.map(o => o.remote.id)).toEqual([first.id, second.id])
+  expect(s.ledger.offers.map(o => o.remote.id)).toEqual([first.id, own.id, second.id])
   expect(s.ledger.offers[0]!.key).toBe(b.key!)
   expect(s.host.turns).toEqual([])
   await s.board.stop()
@@ -499,5 +562,99 @@ test('원격 질문 대장(#130): whoami 가 is_boss false 면 전역 목록에 
   await settle(clock)
   expect(server.calls).toEqual([])
   expect(s.queue.value()).toEqual([])
+  await s.board.stop()
+})
+
+const QS = ITEMS.map(i => ({ ...i, options: [...i.options], picked: [] as string[], other: '' }))
+
+/** 대장 세션이 스스로 질문을 올린다: 서버 질문 하나, 패널(대장 끌어오기)에 한 번. */
+const bossAsks = async (server: ReturnType<typeof fakeServer>, clock: FakeClock) => {
+  const s = await session(server, clock)
+  const r = await s.board.askRemote(QS)
+  if (r.kind !== 'remote') throw new Error('remote 가 아님')
+  await settle(clock)
+  const mine = s.queue.value().filter(b => b.remote?.id === r.id)
+  expect(mine.length).toBe(1)
+  expect(s.queue.value().length).toBe(1)
+
+  return { s, id: r.id, batch: mine[0]!.id }
+}
+
+test('대장 자기 질문(#138): 서버에 올린 질문은 같은 세션 패널에 한 번만 뜬다(poll 이 다시 실어 와도)', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const { s, id } = await bossAsks(server, clock)
+  expect(server.questions.map(q => q.id)).toEqual([id])
+  // 같은 질문이 poll 에 다시 실려 온다.
+  server.questions[0]!.seq = 50
+  server.ask('other/dev')
+  await settle(clock)
+  expect(s.queue.value().filter(b => b.remote?.id === id).length).toBe(1)
+  expect(s.host.turns).toEqual([])
+  await s.board.stop()
+})
+
+test('대장 자기 질문(#138): 서버가 패널 답을 받으면(200) 답 메일로 세션에 한 번만 들어간다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const { s, id, batch } = await bossAsks(server, clock)
+  await s.panel.pick(batch, 0, 'SQLite')
+  await s.panel.pick(batch, 1, '검색')
+  await s.panel.finish(batch)
+  await settle(clock)
+  expect(server.answered.map(a => a.id)).toEqual([id])
+  expect(s.host.turns.length).toBe(1)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 어느 DB를 쓸까요? = SQLite`)
+  await settle(clock)
+  expect(s.host.turns.length).toBe(1)
+  await s.board.stop()
+})
+
+test('대장 자기 질문(#138): 서버가 패널 답을 받지 않으면(403) 거두고 답을 세션에 한 번 넣는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  server.setOwnerOnly(true)
+  const { s, id, batch } = await bossAsks(server, clock)
+  await s.panel.pick(batch, 0, 'Postgres')
+  await s.panel.pick(batch, 1, '알림')
+  await s.panel.finish(batch)
+  await settle(clock)
+  expect(server.answered).toEqual([])
+  expect(server.questions[0]!.status).toBe('withdrawn')
+  expect(s.host.turns.length).toBe(1)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 어느 DB를 쓸까요? = Postgres`)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 넣을 기능은? = 알림`)
+  expect(s.queue.value()[0]!.status).toBe('sent')
+  await s.board.stop()
+})
+
+test('대장 자기 질문(#138): 서버에 닿지 않아 패널 답을 넣었으면 뒤에 대시보드 답 메일이 와도 다시 넣지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const { s, id, batch } = await bossAsks(server, clock)
+  server.setDown(true)
+  await s.panel.pick(batch, 0, 'SQLite')
+  await s.panel.pick(batch, 1, '검색')
+  await s.panel.finish(batch)
+  await flush()
+  expect(s.host.turns.length).toBe(1)
+  server.setDown(false)
+  server.dashboard(id)
+  await settle(clock)
+  expect(server.mails.length).toBe(1)
+  expect(server.mails[0]!.status).toBe('read')
+  expect(s.host.turns.length).toBe(1)
+  await s.board.stop()
+})
+
+test('대장 자기 질문(#138): 대시보드가 먼저 답하면 패널 묶음은 닫히고 답 메일만 한 번 들어간다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const { s, id } = await bossAsks(server, clock)
+  server.dashboard(id)
+  await settle(clock)
+  expect(pending(s.queue.value())).toEqual([])
+  expect(s.host.turns.length).toBe(1)
+  expect(s.host.turns[0]).toContain(`[질문 패널 답 ${id}] 어느 DB를 쓸까요? = Postgres`)
   await s.board.stop()
 })

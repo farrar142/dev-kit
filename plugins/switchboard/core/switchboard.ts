@@ -439,7 +439,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       const rq = opts.remoteQuestions
       if (rq !== undefined && mailbox.state().status !== 'off') {
         const { sink, ...rest } = rq
-        inbox = createRemoteInbox(host, mailbox, { ...rest, sink, bosses: opts.permissions?.bosses ?? [], isBoss: judge.isBoss, log })
+        inbox = createRemoteInbox(host, mailbox, { ...rest, sink, bosses: opts.permissions?.bosses ?? [], isBoss: judge.isBoss, log, own: ask.owns, settle: ask.settle })
         inbox.start()
       }
     }
