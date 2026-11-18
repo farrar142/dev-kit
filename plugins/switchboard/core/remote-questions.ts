@@ -5,7 +5,7 @@
 //  - 응답 모양이 틀리면 ok:false(status 는 서버의 것)로 돌려준다. 연결 실패·시간 초과는 status null.
 import type { QuestionPanelQuestion } from '../types'
 import type { CallIo, Mailbox, MailEvent } from './mailbox'
-import { isSystemSender, POLL_TIMEOUT_S } from './mailbox'
+import { ANSWER_SUBJECT_PREFIX, isSystemSender, POLL_TIMEOUT_S } from './mailbox'
 import { GROUP_REFUSAL, isGroupRefusal } from './wire'
 
 export type RemoteOption = { label: string; description: string; preview?: string }
@@ -57,8 +57,7 @@ export type QuestionsApi = {
 export const REMOTE_ID = /^q_[0-9a-f]{32}$/
 export const isRemoteId = (id: string) => REMOTE_ID.test(id)
 
-/** 답 메일 제목 머리(묻는 역할 앞: `[질문 답] <id> <첫 header>`, 참조 사본: `[질문 답] <id> <asker> <첫 header>`). */
-export const ANSWER_SUBJECT_PREFIX = '[질문 답] '
+export { ANSWER_SUBJECT_PREFIX }
 /** 새 질문 참조(watcher) 메일 제목 머리(`[질문] <id> …`). */
 export const QUESTION_SUBJECT_PREFIX = '[질문] '
 
