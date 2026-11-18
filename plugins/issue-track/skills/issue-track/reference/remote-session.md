@@ -1,6 +1,6 @@
 # 원격 세션에 한 건 맡기기
 
-「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 지시와 보고는 Agent Mail로 오간다 — 주소·프로필 규칙은 [agent-mail.md](agent-mail.md).
+「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 지시와 보고는 Agent Mail로 오간다 — 주소·프로필 규칙은 [switchboard.md](switchboard.md).
 
 ## 설정
 
@@ -24,14 +24,14 @@
      --command 'cd <folder> && SWITCHBOARD_PROFILE=<worker_profile> claude --model <model> --name "<저장소>#<이슈> <제목>"' --json
    orca terminal wait --environment <environment> --terminal <handle> --for tui-idle --timeout-ms 120000 --json
    ```
-   응답의 터미널 `handle`(`term_…`)을 적어 둔다 — 닫을 때만 쓴다. 지시서에는 넣지 않는다. switchboard 플러그인이 켜진 세션은 `SWITCHBOARD_PROFILE`(옛 이름 `AGENT_MAIL_PROFILE`)의 역할로 메일을 구독하므로 tui-idle이면 받을 준비가 된 것이다.
+   응답의 터미널 `handle`(`term_…`)을 적어 둔다 — 닫을 때만 쓴다. 지시서에는 넣지 않는다. switchboard 플러그인이 켜진 세션은 `SWITCHBOARD_PROFILE`의 역할로 메일을 구독하므로 tui-idle이면 받을 준비가 된 것이다.
 3. **지시서** — 파일로 써서 메일로 보낸다. 작업자 세션은 switchboard가 메일로 깨운다.
    ```bash
-   SWITCHBOARD_PROFILE=<my_mail_profile> agent-mail send --to <worker_role> --task <저장소>-<이슈> \
+   SWITCHBOARD_PROFILE=<my_mail_profile> switchboard send --to <worker_role> --task <저장소>-<이슈> \
      --subject '[<저장소>-<이슈>] <제목>' --body-file <지시서 파일>
    ```
-   지시서는 [SKILL.md](../SKILL.md) 「2. 지시서」 틀을 따르고, 끝에 보고 길을 박는다: **「PR을 열면 한 통, 끝나면(병합·정리 뒤, 막혀 멈출 때도) 이 메일에 `agent-mail reply <ID>`로 보고하고 `complete <ID>`. 보고에는 PR 번호·병합 SHA·시험·남은 것.」**
-4. **착수 확인** — 몇 분 뒤 `SWITCHBOARD_PROFILE=<my_mail_profile> agent-mail outbox`에서 그 메일이 pending → read로 바뀌었는지 본다. 10분 넘게 pending이면 `orca terminal read --environment <environment> --terminal <handle> --json`으로 화면 꼬리를 한 번 읽는다(권한 창·로그인·메일 구독 실패가 흔하다). 그 뒤의 기다림은 [agent-mail.md](agent-mail.md) 「조율자: 받기」 — 화면 폴링이 아니라 메일 대기.
+   지시서는 [SKILL.md](../SKILL.md) 「2. 지시서」 틀을 따르고, 끝에 보고 길을 박는다: **「PR을 열면 한 통, 끝나면(병합·정리 뒤, 막혀 멈출 때도) 이 메일에 `switchboard reply <ID>`로 보고하고 `complete <ID>`. 보고에는 PR 번호·병합 SHA·시험·남은 것.」**
+4. **착수 확인** — 몇 분 뒤 `SWITCHBOARD_PROFILE=<my_mail_profile> switchboard outbox`에서 그 메일이 pending → read로 바뀌었는지 본다. 10분 넘게 pending이면 `orca terminal read --environment <environment> --terminal <handle> --json`으로 화면 꼬리를 한 번 읽는다(권한 창·로그인·메일 구독 실패가 흔하다). 그 뒤의 기다림은 [switchboard.md](switchboard.md) 「조율자: 받기」 — 화면 폴링이 아니라 메일 대기.
 5. **보고가 오면** — 읽고 결과를 확인한다(PR 병합·이슈 닫힘을 `gh`로 직접). 끝난 보고면 세션을 닫는다.
    ```bash
    orca terminal close --environment <environment> --terminal <handle> --tab --json
@@ -56,7 +56,7 @@ python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts
 |---|---|
 | `marketplace` | 갱신할 마켓 이름 |
 | `hosts` | 원격 기계 ssh 별칭 목록(`ssh <별칭> '<명령>'`이 비밀번호 없이 돼야 한다) |
-| `mail_profile` | `agent-mail status`를 읽을 프로필 |
+| `mail_profile` | `switchboard status`를 읽을 프로필 |
 | `machines` | ssh 별칭(로컬은 `local`) → Agent Mail이 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
 | `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
 | `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). posix 원격은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |

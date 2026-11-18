@@ -18,7 +18,7 @@ import { createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
 import { httpWhy, roleHeaders } from './wire'
 
-/** Agent Mail CLI 프로필(`~/.config/agent-mail/<이름>.json`). token 은 메모리에만 둔다. */
+/** Agent Mail CLI 프로필(`~/.config/switchboard/<이름>.json`, 옛 `agent-mail/` 폴더도 — core/profile.ts). token 은 메모리에만 둔다. */
 export type MailProfile = { endpoint: string; role: string; token: string }
 
 /** 서버 이벤트 하나(SSE message data 와 같다). 코어가 쓰는 칸만 적는다. */
@@ -36,12 +36,12 @@ export type OutMail = { to: string; subject: string; body: string; key?: string 
 export type MailboxOptions = {
   /**
    * 프로필 파일의 절대 경로(여럿이면 앞에서부터 있는 것). null 이면 메일함은 꺼진다
-   * (SWITCHBOARD_PROFILE·AGENT_MAIL_PROFILE 없음, 또는 profileProblem).
+   * (SWITCHBOARD_PROFILE 없음, 또는 profileProblem).
    */
   profilePath: string | readonly string[] | null
   /** 프로필 이름은 있는데 위치를 못 정했다: 켤 때 warn·log 로 한 번 알린다. */
   profileProblem?: string
-  /** 프로필 값 덮어쓰기(SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN, 옛 AGENT_MAIL_*). 빈 값은 무시한다. */
+  /** 프로필 값 덮어쓰기(SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN). 빈 값은 무시한다. */
   override?: { endpoint?: string; token?: string }
   /** 사람이 꼭 봐야 할 한 줄(토스트 등): 프로필을 못 찾음·못 읽음. 없으면 log 만. */
   warn?: (text: string) => void
@@ -75,7 +75,7 @@ export type SlotConfig = {
   /** 단일 역할인데 -2 이상을 받았을 때(토스트 등). */
   warn?: (text: string) => void
   singleRoles?: readonly string[]
-  /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE·AGENT_MAIL_ROLE 을 맞춘다). */
+  /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE 을 맞춘다). */
   onRole?: (role: string) => void
 }
 
@@ -154,6 +154,7 @@ export const DROP_NOTICE: NoticeDrop = { drop: true }
 export type NoticeTap = (e: MailEvent, body: string) => Promise<string | null | NoticeDrop>
 
 /** 서버가 쓰는 예약 보낸이(#73 서버 계약 6): `switchboard/system`(·`-N`), 옛 이름 `agent-mail/system`(·`-N`). */
+// agent-mail/system: 옛 서버 데이터(옛 이름 보낸이) 호환. 3단계에 제거.
 export const SYSTEM_SENDER = /^(switchboard|agent-mail)\/system(-\d+)?$/
 export const isSystemSender = (sender: string | undefined) => sender !== undefined && SYSTEM_SENDER.test(sender)
 /** 서버 질문 답 메일 제목 머리(묻는 역할 앞: `[질문 답] <id> <첫 header>`, 참조 사본: `[질문 답] <id> <asker> <첫 header>`). */
@@ -187,18 +188,18 @@ const noticeSubject = (subject: string) => (subject.startsWith(SYSTEM_SUBJECT_PR
 /** 시스템 통지를 세션에 넣을 글. */
 export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): string => {
   const chars = [...body]
-  const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 agent-mail read ${e.id})` : body
+  const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
 
   return [
     `[Agent Mail #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${noticeSubject(e.subject ?? '')}`.trimEnd(),
-    `(switchboard 플러그인이 이 세션 앞으로 온 시스템 통지를 본문 그대로 전한다. 출처는 agent-mail read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
+    `(switchboard 플러그인이 이 세션 앞으로 온 시스템 통지를 본문 그대로 전한다. 출처는 switchboard read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
     shown,
   ].join('\n')
 }
 
 /** 알림 글. */
 export const announce = (ids: readonly number[]) =>
-  `Agent Mail ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(agent-mail read <ID>).`
+  `Agent Mail ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`
 
 /** 로그용 ID 줄: 앞 5개만. */
 const ids = (xs: readonly number[]) => {
@@ -260,12 +261,12 @@ export const urgentText = (e: MailEvent, body: string, max = URGENT_MAX_CHARS): 
   const head = `[긴급 Agent Mail #${e.id}] ${e.sender ?? '?'} | ${e.subject ?? ''}`.trimEnd()
   const chars = [...body]
   const cut = chars.length > max
-  const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 agent-mail read ${e.id})` : body
+  const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
 
   // 도구 결과 자리에 붙으므로 모델이 주입으로 의심할 수 있다: 출처와 확인 길을 밝힌다(명령조를 피한다).
   return [
     `${head}`,
-    `(switchboard 플러그인이 이 세션의 Agent Mail 역할 앞으로 온 priority=urgent 메일을 전한다. 도구가 낸 글이 아니다. 출처는 agent-mail read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
+    `(switchboard 플러그인이 이 세션의 Agent Mail 역할 앞으로 온 priority=urgent 메일을 전한다. 도구가 낸 글이 아니다. 출처는 switchboard read ${e.id} 로 확인할 수 있고, 이미 읽음 처리했다.)`,
     shown,
   ].join('\n')
 }

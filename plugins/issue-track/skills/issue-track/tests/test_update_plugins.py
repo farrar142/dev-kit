@@ -1,4 +1,4 @@
-"""update-plugins.py 단위 시험. ssh·claude·agent-mail 실행을 가짜 Runner로 바꿔 끼운다.
+"""update-plugins.py 단위 시험. ssh·claude·switchboard 실행을 가짜 Runner로 바꿔 끼운다.
 
     python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests
 """
@@ -66,9 +66,9 @@ class FakeMachines:
         if argv[0] in ("cat", "Get-Content") or (len(argv) > 1 and argv[1] == "-c"):
             text = self.files.get((host, argv[-1]))
             return up.Result(0, text, "") if text is not None else up.Result(1, "", "no such file")
-        if "agent-mail" in argv:
+        if argv[-2:] == ["status", "--json"]:
             if self.status is None:
-                return up.Result(127, "", "agent-mail: not found")
+                return up.Result(127, "", f"{argv[-3]}: not found")
             return up.Result(0, json.dumps(self.status), "")
         raise AssertionError(f"모르는 명령 {argv}")
 
@@ -81,14 +81,19 @@ def row(out, *cells):
     raise AssertionError(f"{cells} 줄 없음:\n{out}")
 
 
-def run_main(fake, args, config=None, hostname="box-local"):
+def only(*names):
+    """shutil.which 대역: names에 든 실행 파일만 있다."""
+    return lambda n: f"/opt/bin/{n}" if n in names else None
+
+
+def run_main(fake, args, config=None, hostname="box-local", which=only("switchboard")):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "c.json")
         with open(path, "w") as f:
             json.dump(config or {}, f)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            code = up.main(["--config", path, *args], run=fake, hostname=lambda: hostname)
+            code = up.main(["--config", path, *args], run=fake, hostname=lambda: hostname, which=which)
         return code, buf.getvalue()
 
 
@@ -162,7 +167,7 @@ class UpdatePlugins(unittest.TestCase):
         self.assertIn("app/coordinator", stale)
         for role in ("app/worker-1", "app/worker-2", "x/elsewhere"):
             self.assertNotIn(role, stale)
-        self.assertIn(("local", ("env", "SWITCHBOARD_PROFILE=boss", "AGENT_MAIL_PROFILE=boss", "agent-mail", "status", "--json"), None),
+        self.assertIn(("local", ("env", "SWITCHBOARD_PROFILE=boss", "AGENT_MAIL_PROFILE=boss", "switchboard", "status", "--json"), None),
                       fake.calls)
 
     def test_stale_check_prefers_local_scope_install_for_its_folder(self):
@@ -178,11 +183,19 @@ class UpdatePlugins(unittest.TestCase):
         _, out = run_main(fake, ["--marketplace", "kit", "--local-only"])
         self.assertIn("옛 판으로 떠 있는 세션: 없음", out)
 
-    def test_agent_mail_missing_skips_session_table(self):
+    def test_mail_cli_missing_skips_session_table(self):
         fake = FakeMachines({"local": [inst("issue-track@kit", "0.8.0")]}, LATEST)
-        code, out = run_main(fake, ["--marketplace", "kit", "--local-only"])
+        code, out = run_main(fake, ["--marketplace", "kit", "--local-only"], which=only())
         self.assertEqual(code, 0)
-        self.assertIn("옛 판 세션: agent-mail status를 못 읽어 건너뛴다(agent-mail: not found)", out)
+        self.assertIn("옛 판 세션: switchboard status를 못 읽어 건너뛴다(switchboard: not found)", out)
+
+    def test_mail_cli_prefers_switchboard_then_old_name(self):
+        self.assertEqual(up.mail_cli(only("switchboard", "agent-mail")), "switchboard")
+        self.assertEqual(up.mail_cli(only("agent-mail")), "agent-mail")
+        self.assertEqual(up.mail_cli(only()), "switchboard")
+        fake = FakeMachines({"local": [inst("issue-track@kit", "0.8.0")]}, LATEST, status={"sessions": []})
+        run_main(fake, ["--marketplace", "kit", "--local-only"], which=only("agent-mail"))
+        self.assertIn(("local", ("agent-mail", "status", "--json"), None), fake.calls)
 
     def test_remote_command_goes_through_ssh_with_cd(self):
         calls = []

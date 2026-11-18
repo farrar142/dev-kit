@@ -64,7 +64,8 @@ const BASH_ALLOW = [
   /^gh\s+run\s+(view|list)(\s|$)/,
   /^(python3?|py)\s+\S*wait-(ci|deploy)\.py(\s|$)/,
   /^orca\s+orchestration\s+(send|reply)(\s|$)/,
-  /^(AGENT_MAIL_PROFILE=\S+\s+)?(\S*\/)?agent-mail\s+(send|reply|complete|ack)(\s|$)/,
+  // 메일함 CLI. AGENT_MAIL_PROFILE·agent-mail 은 옛 이름 — 3단계에 제거.
+  /^((SWITCHBOARD|AGENT_MAIL)_PROFILE=\S+\s+)?(\S*[\/\\])?(switchboard|agent-mail)(\.exe)?\s+(send|reply|complete|ack)(\s|$)/,
   /^(kill|fuser\s+-k)(\s|$)/,
 ];
 if (process.env.CONTEXT_CAP_ALLOW_BASH) {

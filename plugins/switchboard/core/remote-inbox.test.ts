@@ -17,7 +17,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-b'
-const PROFILE = '/home/u/.config/agent-mail/b.json'
+const PROFILE = '/home/u/.config/switchboard/b.json'
 const BOSS = 'team/lead'
 const ASKER = 'team/worker-2'
 
@@ -56,7 +56,7 @@ const fakeServer = () => {
     mails.push({
       id: mails.length + 1,
       to: q.asker,
-      sender: 'agent-mail/system',
+      sender: 'switchboard/system',
       subject: `[질문 답] ${q.id} ${q.questions[0]!.header}`,
       body: [...lines, `답한 쪽: ${q.answered_by}`].join('\n'),
       task_id: q.id,

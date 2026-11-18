@@ -146,22 +146,47 @@ test('기능·문서 PR 은 막지 않는다', () => {
 
 test('수정·장애를 넘기는 메일은 원인 줄이 없으면 막는다', () => {
   for (const c of [
-    "AGENT_MAIL_PROFILE=worker-1 ~/.local/bin/agent-mail send --to team/boss --subject '[t] 배포 오류 처리' --body '배포 때 Redis 연결 오류가 쌓여서 경고로 낮췄고 남은 메시지는 걸러냈습니다. 다음 배포부터 조용할 것입니다. 시험은 초록입니다. 확인 부탁드립니다. 오류 추적기에서 규칙을 하나 더했습니다. 상세는 PR을 봐 주세요. 감사합니다.'",
-    "agent-mail --profile w send --to team/lead --subject '보고' --body-file - <<'EOF'\n## 한 것\n로그인 실패를 재시작으로 해결했습니다.\nEOF",
-    "agent-mail reply 42 --body 'fixed the crash by catching the panic in the worker loop and moving on to the next job, all tests green now, please merge'",
+    "SWITCHBOARD_PROFILE=worker-1 ~/.local/bin/switchboard send --to team/boss --subject '[t] 배포 오류 처리' --body '배포 때 Redis 연결 오류가 쌓여서 경고로 낮췄고 남은 메시지는 걸러냈습니다. 다음 배포부터 조용할 것입니다. 시험은 초록입니다. 확인 부탁드립니다. 오류 추적기에서 규칙을 하나 더했습니다. 상세는 PR을 봐 주세요. 감사합니다.'",
+    "switchboard --profile w send --to team/lead --subject '보고' --body-file - <<'EOF'\n## 한 것\n로그인 실패를 재시작으로 해결했습니다.\nEOF",
+    "switchboard reply 42 --body 'fixed the crash by catching the panic in the worker loop and moving on to the next job, all tests green now, please merge'",
   ]) {
     assert.ok(blocked(bash(c)), c);
   }
 });
 
+test('switchboard CLI(경로·.exe·환경변수 앞붙이 꼴 포함)의 send·reply 도 거른다', () => {
+  const body = "--subject '[t] 배포 오류 처리' --body '배포 때 Redis 연결 오류가 쌓여서 경고로 낮췄고 남은 메시지는 걸러냈습니다. 다음 배포부터 조용할 것입니다. 시험은 초록입니다. 확인 부탁드립니다. 오류 추적기에서 규칙을 하나 더했습니다. 상세는 PR을 봐 주세요. 감사합니다.'";
+  for (const c of [
+    `switchboard send --to team/boss ${body}`,
+    `SWITCHBOARD_PROFILE=worker-1 switchboard send --to team/boss ${body}`,
+    `~/.local/bin/switchboard send --to team/boss ${body}`,
+    `/opt/tools/bin/switchboard send --to team/boss ${body}`,
+    `switchboard.exe send --to team/boss ${body}`,
+    "switchboard reply 42 --body 'fixed the crash by catching the panic in the worker loop and moving on to the next job, all tests green now, please merge'",
+    // 옛 이름(3단계에 제거)
+    `agent-mail send --to team/boss ${body}`,
+  ]) {
+    const r = bash(c);
+    assert.ok(blocked(r), c);
+    assert.match(r.stderr, /switchboard (send|reply)/, c);
+  }
+  for (const c of [
+    "switchboard send --to team/boss --subject '[t] 배포 오류' --body '경고로 낮췄다.\n근본 원인: 배포가 떠다니는 태그를 pull 해 상태 있는 컨테이너를 다시 만듦'",
+    'switchboard read 12',
+    'switchboard inbox --status pending',
+  ]) {
+    assert.ok(!blocked(bash(c)), c);
+  }
+});
+
 test('원인 줄 있는 메일·짧은 확인 메일·일반 보고는 통과', () => {
   for (const c of [
-    "agent-mail send --to team/boss --subject '[t] 배포 오류' --body '경고로 낮췄다.\n근본 원인: 배포가 떠다니는 태그를 pull 해 상태 있는 컨테이너를 다시 만듦'",
-    "agent-mail reply 42 --body '받았습니다. 오류 고친 것 확인했습니다.'",
-    "agent-mail send --to team/boss --subject '[t] 완료' --body '확인 완료'",
-    "agent-mail send --to team/boss --subject '[t] 결제 화면' --body '새 결제 화면을 추가했습니다. 시험 120건 초록, 실패 0.'",
-    "agent-mail inbox --status pending",
-    "agent-mail read 12",
+    "switchboard send --to team/boss --subject '[t] 배포 오류' --body '경고로 낮췄다.\n근본 원인: 배포가 떠다니는 태그를 pull 해 상태 있는 컨테이너를 다시 만듦'",
+    "switchboard reply 42 --body '받았습니다. 오류 고친 것 확인했습니다.'",
+    "switchboard send --to team/boss --subject '[t] 완료' --body '확인 완료'",
+    "switchboard send --to team/boss --subject '[t] 결제 화면' --body '새 결제 화면을 추가했습니다. 시험 120건 초록, 실패 0.'",
+    "switchboard inbox --status pending",
+    "switchboard read 12",
   ]) {
     assert.ok(!blocked(bash(c)), c);
   }

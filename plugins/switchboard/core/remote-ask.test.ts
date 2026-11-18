@@ -13,7 +13,7 @@ import type { FakeClock, FakeHost } from './testing'
 
 const EP = 'http://mail.test'
 const TOKEN = 'tok-SECRET-q'
-const PROFILE = '/home/u/.config/agent-mail/p.json'
+const PROFILE = '/home/u/.config/switchboard/p.json'
 // 서버 시스템 보낸이: 새 이름(#144). 옛 이름도 알아본다.
 const SYSTEM = 'switchboard/system'
 const OLD_SYSTEM = 'agent-mail/system'
