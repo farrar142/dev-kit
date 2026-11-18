@@ -461,7 +461,7 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'switchboard-takeover',
-      description: '이 세션이 Agent Mail 역할의 -1 번호를 가져온다(번호 없이 온 메일을 받는다). 지금 -1 은 다른 번호로 밀린다',
+      description: '이 세션이 메일함 역할의 -1 번호를 가져온다(번호 없이 온 메일을 받는다). 지금 -1 은 다른 번호로 밀린다',
     })
     // 코어를 띄운다: 세션 상태를 따라가고, SWITCHBOARD_PROFILE 이 있으면 메일함(D2)도 켠다.
     void board?.stop()

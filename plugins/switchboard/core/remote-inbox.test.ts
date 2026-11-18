@@ -1,4 +1,4 @@
-// 원격 질문 — 대장 쪽(#112): 가짜 Agent Mail 서버(#106 댓글 「remote questions API」)와 진짜 질문 패널 코어(메모리 저장소)로
+// 원격 질문 — 대장 쪽(#112): 가짜 switchboard 서버(#106 댓글 「remote questions API」)와 진짜 질문 패널 코어(메모리 저장소)로
 // 교환대를 돌린다. 서버 질문이 패널에 오르고, 패널 답이 서버로 가며, 대장 세션 자신에게는 턴으로 들어가지 않는다.
 import { expect, test } from 'claude-code/testing'
 

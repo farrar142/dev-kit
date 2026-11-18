@@ -16,7 +16,7 @@ const LEASE_MS = 3 * HEARTBEAT_MS
 
 type Row = { base: string; number: number; machine: string; directory: string; until: number; presence: Record<string, unknown> }
 
-/** 가짜 Agent Mail(#73 서버 계약 3·4): slot 배정·lease·takeover 와 번호 주소 메일함의 긴 대기(대기 없이 바로 답). */
+/** 가짜 switchboard 서버(#73 서버 계약 3·4): slot 배정·lease·takeover 와 번호 주소 메일함의 긴 대기(대기 없이 바로 답). */
 const fakeServer = (clock: FakeClock) => {
   let rows: Row[] = []
   const mails: { id: number; to: string; status: 'pending' | 'read' }[] = []

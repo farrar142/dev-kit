@@ -16,7 +16,7 @@ test('긴급: 바쁜 세션에는 다음 도구 호출 뒤에 본문이 들어�
   host.toolCall()
   await flush()
   expect(host.injected.length).toBe(1)
-  expect(host.injected[0]).toContain(`[긴급 Agent Mail #${id}] team/lead | s${id}`)
+  expect(host.injected[0]).toContain(`[긴급 메일 #${id}] team/lead | s${id}`)
   expect(host.injected[0]).toContain('배포 멈춰라')
   expect(mail.status(id)).toBe('read')
   expect(host.turns).toEqual([]) // 새 턴을 만들지 않는다.
