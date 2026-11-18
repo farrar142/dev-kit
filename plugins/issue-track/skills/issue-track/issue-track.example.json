@@ -18,6 +18,7 @@
     "mail_profile": "boss",
     "machines": { "local": "laptop", "remote-1": "build-box" },
     "session_plugin": "switchboard",
-    "remote_claude": "claude"
+    "remote_claude": "claude",
+    "shells": { "remote-2": "powershell" }
   }
 }

@@ -50,7 +50,7 @@ python3 <스킬 폴더>/scripts/update-plugins.py --local-only
 python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts remote-1,remote-2 --no-sessions
 ```
 
-기계마다 마켓 갱신 → 그 마켓 플러그인 갱신(local·project scope는 그 폴더에서) → 기계×플러그인 버전 표, 그리고 「옛 판으로 떠 있는 세션」(online이고 switchboard를 마지막으로 갱신하기 전에 등록한 세션)을 찍는다. reload·재시작은 하지 않는다 — 표의 세션을 언제 다시 띄울지는 사람이 정한다. `update` 절 키:
+기계마다 셸 판별 → 마켓 갱신 → 그 마켓 플러그인을 설치된 모든 범위(user·project·local, local·project는 그 폴더에서)에서 갱신 → 범위별 판 표(기계·플러그인·범위·폴더·판·최신·상태; 최신은 그 기계 마켓 클론의 판), 그리고 「옛 판으로 떠 있는 세션」(online이고 switchboard를 마지막으로 갱신하기 전에 등록한 세션)을 찍는다. reload·재시작은 하지 않는다 — 표의 세션을 언제 다시 띄울지는 사람이 정한다. 종료 코드: 0 모든 설치가 최신 / 1 기계·갱신 명령 실패 또는 옛 판이 남은 설치 / 2 설정 오류. `update` 절 키:
 
 | 키 | 뜻 |
 |---|---|
@@ -59,4 +59,5 @@ python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts
 | `mail_profile` | `agent-mail status`를 읽을 프로필 |
 | `machines` | ssh 별칭(로컬은 `local`) → Agent Mail이 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
 | `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
-| `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). 원격 명령은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
+| `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). posix 원격은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
+| `shells` | ssh 별칭 → 원격 셸(`posix`·`powershell`). 없는 별칭은 `ssh <별칭> 'echo $PSVersionTable.PSVersion.Major'`로 판별한다. PowerShell은 접두 없이 `Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude plugin update <id> --scope local; exit $LASTEXITCODE` |

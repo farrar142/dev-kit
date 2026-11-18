@@ -6,7 +6,7 @@
     {
       "name": "issue-track",
       "source": "./plugins/issue-track",
-      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 CI 대기(wait-ci)·결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트, 병렬 실행 함정 문서 포함). 한 건을 원격 기계 작업자 세션에 Orca·Agent Mail로 맡기는 절차와, 로컬·원격 기계의 플러그인을 갱신해 버전 표·옛 판 세션을 찍는 update-plugins 스크립트(0.8.0)"
+      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 CI 대기(wait-ci)·결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트, 병렬 실행 함정 문서 포함). 한 건을 원격 기계 작업자 세션에 Orca·Agent Mail로 맡기는 절차와, 로컬·원격 기계의 플러그인을 모든 범위(user·project·local)에서 갱신해 범위별 판 표·옛 판 세션을 찍고 옛 판이 남으면 실패로 끝나는 update-plugins 스크립트(원격 PowerShell 포함, 0.9.0)"
     },
     {
       "name": "django-asgi",
