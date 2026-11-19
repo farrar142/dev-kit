@@ -108,6 +108,8 @@ export type SwitchboardOptions = {
    * 풀고 기다리던 메일을 넣는다(그 메일 턴이 돌기 전에는 다시 걸지 않는다). 없으면 기본 5분.
    */
   compactTimeoutMs?: number
+  /** 서브에이전트 끝 알림을 기다리는 한도(ms, 마지막 시작 뒤). 넘으면 0으로 돌리고 알린다. 0 이면 한도 없음. */
+  subagentLimitMs?: number
   /**
    * 원격 질문 대장 쪽(#112). 있으면 메일함 역할이 대장(permissions.bosses)일 때 서버 질문을 끌어와 sink(질문 패널)에 올린다.
    */
@@ -176,6 +178,7 @@ export const typingConfig = (minutes: string | undefined): number => {
 
 /** compact 완료를 기다리는 기본 한도(5분). */
 export const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60_000
+export const DEFAULT_SUBAGENT_LIMIT_MS = 4 * 60 * 60_000
 
 /** 메일 전 compact 기본 기준(토큰). */
 export const DEFAULT_COMPACT_TOKENS = 200_000
@@ -248,6 +251,32 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const holdMs = Math.max(0, opts.holdAfterUserMs ?? DEFAULT_HOLD_MS)
   const shortTurnMs = Math.max(0, opts.shortTurnMs ?? DEFAULT_SHORT_TURN_MS)
   const typingMs = Math.max(0, opts.typingLimitMs ?? DEFAULT_TYPING_MS)
+  /** 돌고 있는 백그라운드 서브에이전트(id). 끝 알림이 없어도 subagentLimitMs 뒤에는 비운다. */
+  const subagents = new Set<string>()
+  const subagentLimitMs = Math.max(0, opts.subagentLimitMs ?? DEFAULT_SUBAGENT_LIMIT_MS)
+  let subagentWatch: Timer | undefined
+  const armSubagentWatch = () => {
+    subagentWatch?.cancel()
+    subagentWatch = undefined
+    if (subagents.size === 0 || subagentLimitMs === 0) return
+    const watch = host.services.clock.after(subagentLimitMs, () => {
+      if (subagentWatch !== watch) return
+      subagentWatch = undefined
+      const n = subagents.size
+      if (n === 0) return
+      subagents.clear()
+      const text = `switchboard: 서브에이전트 ${n}개의 끝 알림이 ${Math.round(subagentLimitMs / 360_000) / 10}시간 안에 오지 않아 끝난 것으로 본다`
+      log(text)
+      try {
+        ;(opts.warn ?? log)(text)
+      } catch {
+        // 알림이 실패해도 간다.
+      }
+      mailbox?.report()
+      mailbox?.kick()
+    })
+    subagentWatch = watch
+  }
   /** 마지막 턴이 끝난 시각(RFC3339, presence 용). */
   let lastTurnAt: string | undefined
   /** presence: 상태·컨텍스트 토큰·마지막 턴. 토큰 수를 못 읽으면 빼고 보낸다(서버가 이전 값을 둔다). */
@@ -262,6 +291,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       // 모르면 뺀다.
     }
     if (lastTurnAt !== undefined) out.last_turn_at = lastTurnAt
+    if (subagents.size > 0) out.subagents = subagents.size
 
     return out
   }
@@ -315,6 +345,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const compactBeforeMail = async (): Promise<'ready' | 'wait'> => {
     const cfg = opts.compactBeforeMail
     if (cfg === undefined || compactedForMail || !capabilities(host).compact || st.activity !== 'idle') return 'ready'
+    // 서브에이전트가 도는 동안은 부모의 맥락이 결과를 기다리는 중이라 자르지 않는다.
+    if (subagents.size > 0) return 'ready'
     let tokens: number
     try {
       tokens = (await host.usage()).tokens
@@ -383,6 +415,17 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
                 holdFor(holdMs)
               }
             })
+          }
+          break
+        case 'subagent.start':
+          subagents.add(e.id)
+          armSubagentWatch()
+          mailbox?.report()
+          break
+        case 'subagent.stop':
+          if (subagents.delete(e.id)) {
+            armSubagentWatch()
+            mailbox?.report()
           }
           break
         case 'compact.complete':
@@ -462,6 +505,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     stall = undefined
     const done = mailbox?.stop() ?? Promise.resolve()
     mailbox = undefined
+    subagentWatch?.cancel()
+    subagentWatch = undefined
     holdTimer?.cancel()
     holding = false
     typingTimer?.cancel()

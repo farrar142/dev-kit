@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.12.6",
+  "version": "0.12.7",
   "description": "세션 안의 교환대: 질문 패널(ask/resolve, 로컬 패널, Orca 사이드바 선택 연동)을 맡고, 에이전트를 모르는 코어와 AgentHost 포트(Claude 어댑터) 위에 switchboard 메일함(SWITCHBOARD_PROFILE이 있으면 일반 메일로 세션을 깨우고, 컨텍스트가 크면 먼저 compact하며, 긴급 메일은 실행 중인 턴의 다음 도구 호출 뒤에 본문을 끼워 넣는다. 사람이 입력 중이거나 방금 답을 받은 동안은 일반 메일을 미룬다(입력 중은 사람이 친 글·기록 불러오기만 보고, 마지막 입력 뒤 SWITCHBOARD_TYPING_MINUTES분까지). 연결할 때 번호 역할을 받아 구독하고 presence를 보고하며, 단일 역할 중복을 경고하고 /switchboard-takeover로 -1을 가져온다. SWITCHBOARD_PARENT가 있으면 연결될 때 부모에게 연결 통지를 보내고, 받은 시스템 통지는 본문 그대로 넣으며, SWITCHBOARD_LABEL 라벨 주소 앞 보관 메일을 받는다. 턴이 rate_limit·overloaded·server_error로 멈추면 간격을 늘려 다시 이어 가고, 안 풀리는 오류·권한 창·입력 대기는 부모(오류는 대장도)에게 한 번 알리며, 권한 요청은 부모·대장에게 올려 정한 시간 안에 온 답을 그대로 쓰고 없으면 화면 창으로 넘긴다. 자식 셸에는 SWITCHBOARD_ROLE·AGENT_MAIL_ROLE로 번호 역할을 넘긴다. 역할 머리는 X-Switchboard-Role과 옛 X-Agent-Mail-Role을 함께 보내고, 묶음 밖 403은 사람이 읽을 한 줄로 남긴다)을 붙였다. 질문 패널 MCP 서버가 붙은 세션의 AskUserQuestion은 막고 질문 패널로 돌린다(header가 급함으로 시작하면 통과). 프로필이 있는 세션의 ask는 switchboard 서버 질문으로 올려(대장 세션은 올리지 않고 로컬, 403·409·연결 실패면 로컬 패널) 답 메일을 「[질문 패널 답 q_…]」 글로 넣고, resolve는 서버 질문을 거둔다. 대장 세션(연결 때 서버 /api/whoami의 is_boss, 옛 서버·실패면 SWITCHBOARD_BOSS_ROLES)은 서버 질문을 긴 대기로 끌어와 질문 패널(과 Orca 사이드바)에 묻는 역할과 함께 띄우고, 패널 답을 서버로 보낸다(세션 턴으로 넣지 않는다). 대장 세션에는 서버의 질문 참조 메일([질문]·[질문 답] q_…)을 넣지 않고 read로만 표시한다. 좁은 터미널에서 패널이 자리를 못 잡으면 질문 첫 줄을 토스트로 띄운다. question-panel을 대체한다",
   "types": "./types/index.d.ts"
 }
