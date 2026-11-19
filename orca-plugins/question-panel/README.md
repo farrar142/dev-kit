@@ -1,4 +1,4 @@
-# 질문 패널 (Orca 플러그인 0.7.1 — Claude Code switchboard 또는 question-panel 0.9.0 이상과 함께)
+# 질문 패널 (Orca 플러그인 0.7.2 — Claude Code switchboard 또는 question-panel 0.9.0 이상과 함께)
 
 Claude Code의 `switchboard`(`plugins/switchboard/`)·`question-panel`(`plugins/question-panel/`) 플러그인이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
@@ -116,6 +116,12 @@ orca plugin open local.question-panel --panel questions --json
 확인: Orca 터미널에서 Claude Code(question-panel 0.6.1+ 설치)를 띄우고 질문 도구를 부르게 한다 → 「질문」 패널에 카드 → 고르고 「답 보내기」 → 그 터미널에 `[질문 패널 답 q1] …` 줄이 들어가 Claude가 이어서 답한다.
 
 확인(채팅 세션, 0.4.0): Claude Code question-panel을 0.6.1로 올린 뒤(`/plugin` 업데이트) Orca 채팅 UI에서 Claude에게 질문 도구를 부르게 한다 → 답변 블록 끝에 「Orca 사이드바 「질문」 패널로도 답할 수 있습니다…」 → 「질문」 패널에 `채팅 · <폴더> · 세션 …` 카드와 배지 「메일함 run:run_xxxx」(Run이 없으면 「메일함 orca_session_id:…」) → 고르고 「답 보내기」 → 패널에 「qN 답을 보냈습니다 — 메일함 …」 → 채팅에 제목 `[질문 패널 답] qN` 메일이 들어가 Claude가 이어서 답한다. 안 되면 `orca plugin logs local.question-panel --json`에서 `inbox:`·`run-current`·`orchestration send`·`메일 보내기 실패` 줄을 본다.
+
+## 0.7.2 — 답한 묶음은 최신 20개만 저장한다 (#164)
+
+- 답한(`sent`) 묶음이 끝없이 쌓여 저장 값(`batches`)이 수백 KB로 자라면 `storage.set`이 실패해 새 질문이 패널에 뜨지 않았다. 저장·읽기 때 대기 묶음은 전부, 답한 묶음은 최신 20개만 남긴다. 이미 커진 저장도 판을 올린 뒤 첫 읽기·저장에서 줄어든다.
+- 저장이 실패하면 워커가 마지막 목록을 메모리에 들고 있다가 다음 저장에 함께 싣고, 오류를 플러그인 로그(`묶음 저장 실패`)에 남긴다.
+- 시험: 75건.
 
 ## 0.7.1 — 원격 질문 호출에는 터미널 카드를 만들지 않는다 (switchboard 0.12.3, #142)
 
