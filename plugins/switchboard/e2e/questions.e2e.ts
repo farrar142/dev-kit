@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
 
-import { askerSession, bossSession, QUESTIONS, SOT, sleep, startServer, waitFor } from './harness'
+import { ASKER, askerSession, bossSession, QUESTIONS, SOT, sleep, startServer, waitFor } from './harness'
 import type { BossSession, Server, Session } from './harness'
 
 /** 답이 들어온 뒤 더 들어오는지 지켜보는 시간(긴 대기가 한 바퀴 더 돌 만큼). */
@@ -50,8 +50,8 @@ const ask = async (a: Session, b: BossSession) => {
 const dashboardAnswer = (id: string) => server.admin('POST', `/api/admin/questions/${id}/answer`, { answers: [{ selected: ['SQLite'], other: '' }] })
 
 /** 묻는 세션에 답이 정확히 want 번 들어왔는가(들어온 뒤 SETTLE_MS 더 지켜본다). */
-const expectDelivered = async (s: Session, id: string, want: number, what: string) => {
-  if (want > 0) await waitFor(() => s.answerLines(id) >= want, `${what}이 묻는 세션에 들어오지 않음`)
+const expectDelivered = async (s: Session, id: string, want: number, what: string, ms = 10_000) => {
+  if (want > 0) await waitFor(() => s.answerLines(id) >= want, `${what}이 묻는 세션에 들어오지 않음`, ms)
   await sleep(SETTLE_MS)
   const n = s.answerLines(id)
   assert.equal(n, want, `${SOT}: ${what}이 묻는 세션(${s.role})에 ${n}번 들어감(${want}번이어야 함)`)
@@ -217,21 +217,124 @@ test(`${SOT}: LiveAskerKeepsAnswer — 묻던 세션이 살아 있으면 뒤에 
   assert.equal(newer.answerLines(id), 0, `${SOT}: 뒤에 붙은 세션(${newer.board.mail().role})에 답이 들어감`)
 })
 
-test(
-  `${SOT}: AskerSessionRestarts — 옛 세션이 정상 종료 없이 죽어 번호를 쥔 채(임대 중) 재시작하면 답이 새 세션에 1번`,
-  { skip: '서버 v0.12.0: 답할 때 묻던 번호의 임대(기본 3분)가 살아 있으면 그 번호로 보내, 죽은 세션 메일함에 남는다(#169 는 번호를 돌려준 경우만 덮음 — 서버 후속 필요)' },
-  async () => {
-    const b = await boss()
-    const a1 = await asker({ sessionId: 'asker-1', cwd: '/work/asker' })
-    const id = await ask(a1, b)
-    // 세션이 정상 종료 없이 죽는다: 번호를 쥔 채로 남아, 같은 폴더의 새 세션은 다음 번호를 받는다.
-    a1.host.kill()
-    const a2 = await asker({ sessionId: 'asker-2', cwd: '/work/asker' })
-    assert.notEqual(a2.board.mail().role, a1.board.mail().role, '이 경우는 다른 번호여야 한다')
-    await b.answerOnPanel(id)
-    await expectDelivered(a2, id, 1, '다른 번호로 재시작한 뒤 패널 답')
-  },
-)
+// 13~16: 묻던 세션이 정상 종료 없이 죽은 경우(서버 v0.12.1, sandcorporation/switchboard#171).
+// 서버를 짧은 임대로 다시 띄우고, 세션 heartbeat 도 그에 맞춰 짧게 돈다(harness). 고정 sleep 대신
+// 슬롯 목록에서 임대가 끝나고 산 세션의 heartbeat 가 한 번 더 온 것을 기다린다.
+const LEASE_S = 6
+
+const leaseServer = async () => {
+  await server.stop()
+  server = await startServer({ slotLeaseSeconds: LEASE_S })
+}
+
+type SlotRow = { role: string; directory: string; lease_expires_at: string }
+
+const slots = async (): Promise<SlotRow[]> => {
+  const r = await server.call(ASKER, 'GET', '/api/slots')
+
+  return Array.isArray(r.json) ? (r.json as SlotRow[]) : []
+}
+
+/** dead 의 임대가 끝나고, 그 뒤 alive 들이 heartbeat 를 한 번씩 더 보낼 때까지. */
+const outliveLease = async (dead: string, alive: string[]) => {
+  await waitFor(async () => !(await slots()).some(r => r.role === dead), `죽은 세션 ${dead} 의 임대가 끝나지 않음`, (LEASE_S + 10) * 1000)
+  const ended = Date.now()
+  await waitFor(
+    async () => {
+      const rows = await slots()
+
+      return alive.every(role => rows.some(r => r.role === role && Date.parse(r.lease_expires_at) > ended + (LEASE_S - 1) * 1000))
+    },
+    `임대가 끝난 뒤 산 세션(${alive.join(',')})의 heartbeat 가 오지 않음`,
+    10_000,
+  )
+}
+
+/** role 메일함의 id 답 메일(목록은 읽음 표시를 하지 않는다). */
+const answerMail = async (role: string, id: string) => {
+  // 번호 역할은 바탕 역할 토큰으로 X-Switchboard-Role 만 바꿔 부른다.
+  const rr = await fetch(`${server.endpoint}/api/messages?box=inbox`, {
+    headers: { Authorization: `Bearer ${server.token(ASKER)}`, 'X-Switchboard-Role': role },
+  })
+  const list = (await rr.json().catch(() => [])) as { id: number; task_id?: string }[]
+
+  return (Array.isArray(list) ? list : []).filter(m => m.task_id === id)
+}
+
+/** 죽은 세션 크래시: 묻고 나서 정상 종료 없이 죽고, 같은 폴더에서 새 세션이 뜬다(플러그인이 폴더에 세션 표지를 붙인다). */
+const crashed = async () => {
+  const b = await boss()
+  await asker({ sessionId: 'keep-a', cwd: '/work/a' })
+  const q = await asker({ sessionId: '1a2b3c4d-s1', cwd: '/work/q' })
+  const id = await ask(q, b)
+  q.host.kill()
+  const back = await asker({ sessionId: '52abcdef-s2', cwd: '/work/q' })
+  const row = (await slots()).find(r => r.role === back.board.mail().role)
+  assert.notEqual(back.board.mail().role, q.board.mail().role, `${SOT}: 재시작한 세션이 죽은 세션의 번호를 받음`)
+  assert.equal(row?.directory, '/work/q #52abcdef', `${SOT}: 재시작한 세션 폴더에 세션 표지가 없음(${row?.directory})`)
+
+  return { b, q, back, id }
+}
+
+test(`${SOT}: CrashedAskerAnswerMovesAfterLease — 묻던 세션이 죽고 같은 폴더에서 재시작하면 임대가 끝난 뒤 답이 새 세션에 1번`, async () => {
+  await leaseServer()
+  const { b, q, back, id } = await crashed()
+  await b.answerOnPanel(id)
+  await expectDelivered(back, id, 1, '죽은 세션의 임대가 끝난 뒤 옮겨진 답', (LEASE_S + 20) * 1000)
+  assert.equal((await answerMail(q.board.mail().role, id)).length, 0, `${SOT}: 죽은 세션 메일함에 답이 남음`)
+})
+
+test(`${SOT}: ReadAnswerStaysAfterLease — 죽기 전에 읽은 답은 임대가 끝나도 새 세션으로 옮기지 않는다`, async () => {
+  await leaseServer()
+  const { b, q, back, id } = await crashed()
+  await b.answerOnPanel(id)
+  const dead = q.board.mail().role
+  const mails = await answerMail(dead, id)
+  assert.equal(mails.length, 1, `${SOT}: 답할 때 죽은 세션의 임대가 살아 있으면 답은 그 번호 메일함에 있어야 함`)
+  const opened = await fetch(`${server.endpoint}/api/messages/${mails[0].id}`, {
+    headers: { Authorization: `Bearer ${server.token(ASKER)}`, 'X-Switchboard-Role': dead },
+  })
+  assert.equal(opened.status, 200, `${SOT}: 죽은 세션의 답 메일을 열지 못함`)
+  await outliveLease(dead, [back.board.mail().role])
+  await expectDelivered(back, id, 0, '읽은 답')
+  assert.equal((await answerMail(dead, id)).length, 1, `${SOT}: 읽은 답이 죽은 세션 메일함에서 사라짐`)
+})
+
+test(`${SOT}: LiveSessionsInOneFolderAskerKeepsAnswer — 같은 폴더에 두 세션이 살아 있으면 묻던 세션이 답을 받고 계속 쥔다`, async () => {
+  await leaseServer()
+  const b = await boss()
+  const q = await asker({ sessionId: '1a2b3c4d-s1', cwd: '/work/q' })
+  const id = await ask(q, b)
+  const sibling = await asker({ sessionId: '52abcdef-s2', cwd: '/work/q' })
+  assert.equal((await slots()).find(r => r.role === sibling.board.mail().role)?.directory, '/work/q #52abcdef', `${SOT}: 둘째 세션 폴더에 세션 표지가 없음`)
+  await b.answerOnPanel(id)
+  await expectDelivered(q, id, 1, '같은 폴더에 함께 산 묻던 세션의 답')
+  // 임대 한 바퀴를 넘겨도(둘 다 heartbeat) 답은 옮겨지지 않는다.
+  const since = Date.now()
+  await waitFor(
+    async () => (await slots()).filter(r => [q.board.mail().role, sibling.board.mail().role].includes(r.role) && Date.parse(r.lease_expires_at) > since + LEASE_S * 1000).length === 2,
+    '두 세션 heartbeat 가 임대 한 바퀴를 넘기지 않음',
+    (LEASE_S + 10) * 1000,
+  )
+  assert.equal(sibling.answerLines(id), 0, `${SOT}: 함께 산 둘째 세션에 답이 들어감`)
+  assert.equal(q.answerLines(id), 1, `${SOT}: 묻던 세션의 답 수가 1이 아님`)
+})
+
+test(`${SOT}: OtherLabelInSameFolderNeverGetsAnswer — 같은 폴더라도 라벨이 다르면 답이 안 가고, 같은 라벨 세션이 붙을 때 1번`, async () => {
+  await leaseServer()
+  const b = await boss()
+  const q = await asker({ sessionId: '1a2b3c4d-s1', cwd: '/work/q', label: 'issue-1' })
+  const id = await ask(q, b)
+  q.host.kill()
+  const other = await asker({ sessionId: '52abcdef-s2', cwd: '/work/q', label: 'issue-2' })
+  await b.answerOnPanel(id)
+  await outliveLease(q.board.mail().role, [other.board.mail().role])
+  await waitFor(async () => (await delivery(id)) === 'waiting', '죽은 세션 임대가 끝난 뒤 관리자 목록 delivery 가 waiting 이 아님', 10_000)
+  assert.equal(other.answerLines(id), 0, `${SOT}: 같은 폴더의 다른 라벨 세션에 답이 들어감`)
+  const same = await asker({ sessionId: 'same', cwd: '/work/e', label: 'issue-1' })
+  await expectDelivered(same, id, 1, '같은 라벨 세션에 넘긴 답')
+  assert.equal(other.answerLines(id), 0, `${SOT}: 같은 폴더의 다른 라벨 세션에 답이 들어감`)
+})
 
 test(`${SOT}: BossSkipsQuestionMail — 대장 세션에는 질문 참조 메일([질문]·[질문 답])이 턴으로 들어가지 않는다`, async () => {
   const b = await boss()

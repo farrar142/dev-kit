@@ -59,10 +59,12 @@ export type Server = {
   admin: (method: string, path: string, body?: unknown) => Promise<{ status: number; json: unknown; text: string }>
   log: () => string
   stop: () => Promise<void>
+  /** 짧은 임대로 띄웠을 때 세션 heartbeat 주기(ms). 없으면 플러그인 기본(60초). */
+  heartbeatMs?: number
 }
 
 /** 실제 switchboard 서버를 임시 DB·임시 역할 토큰으로 띄운다. 토큰·관리자 비밀은 실행마다 새로 만든다. */
-export const startServer = async (): Promise<Server> => {
+export const startServer = async (opts: { slotLeaseSeconds?: number } = {}): Promise<Server> => {
   const bin = process.env.SWITCHBOARD_E2E_BIN
   if (bin === undefined || bin === '') throw new Error('SWITCHBOARD_E2E_BIN 이 없다: plugins/switchboard/e2e/run.sh 로 돌린다')
   const port = await freePort()
@@ -82,6 +84,8 @@ export const startServer = async (): Promise<Server> => {
         .join(','),
       SWITCHBOARD_BOSS_ROLES: BOSS,
       SWITCHBOARD_ADMIN_PROXY_TOKEN: adminSecret,
+      // 임대(lease)를 짧게: 정상 종료 없이 죽은 세션의 번호가 시험 안에 풀린다.
+      ...(opts.slotLeaseSeconds === undefined ? {} : { SWITCHBOARD_SLOT_LEASE: `${opts.slotLeaseSeconds}s` }),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -125,6 +129,7 @@ export const startServer = async (): Promise<Server> => {
 
   return {
     endpoint,
+    ...(opts.slotLeaseSeconds === undefined ? {} : { heartbeatMs: Math.max(250, (opts.slotLeaseSeconds * 1000) / 8) }),
     token: role => tokens[role] ?? '',
     call,
     admin,
@@ -139,8 +144,8 @@ export const startServer = async (): Promise<Server> => {
   }
 }
 
-/** 진짜 시계. */
-const realClock = (): Clock & { cancelAll: () => void } => {
+/** 진짜 시계. everyMs 가 있으면 주기 타이머(slot heartbeat 만 쓴다)를 그 주기로 돌린다. */
+const realClock = (everyMs?: number): Clock & { cancelAll: () => void } => {
   const live = new Set<ReturnType<typeof setTimeout>>()
   const after = (ms: number, fn: () => void): Timer => {
     const t = setTimeout(() => {
@@ -157,7 +162,7 @@ const realClock = (): Clock & { cancelAll: () => void } => {
     }
   }
   const every = (ms: number, fn: () => void): Timer => {
-    const t = setInterval(fn, Math.max(1, ms))
+    const t = setInterval(fn, Math.max(1, everyMs ?? ms))
     live.add(t)
 
     return {
@@ -222,11 +227,11 @@ export type RealHost = AgentHost & {
   kill: () => void
 }
 
-const realHost = (identity: Identity): RealHost => {
+const realHost = (identity: Identity, everyMs?: number): RealHost => {
   const listeners = new Set<(e: HostEvent) => void>()
   const turns: string[] = []
   const http = realHttp()
-  const clock = realClock()
+  const clock = realClock(everyMs)
   const fs = fakeFs()
 
   return {
@@ -278,7 +283,7 @@ const openSession = async (
   where: { sessionId: string; cwd: string; label?: string },
   extra: Parameters<typeof createSwitchboard>[1] = {},
 ): Promise<Session> => {
-  const host = realHost({ sessionId: where.sessionId, machine: 'ci-box', cwd: where.cwd, isMain: true })
+  const host = realHost({ sessionId: where.sessionId, machine: 'ci-box', cwd: where.cwd, isMain: true }, server.heartbeatMs)
   const path = profilePath(where.sessionId)
   ;(host.services.fs as ReturnType<typeof fakeFs>).files.set(path, JSON.stringify({ endpoint: `${server.endpoint}/`, role, token: server.token(role) }))
   const logs: string[] = []

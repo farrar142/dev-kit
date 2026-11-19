@@ -6,11 +6,11 @@
 set -euo pipefail
 
 # 서버 판을 올릴 때는 VERSION 과 SHA256(그 판 checksums.txt 의 linux_amd64 줄)을 함께 바꾼다.
-VERSION=v0.12.0
-SHA256=3aacc871cedecad232ed1f350b2b4a315aa80f5684905e41d09f78f83256183b
+VERSION=v0.12.1
+SHA256=a691aa94a6d8b7dbdcd520630e744663b7645fba3b0deeb0377b6bf9e2f55407
 REPO=sandcorporation/switchboard
 TSX=tsx@4.23.15
-MIN=12
+MIN=16
 
 here=$(cd "$(dirname "$0")" && pwd)
 
