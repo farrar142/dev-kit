@@ -243,3 +243,37 @@ test('읽기 보류 설정(#125): 분 글, 비거나 이상하면 기본 2분, 0
   expect(shortTurnConfig('0')).toBe(0)
   expect(shortTurnConfig('곧')).toBe(DEFAULT_SHORT_TURN_MS)
 })
+
+// #168 빈 입력창인데 입력 중으로 남던 것: 글자처럼 안 보이는 것뿐이거나, 비움 사건이 코어에 못 닿은 경우.
+test('입력 중(#168): 보이지 않는 글자(너비 0 공백·제어 문자)뿐이면 입력 중이 아니다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '\u200b\u2060\x1b \u00a0' })
+  const a = mail.send()
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#168): 비움이 코어에 안 닿아도 메일이 막히면 입력창을 읽어 비었으면 넣는다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '쓰다 만 글' })
+  host.setInputBox('') // 사건 없이 비워짐
+  const a = mail.send()
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('입력 중(#168): 입력창을 읽어 보니 글이 있으면 계속 미루고, 읽지 못하면 사건을 믿는다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.change', text: '쓰는 중' })
+  host.setInputBox('쓰는 중')
+  const a = mail.send()
+  await host.clock.advance(1 * MIN)
+  expect(host.turns).toEqual([])
+  host.setInputBox(null) // 읽기 실패
+  mail.send()
+  await host.clock.advance(1 * MIN)
+  expect(host.turns).toEqual([])
+  host.setInputBox('')
+  await host.clock.advance(1 * MIN)
+  expect(a).toBeGreaterThan(0)
+})

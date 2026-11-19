@@ -161,6 +161,8 @@ export type FakeHost = AgentHost & {
   /** 다음 submitTurn 을 이 오류로 실패시킨다. */
   failNextSubmit: (reason?: string) => void
   setUsage: (u: Usage) => void
+  /** readInput 이 돌려줄 입력창 글(사건 없이 바꾼다: 코어에 안 닿은 바뀜 흉내). 기본은 null = readInput 없음. */
+  setInputBox: (text: string | null) => void
   /** compact 가 돌려줄 값(기본 done). done 이면 compact.complete 이벤트를 곧 보낸다. */
   setCompactResult: (r: CompactResult) => void
   /**
@@ -191,6 +193,7 @@ export const fakeHost = (
   const compacts: (string | undefined)[] = []
   let failSubmit: string | undefined
   let usage: Usage = { tokens: 0 }
+  let inputBox: string | null = null
   let compactResult: CompactResult = { done: true }
   let compactBehavior: CompactBehavior = 'complete'
   let running = false
@@ -227,6 +230,12 @@ export const fakeHost = (
     emit,
     failNextSubmit: (reason = 'submit failed') => void (failSubmit = reason),
     setUsage: u => void (usage = u),
+    setInputBox: t => void (inputBox = t),
+    readInput: async () => {
+      if (inputBox === null) throw new Error('input unreadable')
+
+      return inputBox
+    },
     setCompactResult: r => void (compactResult = r),
     setCompactBehavior: b => void (compactBehavior = b),
     listeners: () => listeners.size,
