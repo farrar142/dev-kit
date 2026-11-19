@@ -1,6 +1,6 @@
-# 질문 패널 (Orca 플러그인, 시제품 0.5.2 — Claude Code question-panel 0.9.0 이상 또는 switchboard 0.1.0 이상과 함께, 0.6.3 이상이면 장부 없이 예전대로)
+# 질문 패널 (Orca 플러그인 0.7.1 — Claude Code switchboard 또는 question-panel 0.9.0 이상과 함께)
 
-Claude Code의 `question-panel` 플러그인(`plugins/question-panel/`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
+Claude Code의 `switchboard`(`plugins/switchboard/`)·`question-panel`(`plugins/question-panel/`) 플러그인이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
 **0.4.0부터 Orca 채팅 UI 세션도 된다.** 채팅 세션의 질문은 Claude Code question-panel MCP 서버(0.6.1+)가 집 폴더 `~/.question-panel/orca-inbox`에 남기고, 이 플러그인이 읽어 카드로 띄운다. 답은 그 세션의 **오케스트레이션 메일함**으로 보낸다(Run에 묶였으면 `run:<run_id>`, 아니면 `orca_session_id:<세션 ID>`). 카드에 전달 경로(「터미널」·「메일함 run:run_xxxx」)가 보인다. 아래 「채팅 세션(0.4.0)」.
 
