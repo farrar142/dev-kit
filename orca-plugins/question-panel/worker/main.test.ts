@@ -905,3 +905,39 @@ test('원격 질문 파일: v2 는 remote 가 있어야 받고, remote 가 틀�
     await w.deactivate()
   }
 })
+
+// ── 저장 크기(0.7.2) ──
+const sentBatch = (i: number) => ({
+  id: `q${i}`, terminalId: 'term_1', workspaceId: null, createdAt: Date.now() - 60_000 - i,
+  questions: [{ header: 'h', question: 'x'.repeat(2000), options: [{ label: 'a', description: '' }], multiSelect: false }],
+  status: 'sent',
+})
+
+test('저장 크기: 답한 묶음이 쌓인 저장에서도 새 묶음을 올리면 답한 묶음이 잘린다', async () => {
+  const host = mockHost({ storage: { batches: Array.from({ length: 150 }, (_, i) => sentBatch(i + 100)) } })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  const list = (w.host.data().storage.batches ?? []) as { id: string; status: string }[]
+  assert.ok(list.some(b => b.id === 'q2' && b.status === 'pending'))
+  assert.ok(list.length <= 21, `남은 ${list.length}`)
+})
+
+test('저장 실패: storage.set 이 오류여도 대기 묶음이 남고 다음 저장에 함께 실린다', async () => {
+  let fail = true
+  let written: unknown[] = []
+  const host = mockHost({
+    results: {
+      'storage.set': (p: { key: string; value: unknown }) => {
+        if (fail) throw hostError('action_failed', 'value too large')
+        if (p.key === 'batches') written = p.value as unknown[]
+
+        return null
+      },
+    },
+  })
+  const w = await mountWorker(worker, { host })
+  await w.hooks.fire('agent.tool.after', ASK)
+  fail = false
+  await w.hooks.fire('agent.tool.after', { ...ASK, terminalId: 'term_9' })
+  assert.equal(written.length, 2)
+})

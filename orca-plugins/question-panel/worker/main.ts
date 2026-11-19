@@ -52,6 +52,7 @@ import {
   patchBatch,
   markSent,
   STORE_KEY,
+  pruneSent,
   type Batch,
   type JsonValue,
   type Picks,
@@ -101,8 +102,20 @@ export function deactivate() {
 /** io 를 받아 activate 를 만든다. 시험은 가짜 io 를 넘긴다. */
 export const createWorker = (io: WorkerIo) => function activate(orca: OrcaWorkerApi) {
   const log = (msg: string) => orca.log(`[question-panel] ${msg}`)
-  const load = async () => asBatches((await orca.storage.get(STORE_KEY)) as JsonValue | null)
-  const save = (list: Batch[]) => orca.storage.set(STORE_KEY, list as unknown as JsonValue) // Batch는 JSON 그대로다
+  /** 저장이 실패했을 때 마지막 목록. 성공할 때까지 load 가 이것을 먼저 쓴다(저장 실패가 새 묶음을 지우지 않게). */
+  let unsaved: Batch[] | null = null
+  const load = async () =>
+    unsaved ?? pruneSent(asBatches((await orca.storage.get(STORE_KEY)) as JsonValue | null))
+  const save = async (list: Batch[]) => {
+    const next = pruneSent(list)
+    try {
+      await orca.storage.set(STORE_KEY, next as unknown as JsonValue) // Batch는 JSON 그대로다
+      unsaved = null
+    } catch (err) {
+      unsaved = next
+      log(`묶음 저장 실패: ${describeError(err)}`)
+    }
+  }
   const loadDismissed = async () => asDismissed((await orca.storage.get(DISMISSED_KEY)) as JsonValue | null)
 
   /** 정리 하나: drop 에 걸린 묶음을 지우고 지운 기록에 남긴다(되돌리기·다시 뜨지 않게). 지운 수. */

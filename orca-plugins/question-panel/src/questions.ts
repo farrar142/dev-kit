@@ -358,6 +358,21 @@ export const sameAsk = (list: readonly Batch[], b: Batch): Batch | undefined =>
 
 export const clearSent = (list: readonly Batch[]): Batch[] => list.filter(b => b.status === 'pending')
 
+/** 답한 묶음을 남기는 개수(0.7.2). 저장 값이 끝없이 자라 storage.set 이 실패했다. */
+export const SENT_KEEP_MAX = 20
+
+/** 대기 묶음은 전부, 답한 묶음은 최신 SENT_KEEP_MAX 개만 남긴다. 순서는 그대로. */
+export const pruneSent = (list: readonly Batch[]): Batch[] => {
+  const keepSent = new Set(
+    list
+      .filter(b => b.status !== 'pending')
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, SENT_KEEP_MAX),
+  )
+
+  return list.filter(b => b.status === 'pending' || keepSent.has(b))
+}
+
 // ── 지운 묶음(0.4.1) ─────────────────────────────────────────────────────────
 
 /**
