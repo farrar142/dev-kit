@@ -81,9 +81,9 @@ plugins/
     core/questions.ts              질문 패널 상태(쌓기·고르기·완료·답 없이 닫기·대화창 답·장부 읽기). 저장은 Store 포트, 보내기는 submitTurn, 장부는 선택 어댑터 LedgerLink
     core/testing.ts                시험 틀: 가짜 어댑터(fakeHost)·가짜 시계(advance)·가짜 http(경로 처리기·SSE 밀기/끊기)·가짜 fs
     core/*.test.ts                 코어 단위 시험(가짜 어댑터로)
-    e2e/questions.e2e.ts           질문 경로 e2e(#157): 실제 switchboard 서버(고정 판 릴리스)에 묻는 세션·대장 세션 코어를 진짜 http로 붙여, 답이 묻는 세션에 정확히 한 번 들어오는지 센다(패널 답·대시보드 답·먼저 온 답·거두기·재시작·다른 번호로 돌아옴·가장 늦은 세션·기다렸다 넘김·다른 라벨·살아 있는 묻던 세션·대장 참조 메일, 서버 v0.12.0 #169 규칙). 실패 머리 `question source of truth: …`. 정상 종료 없이 죽어 번호를 쥔(임대 중) 세션의 재시작은 서버 틈이라 건너뜀
+    e2e/questions.e2e.ts           질문 경로 e2e(#157): 실제 switchboard 서버(고정 판 릴리스)에 묻는 세션·대장 세션 코어를 진짜 http로 붙여, 답이 묻는 세션에 정확히 한 번 들어오는지 센다(패널 답·대시보드 답·먼저 온 답·거두기·재시작·다른 번호로 돌아옴·가장 늦은 세션·기다렸다 넘김·다른 라벨·살아 있는 묻던 세션·죽은 세션 재시작 뒤 임대가 끝나면 옮김·읽은 답은 그대로·같은 폴더 두 세션·같은 폴더 다른 라벨·대장 참조 메일, 서버 v0.12.1). 실패 머리 `question source of truth: …`
     e2e/harness.ts                 e2e 틀: 서버 띄우기(임시 DB·실행마다 새 토큰), 진짜 http·시계 AgentHost, 대장 패널(질문 패널 코어) 배선
-    e2e/run.sh, e2e/suite.sh       run.sh: 서버 릴리스를 받아 고정 해시·checksums.txt로 확인하고 e2e를 돌린다(12개 미만 통과면 실패). suite.sh mod|mcp: 기존 시험(0개면 실패, mod는 경우 7 「좁은 터미널(#136)」이 돌았는지도). `.github/workflows/switchboard.yml`(검사 이름 `switchboard`)이 plugins/switchboard를 건드리는 PR·main push에서 셋 다 돌린다
+    e2e/run.sh, e2e/suite.sh       run.sh: 서버 릴리스를 받아 고정 해시·checksums.txt로 확인하고 e2e를 돌린다(16개 미만 통과면 실패). suite.sh mod|mcp: 기존 시험(0개면 실패, mod는 경우 7 「좁은 터미널(#136)」이 돌았는지도). `.github/workflows/switchboard.yml`(검사 이름 `switchboard`)이 plugins/switchboard를 건드리는 PR·main push에서 셋 다 돌린다
     adapters/claude.ts             Claude 어댑터: 모드 API로 포트를 구현(prompt.submit, 도구 결과 context, session.compact·usage, 턴·입력·compact 훅, $.http·$.clock·$.fs)
     adapters/ledger.ts             선택 어댑터: 닫힘 장부(MCP 서버 qp의 sync). 서버가 안 닿으면 장부 없이 혼자 돈다
     hooks/register.tsx             껍데기: 코어를 Claude 어댑터로 잇고 질문 패널을 그린다. hooks/register.test.tsx는 question-panel 시험을 이름만 바꿔 옮긴 것
