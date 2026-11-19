@@ -15,6 +15,8 @@ import {
   batchFromTool,
   remoteAskId,
   clearSent,
+  pruneSent,
+  SENT_KEEP_MAX,
   complete,
   withDefaults,
   batchFromInbox,
@@ -412,4 +414,14 @@ test('원격 질문(0.7.0): 카드 경로 표시와 서버 모양 답', () => {
   assert.deepEqual(remoteAnswers(b, [[-1]], [' 글 ']), [{ selected: [], other: '글' }])
   assert.deepEqual(ledgerRecord('s~q4~1', 'answered', 3, [{ selected: ['B'] }]).answers, [{ selected: ['B'] }])
   assert.equal('answers' in ledgerRecord('s~q4~1', 'answered', 3), false)
+})
+
+test('pruneSent: 대기는 전부, 답한 묶음은 최신 SENT_KEEP_MAX 개만 남긴다', () => {
+  const base = batchFromTool(EVENT, 1, 'o1')!
+  const mk = (id: string, status: 'pending' | 'sent', createdAt: number) => ({ ...base, id, status, createdAt })
+  const sent = Array.from({ length: SENT_KEEP_MAX + 5 }, (_, i) => mk(`s${i}`, 'sent', 1000 + i))
+  const out = pruneSent([mk('p-old', 'pending', 1), ...sent]).map(b => b.id)
+  assert.ok(out.includes('p-old'), '오래된 대기도 잃지 않는다')
+  assert.equal(out.filter(id => id.startsWith('s')).length, SENT_KEEP_MAX)
+  assert.ok(out.includes(`s${SENT_KEEP_MAX + 4}`) && !out.includes('s0'))
 })
