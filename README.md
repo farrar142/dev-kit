@@ -80,7 +80,15 @@ question-panel을 대체하는 세션 교환대. 에이전트를 모르는 코�
 
 - 옛 `AGENT_MAIL_*` 환경변수와 `agent-mail/` 설정 폴더는 대체값으로 읽는다.
 - question-panel과 함께 켜지 않는다(질문 도구가 둘이 된다).
-- 시험: `node --test plugins/switchboard/mcp`. `core/*.test.ts`·`hooks/*.test.tsx`는 `claude-code/testing` 시험이다.
+- 시험(`plugins/switchboard/e2e/`):
+
+| 명령 | 돌리는 것 |
+|---|---|
+| `bash plugins/switchboard/e2e/suite.sh mod` | `claude plugin test`: 코어·어댑터·`hooks/*.test.tsx`. 좁은 터미널(#136) 시험이 돌았는지도 센다 |
+| `bash plugins/switchboard/e2e/suite.sh mcp` | `node --test plugins/switchboard/mcp/*.test.mjs` |
+| `bash plugins/switchboard/e2e/run.sh` | 질문 경로 e2e: 고정 판 switchboard 서버 릴리스(linux_amd64, 체크섬 확인)를 받아 플러그인 코어를 붙이고, 답이 묻는 세션에 정확히 몇 번 들어오는지 센다(대장 패널·대시보드 답, 먼저 온 답 우선, 거두기, 세션 재시작·다른 번호·같은 폴더 두 세션, 라벨이 다른 세션, 대장 세션의 질문 참조 메일). `SWITCHBOARD_E2E_BIN`으로 받은 바이너리를 줄 수 있다 |
+
+시험이 0개 돌거나 e2e가 16개보다 적게 통과하면 실패다.
 
 ### question-panel
 
@@ -154,6 +162,11 @@ PreToolUse(Bash) 훅. 공개 저장소에서 `git commit`·`git push`·`gh pr cr
 
 ```
 .claude-plugin/marketplace.json   마켓플레이스 정의
+.github/workflows/switchboard.yml switchboard 검사(아래)
 plugins/<이름>/                   플러그인(.claude-plugin/plugin.json, skills·agents·hooks·mcp)
 orca-plugins/question-panel/      Orca 플러그인(마켓플레이스 밖)
 ```
+
+## 검사
+
+`.github/workflows/switchboard.yml`(워크플로 이름 `switchboard`, ubuntu-24.04): `mod`·`mcp`·`run.sh`를 차례로 돌린다. `plugins/switchboard/**`나 워크플로 파일이 바뀐 PR과 main push에서만 뜬다. 그 밖의 경로(README 등)만 바꾼 PR에는 검사가 없다. 다른 플러그인의 시험은 위 플러그인 절의 명령으로 로컬에서 돈다.
