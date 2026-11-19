@@ -123,6 +123,17 @@ export function wireStallEvents(on: On, emitter: Emitter): void {
 
     return next(e)
   }).catch(($, e, next) => next(e))
+  // 백그라운드 서브에이전트 수(#166). 시작·끝은 agent_id 로 짝을 맞춘다.
+  on('classic.SubagentStart', ($, e, next) => {
+    emitter.emit({ type: 'subagent.start', id: e.agent_id })
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  on('classic.SubagentStop', ($, e, next) => {
+    emitter.emit({ type: 'subagent.stop', id: e.agent_id })
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
   on('classic.Notification', ($, e, next) => {
     if (e.agent_id === undefined) emitter.emit({ type: 'notification', kind: e.notification_type })
 

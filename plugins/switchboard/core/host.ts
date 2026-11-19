@@ -80,6 +80,9 @@ export type HostEvent =
    */
   | { type: 'input.submit'; text: string; origin?: 'user' | 'plugin' | 'other' }
   | { type: 'compact.complete' }
+  /** 백그라운드 서브에이전트가 시작·끝났다(id 로 짝을 맞춘다. 같은 id 의 끝이 두 번 와도 한 번만 센다). */
+  | { type: 'subagent.start'; id: string }
+  | { type: 'subagent.stop'; id: string }
   /**
    * 턴이 API 오류로 멈췄다(D8). kind 는 에이전트가 나눈 오류 종류(rate_limit·overloaded·server_error·billing_error 등).
    * 오류 본문은 싣지 않는다.

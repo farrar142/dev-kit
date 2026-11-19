@@ -364,3 +364,16 @@ test('slot: 같은 기계·폴더에 다른 세션이 없으면 폴더 그대로
   expect(a.board.mail().role).toBe('team/worker-1')
   expect(server.slotBodies.filter(x => x.action === 'register').map(x => (JSON.parse(x.body) as { directory: string }).directory)).toEqual(['/work/repo'])
 })
+
+test('presence: 서브에이전트가 돌면 subagents 를 싣고, 0이면 싣지 않는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  const a = await session(server, clock, { base: 'team/worker', machine: 'box-a' })
+  a.host.emit({ type: 'subagent.start', id: 'a1' })
+  await flush()
+  expect(JSON.parse(server.slotBodies[server.slotBodies.length - 1]!.body)).toMatchObject({ state: 'idle', subagents: 1 })
+  a.host.emit({ type: 'subagent.stop', id: 'a1' })
+  await flush()
+  expect(JSON.parse(server.slotBodies[server.slotBodies.length - 1]!.body)).not.toHaveProperty('subagents')
+  a.board.stop()
+})

@@ -15,7 +15,14 @@ export type PresenceState = 'idle' | 'busy' | 'compacting'
  * condition(D8)은 `error:<종류>`·`blocked:<종류>` 처럼 state 보다 자세한 상태다. 있으면 state 칸에 이것을 싣고,
  * 서버가 400(아는 상태가 idle·busy·compacting 뿐, #73 서버 계약 4)이면 그 뒤로는 state 만 싣는다.
  */
-export type PresenceReport = { state: PresenceState; condition?: string; context_tokens?: number; last_turn_at?: string }
+export type PresenceReport = {
+  state: PresenceState
+  condition?: string
+  context_tokens?: number
+  last_turn_at?: string
+  /** 돌고 있는 서브에이전트 수(0이면 싣지 않는다). */
+  subagents?: number
+}
 
 /** 이 세션을 가리키는 식별자(서버가 같은 기계·폴더를 같은 세션으로 본다). */
 export type SlotIdentity = { machine: string; directory: string; sessionId: string; label?: string; parent?: string }
@@ -130,6 +137,9 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
   let plainOnly = false
   /** 마지막 요청 몸에 condition 을 실었다. */
   let sentCondition = false
+  /** 서버가 subagents 칸을 받지 않았다(400): 이 slot 에서는 싣지 않는다. */
+  let noSubagents = false
+  let sentSubagents = false
 
   /**
    * 서버에 싣는 폴더. 서버는 (base, 기계, 폴더)로 번호를 되찾아 주므로, 같은 기계·폴더를 지금 다른 세션이 쥐고 있으면
@@ -179,6 +189,11 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
         if (!plainOnly && p.condition !== undefined && p.condition !== '' && p.condition !== p.state) b.state = p.condition
         if (p.context_tokens !== undefined && Number.isInteger(p.context_tokens) && p.context_tokens >= 0) b.context_tokens = p.context_tokens
         if (p.last_turn_at !== undefined) b.last_turn_at = p.last_turn_at
+        sentSubagents = false
+        if (!noSubagents && p.subagents !== undefined && Number.isInteger(p.subagents) && p.subagents > 0) {
+          b.subagents = p.subagents
+          sentSubagents = true
+        }
       } catch {
         // presence 를 못 모으면 lease 만 늘린다.
       }
@@ -195,6 +210,12 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     if (r.kind === 'status' && r.status === 400 && sentCondition && !plainOnly) {
       plainOnly = true
       say(opts.log, 'switchboard slot: 서버가 자세한 상태(error:·blocked:)를 받지 않아 idle·busy·compacting 만 보고한다')
+
+      return call1(action)
+    }
+    if (r.kind === 'status' && r.status === 400 && sentSubagents && !noSubagents) {
+      noSubagents = true
+      say(opts.log, 'switchboard slot: 서버가 subagents 칸을 받지 않아 싣지 않는다')
 
       return call1(action)
     }
