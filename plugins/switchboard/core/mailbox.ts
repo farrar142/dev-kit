@@ -22,7 +22,7 @@ import { httpWhy, roleHeaders } from './wire'
 export type MailProfile = { endpoint: string; role: string; token: string }
 
 /** 서버 이벤트 하나(SSE message data 와 같다). 코어가 쓰는 칸만 적는다. */
-export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string; body?: string; task_id?: string }
+export type MailEvent = { id: number; sender?: string; subject?: string; priority?: string; body?: string; task_id?: string; answers_directive?: { id: number; state: string } }
 
 /**
  * call 의 바깥 길(선택): http 는 다른 fetch(Claude 모드에서는 그 훅의 `$` — 훅 예산은 `$` 를 기다리는 동안 멈춘다),
@@ -198,8 +198,15 @@ export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): 
 }
 
 /** 알림 글. */
-export const announce = (ids: readonly number[]) =>
-  `메일 ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`
+export const announce = (ids: readonly number[], open: ReadonlyMap<number, number> = new Map()) =>
+  [
+    `메일 ${ids.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`,
+    ...ids.flatMap(m => {
+      const n = open.get(m)
+
+      return n === undefined ? [] : [`메일 #${m} 은 지시 #${n} 의 답이다. #${n} 은 아직 열려 있다 — 끝났으면 \`switchboard close ${n}\`, 더 시킬 것이 있으면 reply.`]
+    }),
+  ].join('\n')
 
 /** 로그용 ID 줄: 앞 5개만. */
 const ids = (xs: readonly number[]) => {
@@ -245,6 +252,8 @@ const toEvent = (e: Record<string, unknown>, id: number): MailEvent => {
   const body = str(e.body)
   const task = str(e.task_id)
   if (task !== undefined) out.task_id = task
+  const ad = e.answers_directive
+  if (isRecord(ad) && typeof ad.id === 'number' && Number.isInteger(ad.id) && typeof ad.state === 'string') out.answers_directive = { id: ad.id, state: ad.state }
   if (sender !== undefined) out.sender = sender
   if (subject !== undefined) out.subject = subject
   if (priority !== undefined) out.priority = priority
@@ -303,6 +312,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   /** 큐에 넣었거나 이미 알린 ID. 다시 오면 거른다. */
   const known = new Set<number>()
   let queued: number[] = []
+  /** 일반 메일 id → 그 답이 닫지 않은(open) 지시 id. */
+  const openDirective = new Map<number, number>()
   /** 돌고 있는 일의 세대. stop·다시 잇기 때 올려 늦게 온 응답을 버린다. */
   let gen = 0
   let backoff = RETRY_MIN_MS
@@ -460,7 +471,10 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       else if (e.priority === 'urgent') urgentQ.push(e)
       else if (isAnswerMail(e)) answerQ.push(e)
       else if (isSystemNotice(e)) noticeQ.push(e)
-      else queued.push(e.id)
+      else {
+        queued.push(e.id)
+        if (e.answers_directive?.state === 'open') openDirective.set(e.id, e.answers_directive.id)
+      }
     }
     if (body.cursor > (cursor ?? -1)) cursor = body.cursor
     // (다시) 이었을 때 밀려 있던 일반 메일: 몇 통인지 남긴다(연결 전 메일이 들어가는지 화면에서 보이게).
@@ -744,7 +758,8 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       }
       if (profile === null) return
       try {
-        await host.submitTurn(announce(send))
+        await host.submitTurn(announce(send, openDirective))
+        for (const m of send) openDirective.delete(m)
         awaitingTurn = true
         grace?.cancel()
         grace = clock.after(TURN_GRACE_MS, () => {
