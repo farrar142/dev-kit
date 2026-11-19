@@ -169,6 +169,9 @@ export const shortTurnConfig = (minutes: string | undefined): number => {
 export const DEFAULT_TYPING_MS = 5 * 60_000
 
 /** 환경변수 글(분)로 입력 중 보류 상한(ms)을 만든다. 비거나 숫자가 아니면 기본 5분, 0 이면 상한 없음. */
+/** 입력창 글이 비었다고 볼 글인가: 공백·제어·보이지 않는 글자(너비 0 공백 등)뿐이면 비었다(#168). */
+export const isBlank = (text: string): boolean => /^[\p{White_Space}\p{Cc}\p{Cf}]*$/u.test(text)
+
 export const typingConfig = (minutes: string | undefined): number => {
   const t = (minutes ?? '').trim()
   if (!/^\d+(\.\d+)?$/.test(t)) return DEFAULT_TYPING_MS
@@ -336,7 +339,30 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     holdFor(holdMs)
   }
   /** 일반 메일 보류: 입력 중이거나 사람 입력 뒤 보류 시간 안. */
-  const held = () => st.typing || holding
+  /**
+   * 입력 중인데 메일이 막혔다: 입력창의 실제 글을 읽어 비었으면 풀고 메일함을 깨운다(#168). 사건이 코어에 못 닿은
+   * 비움(어댑터가 듣지 못한 경로)을 바로잡는 안전망이다. 읽는 중이면 또 읽지 않고, 못 읽으면 아무것도 안 한다.
+   */
+  let verifying = false
+  const verifyTyping = () => {
+    if (verifying || host.readInput === undefined) return
+    verifying = true
+    void host
+      .readInput()
+      .then(text => {
+        if (st.typing && isBlank(text)) {
+          setTyping(false)
+          mailbox?.kick()
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => void (verifying = false))
+  }
+  const held = () => {
+    if (st.typing) verifyTyping()
+
+    return st.typing || holding
+  }
 
   /**
    * 메일 턴 직전: 유휴이고 컨텍스트가 기준 이상이면 compact 를 걸고 'wait'. 완료 이벤트(compact.complete)가
@@ -438,7 +464,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           // 사람이 바꾼 것(치기·기록 불러오기·되돌리기)만 입력 중으로 친다. 플러그인 채우기·엔진 쓰기(prefill 등)는
           // 비웠을 때만 따른다(#123). 사람이 바꿀 때마다 상한을 다시 센다.
           const person = (e.by ?? 'person') === 'person'
-          const empty = e.text.trim() === ''
+          const empty = isBlank(e.text)
           if (person || empty) setTyping(!empty)
           if (person) stamp()
           // 입력창을 비웠다: 미룬 메일을 넣어 본다.

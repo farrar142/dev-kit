@@ -393,6 +393,7 @@ export function claudeHost($: Self, emitter: Emitter, box: MidTurnBox): AgentHos
 
     return { tokens: context.tokens, ...(context.percent === undefined ? {} : { percent: context.percent }) }
   },
+  readInput: async () => (await $.prompt.read()).text,
   on: l => emitter.on(l),
   }
 }

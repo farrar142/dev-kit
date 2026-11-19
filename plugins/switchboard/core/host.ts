@@ -114,6 +114,11 @@ export type AgentHost = {
   /** 대화를 줄인다(선택, features.compact). 턴이 도는 중이면 거절된다. */
   compact?: (instructions?: string) => Promise<CompactResult>
   usage: () => Promise<Usage>
+  /**
+   * 입력창의 지금 글을 읽는다(선택). 사건이 코어에 닿지 않아 「입력 중」이 남았을 때 실제 글로 바로잡는 데 쓴다(#168).
+   * 못 읽으면(던지면) 사건으로 안 값을 그대로 믿는다.
+   */
+  readInput?: () => Promise<string>
   /** 이벤트 구독. 돌려준 함수로 끊는다. */
   on: (listener: (e: HostEvent) => void) => () => void
 }
