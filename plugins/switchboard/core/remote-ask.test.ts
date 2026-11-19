@@ -182,7 +182,7 @@ const fakeSink = () => {
 const session = async (
   server: ReturnType<typeof fakeServer>,
   clock: FakeClock,
-  o: { role?: string; profile?: boolean; bosses?: string[]; panel?: boolean; isBoss?: boolean; holdMs?: number } = {},
+  o: { role?: string; profile?: boolean; bosses?: string[]; panel?: boolean; isBoss?: boolean } = {},
 ) => {
   const role = o.role ?? ME
   const host = fakeHost({ clock, identity: { machine: 'box-w', cwd: '/work/repo', sessionId: 'sess-w' } })
@@ -195,7 +195,6 @@ const session = async (
   const board = createSwitchboard(host, {
     log: t => void logs.push(t),
     mail: { profilePath: o.profile === false ? null : PROFILE, log: t => void logs.push(t) },
-    ...(o.holdMs === undefined ? {} : { holdAfterUserMs: o.holdMs }),
     ...(o.bosses === undefined ? {} : { permissions: { bosses: o.bosses } }),
     // 대장 쪽 inbox(패널). 가짜 서버는 목록·poll 을 404 로 돌려 inbox 는 물러나 다시 해 보기만 한다.
     ...(o.panel === true ? { remoteQuestions: { sink: fakeSink().sink, retry: { firstMs: 60_000, maxMs: 60_000 } } } : {}),
@@ -569,7 +568,7 @@ const answerLines = (id: string) =>
 test('질문 답 메일(#144): 사람 답 뒤 보류 시간 안에 와도 바로 넣는다(새 보낸이 switchboard/system)', async () => {
   const clock = fakeClock()
   const server = fakeServer()
-  const w = await session(server, clock, { holdMs: 3 * MIN })
+  const w = await session(server, clock)
   const r = await w.board.askRemote(QS)
   if (r.kind !== 'remote') throw new Error('remote 가 아님')
   w.host.emit({ type: 'input.submit', text: '이거 해 줘', origin: 'user' })
@@ -623,7 +622,7 @@ test('질문 답 메일(#144): 바쁜 턴에는 다음 도구 호출 결과 뒤�
 test('질문 답 메일(#144): 옛 보낸이 agent-mail/system 도 그대로 바로 넣는다', async () => {
   const clock = fakeClock()
   const server = fakeServer()
-  const w = await session(server, clock, { holdMs: 3 * MIN })
+  const w = await session(server, clock)
   const r = await w.board.askRemote(QS)
   if (r.kind !== 'remote') throw new Error('remote 가 아님')
   w.host.emit({ type: 'input.submit', text: '이거', origin: 'user' })
@@ -636,22 +635,20 @@ test('질문 답 메일(#144): 옛 보낸이 agent-mail/system 도 그대로 바
   await w.board.stop()
 })
 
-test('질문 답 메일(#144): 다른 역할 질문의 참조 사본은 바로 길을 타지 않고 보류를 따른다', async () => {
+test('질문 답 메일(#144): 다른 역할 질문의 참조 사본은 바로 길을 타지 않고 입력 중 보류를 따른다', async () => {
   const clock = fakeClock()
   const server = fakeServer()
   const other = await session(server, clock, { role: 'team/other-1' })
   const r = await other.board.askRemote(QS)
   if (r.kind !== 'remote') throw new Error('remote 가 아님')
   await other.board.stop()
-  const w = await session(server, clock, { holdMs: 3 * MIN })
-  w.host.emit({ type: 'input.submit', text: '이거', origin: 'user' })
-  w.host.emit({ type: 'turn.start' })
-  w.host.emit({ type: 'turn.complete' })
+  const w = await session(server, clock)
+  w.host.emit({ type: 'input.change', text: '쓰는 중' })
   await flush()
   server.put({ to: ME, sender: SYSTEM, subject: `[질문 답] ${r.id} team/other-1 DB`, body: 'DB: 어느 DB를 쓸까요? = Postgres\n답한 쪽: dashboard', priority: 'normal', task_id: r.id })
   await settle(clock)
   expect(w.host.turns).toEqual([])
-  await clock.advance(3 * MIN)
+  w.host.emit({ type: 'input.change', text: '' })
   await settle(clock)
   expect(w.host.turns.length).toBe(1)
   expect(w.host.turns[0]).toContain('시스템 통지]')

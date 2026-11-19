@@ -8,8 +8,6 @@ import {
   compactEnv,
   emitSubmit,
   exportRole,
-  holdEnv,
-  shortTurnEnv,
   typingEnv,
   mailProfilePath,
   permissionEnv,
@@ -33,7 +31,7 @@ import {
   VIA_TEXT,
 } from '../core/questions'
 import type { Store } from '../core/questions'
-import { compactConfig, createSwitchboard, holdConfig, shortTurnConfig, typingConfig } from '../core/switchboard'
+import { compactConfig, createSwitchboard, typingConfig } from '../core/switchboard'
 import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
@@ -97,19 +95,6 @@ const draftStore = ($: Self): Store<string> => ({
   update: fn => update($, draft, fn),
 })
 
-/** 질문 패널의 포트: 패널에서 답해 넣는 턴은 사람의 입력으로 친다(그 뒤 메일 턴 보류, D5). */
-function panelHost($: Self) {
-  const h = claudeHost($, emitter, box)
-
-  return {
-    ...h,
-    submitTurn: async (text: string) => {
-      board?.noteUserInput()
-      await h.submitTurn(text)
-    },
-  }
-}
-
 /** 이 훅의 `$.http` 를 코어의 http 로(훅 예산은 `$` 응답을 기다리는 동안 멈춘다). */
 /** 질문 첫 줄(여럿이면 「외 N」). */
 const headline = (qs: readonly { question: string }[]) =>
@@ -137,7 +122,7 @@ const panelOf = ($: Self) =>
   createQuestionPanel({
     queue: queueStore($),
     draft: draftStore($),
-    host: panelHost($),
+    host: claudeHost($, emitter, box),
     ledger: mcpLedger($),
     notify: text => $.ui.toast(text),
     // 원격 묶음(대장 세션, #112)의 답은 세션 턴이 아니라 서버로 간다.
@@ -492,8 +477,6 @@ export const register: Register = on => {
         },
       },
       ...(compactBeforeMail === undefined ? {} : { compactBeforeMail }),
-      holdAfterUserMs: holdConfig(await holdEnv($)),
-      shortTurnMs: shortTurnConfig(await shortTurnEnv($)),
       typingLimitMs: typingConfig(await typingEnv($)),
     })
     await board.start().catch(() => false)

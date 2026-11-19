@@ -40,18 +40,6 @@ test('연결 전 pending: 입력창에 글이 있으면 미루고 그 까닭을 
   expect(host.turns).toEqual([announce([a, b])])
 })
 
-test('연결 전 pending: 사람 입력 뒤 보류 중에 연결돼도 보류가 끝나면 넣는다', async () => {
-  const { host, mail, logs } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  host.emit({ type: 'input.submit', text: '사람', origin: 'user' })
-  await runTurn(host)
-  const a = mail.send()
-  await host.clock.advance(1 * MIN)
-  expect(host.turns).toEqual([])
-  expect(logs.some(l => l.includes('미룸 — 답 읽는 시간 보류'))).toBe(true)
-  await host.clock.advance(2 * MIN)
-  expect(host.turns).toEqual([announce([a])])
-})
-
 test('연결 전 pending: 끊긴 동안 온 메일은 다시 이을 때 넣고, 이미 넣은 메일은 다시 넣지 않는다', async () => {
   const { host, mail, logs } = await setup({ preload: 1 })
   await flush()

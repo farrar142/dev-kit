@@ -1,9 +1,9 @@
-// D5 사람 입력 중·답한 직후 보류: 일반 메일 턴을 미루고, 입력을 지우거나 시간이 지나면 넣는다. 긴급은 따르지 않는다.
+// 사람 입력 중 보류: 일반 메일 턴을 미루고, 입력을 지우거나 시간이 지나면 넣는다. 긴급은 따르지 않는다. 답한 직후 읽기 보류는 없다(#172).
 import { expect, test } from 'claude-code/testing'
 
 import { announce } from './mailbox'
 import { runTurn, setup } from './mailtest'
-import { DEFAULT_HOLD_MS, DEFAULT_SHORT_TURN_MS, DEFAULT_TYPING_MS, holdConfig, shortTurnConfig, typingConfig } from './switchboard'
+import { DEFAULT_TYPING_MS, typingConfig } from './switchboard'
 import { flush } from './testing'
 
 const MIN = 60_000
@@ -20,38 +20,8 @@ test('보류: 입력창에 글이 있으면 일반 메일을 미루고, 글을 �
   expect(host.turns).toEqual([announce([a])])
 })
 
-test('보류: 사람이 보낸 턴이 끝난 뒤 보류 시간 동안 미루고, 지나면 넣는다(가짜 시계)', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  host.emit({ type: 'input.submit', text: '이거 해 줘', origin: 'user' })
-  host.emit({ type: 'turn.start' })
-  const a = mail.send()
-  await flush()
-  host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(host.turns).toEqual([])
-
-  await host.clock.advance(3 * MIN - 1)
-  expect(host.turns).toEqual([])
-  await host.clock.advance(1)
-  expect(host.turns).toEqual([announce([a])])
-})
-
-test('보류: 보류 중 사람이 또 보내면 그 턴이 끝난 때부터 다시 센다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  host.emit({ type: 'input.submit', text: '하나', origin: 'user' })
-  await runTurn(host)
-  const a = mail.send()
-  await host.clock.advance(2 * MIN)
-  host.emit({ type: 'input.submit', text: '둘', origin: 'user' })
-  await runTurn(host)
-  await host.clock.advance(2 * MIN)
-  expect(host.turns).toEqual([])
-  await host.clock.advance(1 * MIN)
-  expect(host.turns).toEqual([announce([a])])
-})
-
 test('보류: 플러그인이 넣은 턴(메일 알림 등)은 사람 입력으로 치지 않는다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
+  const { host, mail } = await setup()
   const a = mail.send()
   await flush()
   expect(host.turns).toEqual([announce([a])])
@@ -64,7 +34,7 @@ test('보류: 플러그인이 넣은 턴(메일 알림 등)은 사람 입력으�
 })
 
 test('보류: 긴급 메일은 보류를 따르지 않는다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
+  const { host, mail } = await setup()
   host.emit({ type: 'input.change', text: '쓰는 중' })
   const n = mail.send()
   const u = mail.send('urgent', '급함')
@@ -73,38 +43,6 @@ test('보류: 긴급 메일은 보류를 따르지 않는다', async () => {
   expect(host.turns[0]).toContain('급함')
   expect(mail.status(u)).toBe('read')
   expect(host.turns.some(t => t === announce([n]))).toBe(false)
-})
-
-test('보류: 질문 패널 답(noteUserInput)도 사람 입력이라 그 뒤 메일을 미뤄 겹치지 않는다', async () => {
-  const { host, mail, board } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  // 패널이 답을 넣는다: 사람 입력으로 치고, 그 턴은 plugin origin 으로 들어온다.
-  board.noteUserInput()
-  host.emit({ type: 'input.submit', text: '[질문 패널 답] q1', origin: 'plugin' })
-  const a = mail.send()
-  await flush()
-  expect(host.turns).toEqual([]) // 답 턴과 메일 턴이 겹치지 않는다.
-  await runTurn(host)
-  await host.clock.advance(3 * MIN)
-  expect(host.turns).toEqual([announce([a])])
-})
-
-test('보류 설정: 분 단위 환경변수 글(기본 3분, 0 이면 끔)', () => {
-  expect(holdConfig(undefined)).toBe(DEFAULT_HOLD_MS)
-  expect(holdConfig('5')).toBe(5 * MIN)
-  expect(holdConfig('0.5')).toBe(30_000)
-  expect(holdConfig('0')).toBe(0)
-  expect(holdConfig('곧')).toBe(DEFAULT_HOLD_MS)
-})
-
-test('보류: 0 이면 시간 보류 없이 턴이 끝나자마자 넣는다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 0 } })
-  host.emit({ type: 'input.submit', text: '해 줘', origin: 'user' })
-  host.emit({ type: 'turn.start' })
-  const a = mail.send()
-  await flush()
-  host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(host.turns).toEqual([announce([a])])
 })
 
 // #123 사람이 안 쳤는데 입력 중으로 보아 메일을 미루던 것: 사람이 바꾼 것만 입력 중, 그것도 마지막 입력 뒤 상한까지.
@@ -173,7 +111,7 @@ test('입력 중(#123): 상한 0 이면 글이 있는 동안 계속 미룬다', 
   expect(host.turns).toEqual([])
   host.emit({ type: 'input.submit', text: '쓰는 중', origin: 'user' })
   await runTurn(host)
-  await host.clock.advance(DEFAULT_HOLD_MS)
+  await flush()
   expect(host.turns).toEqual([announce([a])])
 })
 
@@ -187,63 +125,6 @@ test('입력 중(#123): typingConfig 는 분 글을 ms 로, 비거나 이상하�
 })
 
 // #125 긴 작업 턴 뒤에는 읽는 시간을 줄 까닭이 없다: 사람 턴 시작~끝이 짧은 턴 기준 이상이면 보류 없이 곧 넣는다.
-test('읽기 보류(#125): 긴 턴(기준 2분 이상) 뒤에는 보류 없이 곧 메일을 넣는다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  host.emit({ type: 'input.submit', text: '오래 걸리는 일', origin: 'user' })
-  host.emit({ type: 'turn.start' })
-  const a = mail.send()
-  await host.clock.advance(2 * MIN)
-  host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(host.turns).toEqual([announce([a])])
-})
-
-test('읽기 보류(#125): 짧은 턴(기준 미만) 뒤에는 보류를 유지한다', async () => {
-  const { host, mail } = await setup({ board: { holdAfterUserMs: 3 * MIN } })
-  host.emit({ type: 'input.submit', text: '짧은 질문', origin: 'user' })
-  host.emit({ type: 'turn.start' })
-  const a = mail.send()
-  await host.clock.advance(2 * MIN - 1)
-  host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(host.turns).toEqual([])
-  await host.clock.advance(3 * MIN - 1)
-  expect(host.turns).toEqual([])
-  await host.clock.advance(1)
-  expect(host.turns).toEqual([announce([a])])
-})
-
-test('읽기 보류(#125): 기준을 바꾸면 따른다(30초), 0 이면 기준 없음이라 긴 턴도 늘 보류한다', async () => {
-  const a30 = await setup({ board: { holdAfterUserMs: 3 * MIN, shortTurnMs: 30_000 } })
-  a30.host.emit({ type: 'input.submit', text: '하나', origin: 'user' })
-  a30.host.emit({ type: 'turn.start' })
-  const m1 = a30.mail.send()
-  await a30.host.clock.advance(30_000)
-  a30.host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(a30.host.turns).toEqual([announce([m1])])
-
-  const zero = await setup({ board: { holdAfterUserMs: 3 * MIN, shortTurnMs: 0 } })
-  zero.host.emit({ type: 'input.submit', text: '둘', origin: 'user' })
-  zero.host.emit({ type: 'turn.start' })
-  const m2 = zero.mail.send()
-  await zero.host.clock.advance(30 * MIN)
-  zero.host.emit({ type: 'turn.complete' })
-  await flush()
-  expect(zero.host.turns).toEqual([])
-  await zero.host.clock.advance(3 * MIN)
-  expect(zero.host.turns).toEqual([announce([m2])])
-})
-
-test('읽기 보류 설정(#125): 분 글, 비거나 이상하면 기본 2분, 0 이면 기준 없음', () => {
-  expect(shortTurnConfig(undefined)).toBe(DEFAULT_SHORT_TURN_MS)
-  expect(DEFAULT_SHORT_TURN_MS).toBe(2 * MIN)
-  expect(shortTurnConfig('5')).toBe(5 * MIN)
-  expect(shortTurnConfig('0.5')).toBe(30_000)
-  expect(shortTurnConfig('0')).toBe(0)
-  expect(shortTurnConfig('곧')).toBe(DEFAULT_SHORT_TURN_MS)
-})
-
 // #168 빈 입력창인데 입력 중으로 남던 것: 글자처럼 안 보이는 것뿐이거나, 비움 사건이 코어에 못 닿은 경우.
 test('입력 중(#168): 보이지 않는 글자(너비 0 공백·제어 문자)뿐이면 입력 중이 아니다', async () => {
   const { host, mail } = await setup()
@@ -276,4 +157,41 @@ test('입력 중(#168): 입력창을 읽어 보니 글이 있으면 계속 미�
   host.setInputBox('')
   await host.clock.advance(1 * MIN)
   expect(a).toBeGreaterThan(0)
+})
+
+test('읽기 보류 없음(#172): 짧은 턴이 끝나자마자 대기 메일이 지연 없이 들어간다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.submit', text: '해 줘', origin: 'user' })
+  host.emit({ type: 'turn.start' })
+  const a = mail.send()
+  await flush()
+  host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('읽기 보류 없음(#172): 긴 턴(10분) 뒤에도 지연 없이 들어간다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.submit', text: '오래 걸리는 일', origin: 'user' })
+  host.emit({ type: 'turn.start' })
+  const a = mail.send()
+  await host.clock.advance(10 * MIN)
+  host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
+})
+
+test('읽기 보류 없음(#172): 턴이 끝난 뒤 입력창에 글이 있으면 그것만 미룬다', async () => {
+  const { host, mail } = await setup()
+  host.emit({ type: 'input.submit', text: '해 줘', origin: 'user' })
+  host.emit({ type: 'turn.start' })
+  host.emit({ type: 'input.change', text: '다음에는 ' })
+  const a = mail.send()
+  await flush()
+  host.emit({ type: 'turn.complete' })
+  await flush()
+  expect(host.turns).toEqual([])
+  host.emit({ type: 'input.change', text: '' })
+  await flush()
+  expect(host.turns).toEqual([announce([a])])
 })

@@ -22,7 +22,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
 | [issue-track](#issue-track) | 0.9.2 | 스킬·에이전트·스크립트 | GitHub 이슈를 작업자에게 맡기는 조율자 |
-| [switchboard](#switchboard) | 0.12.9 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문 |
+| [switchboard](#switchboard) | 0.12.10 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
 | [token-diet](#token-diet) | 0.1.0 | 훅 2·스킬 | 큰 파일 읽기·큰 heredoc 막기, 작업자 토큰 규율 |
@@ -68,7 +68,7 @@ question-panel을 대체하는 세션 교환대. 에이전트를 모르는 코�
 | `SWITCHBOARD_CONFIG_DIR` | 설정 폴더(기본은 OS별 설정 폴더 아래 `switchboard/`) |
 | `SWITCHBOARD_ENDPOINT`·`SWITCHBOARD_TOKEN` | 서버 주소·토큰(프로필 파일 대신) |
 | `SWITCHBOARD_BOSS_ROLES` | 서버가 대장 판정을 못 줄 때 쓰는 대장 역할 목록 |
-| `SWITCHBOARD_TYPING_MINUTES`·`SWITCHBOARD_HOLD_SHORT_TURN_MINUTES`·`SWITCHBOARD_HOLD_MINUTES` | 입력 중·긴 턴 뒤 메일 보류 시간 |
+| `SWITCHBOARD_TYPING_MINUTES` | 입력 중 메일 보류 상한(분) |
 | `SWITCHBOARD_COMPACT_TOKENS`·`SWITCHBOARD_COMPACT_INSTRUCTIONS` | 메일 전 compact 기준·지시 |
 | `SWITCHBOARD_ALLOW_ASK_USER_QUESTION=1` | qp가 붙은 세션에서도 `AskUserQuestion` 허용 |
 
