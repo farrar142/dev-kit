@@ -23,7 +23,7 @@ afterEach(async () => {
   await server.stop()
 })
 
-const asker = async (where?: { sessionId: string; cwd: string }) => {
+const asker = async (where?: { sessionId: string; cwd: string; label?: string }) => {
   const s = await askerSession(server, where)
   open.push(s)
 
@@ -55,6 +55,14 @@ const expectDelivered = async (s: Session, id: string, want: number, what: strin
   await sleep(SETTLE_MS)
   const n = s.answerLines(id)
   assert.equal(n, want, `${SOT}: ${what}이 묻는 세션(${s.role})에 ${n}번 들어감(${want}번이어야 함)`)
+}
+
+/** 관리자 목록의 답 넘김 상태(waiting: 넘길 세션을 기다림, '': 넘김 끝 또는 해당 없음). */
+const delivery = async (id: string) => {
+  const r = await server.admin('GET', '/api/admin/questions')
+  const list = (r.json as { questions?: { id: string; delivery?: string }[] } | null)?.questions ?? []
+
+  return list.find(q => q.id === id)?.delivery ?? ''
 }
 
 const stored = async (id: string) => (await server.call('partner-a/coordinator', 'GET', `/api/questions/${id}`)).json as { status: string; answered_by: string }
@@ -139,9 +147,79 @@ test(`${SOT}: AskerSessionRestarts — 묻는 세션이 같은 번호로 다시 
   assert.equal(a1.answerLines(id), 0, `${SOT}: 끝난 세션에 답이 들어감`)
 })
 
+test(`${SOT}: AskerBackUnderAnotherNumber — 묻는 세션이 다른 번호로 돌아와도 답은 그 세션에 1번, 옛 번호를 받은 남의 세션에는 0번`, async () => {
+  const b = await boss()
+  await asker({ sessionId: 'a', cwd: '/work/a' })
+  const q = await asker({ sessionId: 'q', cwd: '/work/q' })
+  const id = await ask(q, b)
+  const old = q.board.mail().role
+  await q.stop()
+  const other = await asker({ sessionId: 'other', cwd: '/work/other' })
+  assert.equal(other.board.mail().role, old, `${SOT}: 다른 세션이 묻던 번호 ${old} 를 받지 않음(${other.board.mail().role})`)
+  const back = await asker({ sessionId: 'q-back', cwd: '/work/q' })
+  assert.notEqual(back.board.mail().role, old, `${SOT}: 돌아온 묻는 세션이 옛 번호를 받음`)
+  await b.answerOnPanel(id)
+  await expectDelivered(back, id, 1, '다른 번호로 돌아온 뒤 패널 답')
+  assert.equal(other.answerLines(id), 0, `${SOT}: 옛 번호를 받은 남의 세션(${other.board.mail().role})에 답이 들어감`)
+})
+
+test(`${SOT}: NewestLiveSlotGetsAnswer — 묻던 세션이 없으면 가장 늦게 붙은 같은 역할 세션 하나에만 1번`, async () => {
+  const b = await boss()
+  const q = await asker({ sessionId: 'q', cwd: '/work/q' })
+  const id = await ask(q, b)
+  await q.stop()
+  const older = await asker({ sessionId: 'older', cwd: '/work/a' })
+  const newer = await asker({ sessionId: 'newer', cwd: '/work/b' })
+  await b.answerOnPanel(id)
+  await expectDelivered(newer, id, 1, '묻던 세션이 없을 때의 패널 답')
+  assert.equal(older.answerLines(id), 0, `${SOT}: 먼저 붙은 세션(${older.board.mail().role})에도 답이 들어감`)
+})
+
+test(`${SOT}: WaitingAnswerGoesToNextSessionOnce — 같은 역할 세션이 하나도 없으면 답은 기다렸다가 다음에 붙는 세션 하나에 1번`, async () => {
+  const b = await boss()
+  const a = await asker({ sessionId: 'a', cwd: '/work/a' })
+  const q = await asker({ sessionId: 'q', cwd: '/work/q' })
+  const id = await ask(q, b)
+  await a.stop()
+  await q.stop()
+  await b.answerOnPanel(id)
+  assert.equal(await delivery(id), 'waiting', `${SOT}: 세션이 없을 때 관리자 목록 delivery 가 waiting 이 아님`)
+  const first = await asker({ sessionId: 'first', cwd: '/work/b' })
+  const second = await asker({ sessionId: 'second', cwd: '/work/c' })
+  await expectDelivered(first, id, 1, '기다리던 답')
+  assert.equal(second.answerLines(id), 0, `${SOT}: 기다리던 답이 둘째 세션(${second.board.mail().role})에도 들어감`)
+  assert.equal(await delivery(id), '', `${SOT}: 넘긴 뒤에도 관리자 목록 delivery 가 남음`)
+})
+
+test(`${SOT}: OtherLabelNeverGetsAnswer — 라벨이 다른 세션에는 답이 안 가고, 같은 라벨 세션이 붙을 때 1번`, async () => {
+  const b = await boss()
+  const busy = await asker({ sessionId: 'busy', cwd: '/work/a', label: 'issue-2' })
+  const q = await asker({ sessionId: 'q', cwd: '/work/q', label: 'issue-1' })
+  const id = await ask(q, b)
+  await q.stop()
+  await b.answerOnPanel(id)
+  assert.equal(await delivery(id), 'waiting', `${SOT}: 다른 라벨 세션만 있을 때 관리자 목록 delivery 가 waiting 이 아님`)
+  const taker = await asker({ sessionId: 'taker', cwd: '/work/d', label: 'issue-2' })
+  const same = await asker({ sessionId: 'same', cwd: '/work/e', label: 'issue-1' })
+  await expectDelivered(same, id, 1, '같은 라벨 세션에 넘긴 답')
+  assert.equal(busy.answerLines(id), 0, `${SOT}: 다른 라벨 세션(busy)에 답이 들어감`)
+  assert.equal(taker.answerLines(id), 0, `${SOT}: 다른 라벨 세션(taker)에 답이 들어감`)
+})
+
+test(`${SOT}: LiveAskerKeepsAnswer — 묻던 세션이 살아 있으면 뒤에 붙은 같은 역할 세션이 있어도 묻던 세션에 1번`, async () => {
+  const b = await boss()
+  await asker({ sessionId: 'a', cwd: '/work/a' })
+  const q = await asker({ sessionId: 'q', cwd: '/work/q' })
+  const id = await ask(q, b)
+  const newer = await asker({ sessionId: 'newer', cwd: '/work/b' })
+  await b.answerOnPanel(id)
+  await expectDelivered(q, id, 1, '살아 있는 묻던 세션의 답')
+  assert.equal(newer.answerLines(id), 0, `${SOT}: 뒤에 붙은 세션(${newer.board.mail().role})에 답이 들어감`)
+})
+
 test(
-  `${SOT}: AskerSessionRestarts — 옛 세션이 번호를 쥔 채 재시작해 다른 번호를 받아도 답이 새 세션에 1번`,
-  { skip: 'sandcorporation/switchboard#169: 답 메일이 묻던 번호 메일함으로만 가서 다른 번호의 새 세션에 닿지 않는다(서버 수정 릴리스 뒤 잇는다)' },
+  `${SOT}: AskerSessionRestarts — 옛 세션이 정상 종료 없이 죽어 번호를 쥔 채(임대 중) 재시작하면 답이 새 세션에 1번`,
+  { skip: '서버 v0.12.0: 답할 때 묻던 번호의 임대(기본 3분)가 살아 있으면 그 번호로 보내, 죽은 세션 메일함에 남는다(#169 는 번호를 돌려준 경우만 덮음 — 서버 후속 필요)' },
   async () => {
     const b = await boss()
     const a1 = await asker({ sessionId: 'asker-1', cwd: '/work/asker' })

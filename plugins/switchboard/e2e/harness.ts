@@ -275,7 +275,7 @@ const profilePath = (name: string) => `/home/ci/.config/switchboard/${name}.json
 const openSession = async (
   server: Server,
   role: string,
-  where: { sessionId: string; cwd: string },
+  where: { sessionId: string; cwd: string; label?: string },
   extra: Parameters<typeof createSwitchboard>[1] = {},
 ): Promise<Session> => {
   const host = realHost({ sessionId: where.sessionId, machine: 'ci-box', cwd: where.cwd, isMain: true })
@@ -285,7 +285,7 @@ const openSession = async (
   const board = createSwitchboard(host, {
     ...extra,
     permissions: { waitMs: 0, bosses: [BOSS] },
-    mail: { profilePath: path, log: t => void logs.push(t), slot: {} },
+    mail: { profilePath: path, log: t => void logs.push(t), slot: where.label === undefined ? {} : { label: where.label } },
     log: t => void logs.push(t),
   })
   if (!(await board.start())) throw new Error(`${role}: 교환대가 켜지지 않음`)
@@ -305,7 +305,8 @@ const openSession = async (
 }
 
 /** 묻는 세션(번호 역할로 붙는다). */
-export const askerSession = (server: Server, where = { sessionId: 'asker-1', cwd: '/work/asker' }) => openSession(server, ASKER, where)
+export const askerSession = (server: Server, where: { sessionId: string; cwd: string; label?: string } = { sessionId: 'asker-1', cwd: '/work/asker' }) =>
+  openSession(server, ASKER, where)
 
 export type BossSession = Session & {
   panel: QuestionPanel
