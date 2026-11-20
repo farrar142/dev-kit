@@ -79,6 +79,7 @@ PR 본문 꼬리말: <system-reminder가 준 줄>
    | `ISSUE_TRACK_PR_COMMENT_PREFIX` | `wait-ci.py --comment-prefix` | `PR 검사 실패 — ` | PR 검사 실패 댓글 첫 줄 표지 |
 
    기계 전체에 두려면 `~/.claude/settings.json`의 `env`에 둔다(세션이 띄우는 Bash에 들어간다).
+   - 병합 큐를 쓰는 저장소: PR이 대기열에 있는 동안은 검사가 초록이어도 SUCCESS로 끝내지 않고 병합을 기다린다. 대기열 실행이 실패해 PR이 병합 없이 빠지면 `DEQUEUED`(종료 코드 6, 대기열 실행의 실패 줄 포함)로 끝난다 — 작업자가 고쳐 다시 대기열에 넣게 한다. 이 결과가 오면 「병합 대기」로 보고하지 않는다.
    - 종료 코드 2는 MERGED·CLOSED다. 배경 작업 알림이 「failed with exit code 2」라 해도 마지막 줄이 `MERGED PR #N`이면 정상이다.
    - 병합 큐처럼 검사 하나가 묵은 FAILURE를 들고 있으면(재실행 중인데 옛 결과가 남음) 스크립트가 곧바로 FAILURE로 끝난다. 그때는 그 검사가 PENDING으로 바뀐 뒤 다시 띄운다.
    - 결과를 짐작해 보고하지 않는다. PR 상태를 말하기 직전에 `gh pr view <번호> --json state,mergedAt`를 친다 — 작업자의 중간 알림만 믿고 이미 병합된 PR을 「아직 대기」로 14분간 보고한 적이 있다.
