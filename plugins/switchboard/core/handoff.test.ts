@@ -59,12 +59,12 @@ test('백그라운드 Bash: job run --wait --label 앞 60자 -- 셸 -c 원래 �
   expect(w.slice(6)).toEqual(['--', 'bash', '-c', NASTY])
 })
 
-test('Monitor: watch start --attach --expires 분 --label 설명 -- 셸 -c 원래 명령', () => {
+test('Monitor: watch start --attach --no-extend --expires <ms>ms --label 설명 -- 셸 -c 원래 명령', () => {
   const w = shellWords(watchStartCommand('/opt/sb', '/bin/zsh', "tail -f log | grep 'ERR'", '오류 줄', monitorExpires(300_000)))
-  expect(w).toEqual(['/opt/sb', 'watch', 'start', '--attach', '--expires', '5m', '--label', '오류 줄', '--', '/bin/zsh', '-c', "tail -f log | grep 'ERR'"])
+  expect(w).toEqual(['/opt/sb', 'watch', 'start', '--attach', '--no-extend', '--expires', '300000ms', '--label', '오류 줄', '--', '/bin/zsh', '-c', "tail -f log | grep 'ERR'"])
   expect(shellWords(watchStartCommand('sb', 'bash', 'x', '', undefined))).toEqual(['sb', 'watch', 'start', '--attach', '--label', 'x', '--', 'bash', '-c', 'x'])
   expect(monitorExpires(0)).toBe(undefined)
-  expect(monitorExpires(61_000)).toBe('2m')
+  expect(monitorExpires(61_000)).toBe('61000ms')
 })
 
 test('이미 넘긴 명령은 다시 감싸지 않는다', () => {
@@ -105,9 +105,9 @@ test('CronCreate: 되풀이는 --cron 그대로, 박힌 한 번짜리는 --at, �
 })
 
 test('ScheduleWakeup: 지연을 [60, 3600] 으로 자르고 분으로 올린다', () => {
-  expect(wakeupIn(30)).toBe('1m')
-  expect(wakeupIn(270)).toBe('5m')
-  expect(wakeupIn(99_999)).toBe('60m')
+  expect(wakeupIn(30)).toBe('60s')
+  expect(wakeupIn(270)).toBe('270s')
+  expect(wakeupIn(99_999)).toBe('3600s')
   expect(wakeupIn(undefined)).toBe(undefined)
 })
 
@@ -123,9 +123,9 @@ test('schedule add 인자와 예약 id', () => {
 })
 
 test('판 견주기', () => {
-  expect(versionAtLeast('switchboard v0.26.0\n', '0.26.0')).toBe(true)
-  expect(versionAtLeast('switchboard v0.27.1', '0.26.0')).toBe(true)
-  expect(versionAtLeast('switchboard v1.0.0', '0.26.0')).toBe(true)
-  expect(versionAtLeast('switchboard v0.16.0', '0.26.0')).toBe(false)
-  expect(versionAtLeast('dev', '0.26.0')).toBe(false)
+  expect(versionAtLeast('switchboard v0.27.0\n', '0.27.0')).toBe(true)
+  expect(versionAtLeast('switchboard v0.28.1', '0.27.0')).toBe(true)
+  expect(versionAtLeast('switchboard v1.0.0', '0.27.0')).toBe(true)
+  expect(versionAtLeast('switchboard v0.26.0', '0.27.0')).toBe(false)
+  expect(versionAtLeast('dev', '0.27.0')).toBe(false)
 })
