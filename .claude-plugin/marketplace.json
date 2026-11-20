@@ -6,7 +6,7 @@
     {
       "name": "issue-track",
       "source": "./plugins/issue-track",
-      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 CI 대기(wait-ci)·결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트, 병렬 실행 함정 문서 포함). 한 건을 원격 기계 작업자 세션에 Orca·switchboard 메일함으로 맡기는 절차와, 로컬·원격 기계의 플러그인을 모든 범위(user·project·local)에서 갱신해 범위별 판 표·옛 판 세션을 찍고 옛 판이 남으면 실패로 끝나는 update-plugins 스크립트(원격 PowerShell 포함, 0.9.0). 조율자는 대기 스크립트 대신 switchboard 구독으로 깨어난다(0.9.2). 셸 `&`·nohup 으로 떼어 띄워 끝나도 알림이 안 오는 명령을 막는 PreToolUse 훅 detach-guard(0.10.0). wait-ci 가 병합 대기열을 본다: 대기열에 있는 동안은 병합까지 기다리고 병합 없이 빠지면 DEQUEUED(종료 코드 6)와 대기열 실행 실패 줄로 끝낸다(0.11.0)"
+      "description": "GitHub 이슈를 한 트랙으로 issue-worker에게 맡기고 CI 대기(wait-ci)·결과 확인·토큰 측정·지시서 개선까지 돌리는 조율 흐름(작업자·심부름꾼 에이전트, 병렬 실행 함정 문서 포함). 한 건을 원격 기계 작업자 세션에 Orca·switchboard 메일함으로 맡기는 절차와, 로컬·원격 기계의 플러그인을 모든 범위(user·project·local)에서 갱신해 범위별 판 표·옛 판 세션을 찍고 옛 판이 남으면 실패로 끝나는 update-plugins 스크립트(원격 PowerShell 포함, 0.9.0). 조율자는 대기 스크립트 대신 switchboard 구독으로 깨어난다(0.9.2). 셸 `&`·nohup 으로 떼어 띄워 끝나도 알림이 안 오는 명령을 막는 PreToolUse 훅 detach-guard(0.10.0). wait-ci 가 병합 대기열을 본다: 대기열에 있는 동안은 병합까지 기다리고 병합 없이 빠지면 DEQUEUED(종료 코드 6)와 대기열 실행 실패 줄로 끝낸다(0.11.0). 패턴으로 프로세스를 죽이는 명령(pkill -f·pkill --full·killall -r·pgrep -f 결과를 kill 에 넘기는 줄)을 막는 PreToolUse 훅 kill-guard, ISSUE_TRACK_ALLOW_PKILL=1 로 끈다(0.12.0)"
     },
     {
       "name": "django-asgi",
