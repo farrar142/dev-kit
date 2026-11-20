@@ -17,6 +17,7 @@ import {
   wireStallEvents,
 } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
+import { wireHandoff } from '../adapters/handoff'
 import { mcpLedger, SERVER } from '../adapters/ledger'
 import {
   chatBlock,
@@ -416,6 +417,8 @@ export const register: Register = on => {
   wireClaudeEvents(on, emitter, box)
   // 멈춤 감지(D8): API 오류 멈춤·사람 기다림을 코어로.
   wireStallEvents(on, emitter)
+  // 백그라운드 명령·예약·감시를 switchboard 장부로 넘긴다(#182). 끄기: SWITCHBOARD_HANDOFF=0.
+  wireHandoff(on)
   // 정상 종료(/exit·/clear 등): 번호 역할을 release 한다. 안 하면 lease 가 끝날 때 서버가 부모에게 offline 통지를 보낸다.
   on('session.end', async ($, e, next) => {
     const b = board
