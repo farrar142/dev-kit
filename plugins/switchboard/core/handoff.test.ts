@@ -123,9 +123,10 @@ test('schedule add 인자와 예약 id', () => {
 })
 
 test('판 견주기', () => {
-  expect(versionAtLeast('switchboard v0.27.0\n', '0.27.0')).toBe(true)
-  expect(versionAtLeast('switchboard v0.28.1', '0.27.0')).toBe(true)
-  expect(versionAtLeast('switchboard v1.0.0', '0.27.0')).toBe(true)
-  expect(versionAtLeast('switchboard v0.26.0', '0.27.0')).toBe(false)
-  expect(versionAtLeast('dev', '0.27.0')).toBe(false)
+  expect(versionAtLeast('switchboard v0.29.0\n', '0.29.0')).toBe(true)
+  expect(versionAtLeast('switchboard v0.29.1', '0.29.0')).toBe(true)
+  expect(versionAtLeast('switchboard v0.28.9', '0.29.0')).toBe(false)
+  expect(versionAtLeast('switchboard v1.0.0', '0.29.0')).toBe(true)
+  expect(versionAtLeast('switchboard v0.26.0', '0.29.0')).toBe(false)
+  expect(versionAtLeast('dev', '0.29.0')).toBe(false)
 })
