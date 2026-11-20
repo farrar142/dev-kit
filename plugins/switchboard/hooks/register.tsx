@@ -12,6 +12,7 @@ import {
   mailProfilePath,
   permissionEnv,
   permissionSummary,
+  readCliVersion,
   slotEnv,
   wireClaudeEvents,
   wireStallEvents,
@@ -479,6 +480,7 @@ export const register: Register = on => {
           ...(se.label === undefined ? {} : { label: se.label }),
           ...(se.parent === undefined ? {} : { parent: se.parent }),
           singleRoles: singleRolesConfig(se.singles),
+          cliVersion: () => readCliVersion($),
           warn: text => void $.ui.toast(text),
           // 세션의 Bash 가 `switchboard read/ack/complete` 를 번호 메일함으로 하게(D8).
           onRole: role => void exportRole($, role),

@@ -75,6 +75,8 @@ export type SlotConfig = {
   /** 단일 역할인데 -2 이상을 받았을 때(토스트 등). */
   warn?: (text: string) => void
   singleRoles?: readonly string[]
+  /** CLI 판 읽기(슬롯 요청 머리 X-Switchboard-Version). 없으면 머리를 싣지 않는다. */
+  cliVersion?: () => Promise<string | undefined>
   /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE 을 맞춘다). */
   onRole?: (role: string) => void
 }
@@ -844,6 +846,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
         log,
         ...(cfg.warn === undefined ? {} : { warn: cfg.warn }),
         ...(cfg.singleRoles === undefined ? {} : { singleRoles: cfg.singleRoles }),
+        ...(cfg.cliVersion === undefined ? {} : { cliVersion: cfg.cliVersion }),
       })
       slot = s
       // 번호를 받은 뒤 구독한다(-2 세션이 잠깐이라도 -1 메일을 받지 않게). 못 받으면(옛 서버·끊김) 기반 역할로.

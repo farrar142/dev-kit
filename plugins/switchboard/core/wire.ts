@@ -10,6 +10,16 @@ export const roleHeaders = (token: string, role: string): Record<string, string>
   'X-Agent-Mail-Role': role,
 })
 
+/** 슬롯 요청에 싣는 CLI 판 머리. 값은 `vX.Y.Z`(플러그인 판이 아니라 세션이 쓰는 CLI 의 판). */
+export const VERSION_HEADER = 'X-Switchboard-Version'
+
+/** `switchboard version` 출력(「switchboard v0.31.0」)에서 `vX.Y.Z` 를 뽑는다. 못 읽으면 undefined. */
+export const parseCliVersion = (text: string): string | undefined => {
+  const m = /\bv(\d+\.\d+\.\d+)\b/.exec(text)
+
+  return m === null ? undefined : `v${m[1]}`
+}
+
 export const GROUP_REFUSAL = '묶음 밖 역할에는 보낼 수 없다(받은 메일에 회신은 된다)'
 
 /** 협업 묶음 거절(403 outside your group)인가. */
