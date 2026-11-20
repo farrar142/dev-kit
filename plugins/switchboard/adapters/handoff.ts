@@ -1,6 +1,6 @@
 // 넘기기 훅(#182): 세션의 백그라운드 Bash·Monitor·CronCreate/CronDelete/CronList·ScheduleWakeup 을 switchboard 장부로 넘긴다.
 // 계약: sandcorporation/switchboard#288 「Plugin hook contract」. 무엇을 바꾸는지는 core/handoff.ts, 여기는 실행과 훅 연결이다.
-//  - 켜는 조건: 플랫폼이 HANDOFF_PLATFORMS 안, SWITCHBOARD_HANDOFF 가 0·off 가 아님, 역할 프로필 있음, 본 세션(서브에이전트 아님).
+//  - 켜는 조건: 플랫폼이 HANDOFF_PLATFORMS 안, SWITCHBOARD_HANDOFF 가 1·on·true·yes(기본은 꺼짐), 역할 프로필 있음, 본 세션(서브에이전트 아님).
 //  - 건강: `switchboard job ping`, 없으면 `switchboard version` ≥ 0.27.0.
 //  - 실패하면 원래 호출을 그대로 돌리고 결과에 「넘기지 못했다」 한 줄을 더한다. 훅 자체의 오류도 원래 호출을 막지 않는다.
 import type { On } from 'claude-code'
@@ -11,7 +11,7 @@ import {
   cronSchedule,
   HANDOFF_MIN_VERSION,
   HANDOFF_PLATFORMS,
-  handoffOff,
+  handoffOn,
   isLoopSentinel,
   jobRunCommand,
   monitorExpires,
@@ -53,7 +53,7 @@ const quiet = async (read: () => Promise<string | undefined>): Promise<string | 
   }
 }
 
-/** 넘기기 환경변수: 끄기(SWITCHBOARD_HANDOFF), CLI(SWITCHBOARD_CLI), 셸(SHELL). $.env.get 은 글자 그대로의 이름만 받는다. */
+/** 넘기기 환경변수: 켜기(SWITCHBOARD_HANDOFF), CLI(SWITCHBOARD_CLI), 셸(SHELL). $.env.get 은 글자 그대로의 이름만 받는다. */
 async function handoffEnv($: Self): Promise<{ off: string | undefined; cli: string | undefined; shell: string | undefined }> {
   return {
     off: await quiet(() => $.env.get('SWITCHBOARD_HANDOFF')),
@@ -80,7 +80,7 @@ async function checkHealth($: Self, cli: string): Promise<Health> {
 async function ready($: Self, agentId: unknown): Promise<Ready> {
   if (agentId !== undefined) return { kind: 'skip' }
   const env = await handoffEnv($)
-  if (handoffOff(env.off)) return { kind: 'skip' }
+  if (!handoffOn(env.off)) return { kind: 'skip' }
   let platform = 'unknown'
   try {
     platform = (await $.session.info()).platform ?? 'unknown'

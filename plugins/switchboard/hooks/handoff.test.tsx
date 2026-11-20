@@ -9,7 +9,7 @@ type Opts = {
   cli?: (args: string[]) => { exitCode?: number; stdout?: string; stderr?: string } | 'throw'
 }
 
-const BASE_ENV = { SWITCHBOARD_PROFILE: 'worker', HOME: '/home/u', SHELL: '/bin/bash' }
+const BASE_ENV = { SWITCHBOARD_PROFILE: 'worker', HOME: '/home/u', SHELL: '/bin/bash', SWITCHBOARD_HANDOFF: '1' }
 
 // 흉내 CLI: job ping 은 없는 판(0.27.0)처럼 exit 2, version 은 v0.27.0.
 const cli026 = (args: string[]) =>
@@ -64,8 +64,8 @@ test('앞(전경) Bash 와 이미 넘긴 명령은 그대로', async ($, on) => 
   expect(calls.length).toBe(0)
 })
 
-test('끄기: SWITCHBOARD_HANDOFF=0 이면 아무것도 바꾸지 않고 CLI 도 안 부른다', async ($, on) => {
-  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_HANDOFF: '0' } })
+test('기본 꺼짐: SWITCHBOARD_HANDOFF 가 없거나 0 이면 아무것도 바꾸지 않고 CLI 도 안 부른다', async ($, on) => {
+  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_HANDOFF: undefined } })
   await $.tool.call({ tool: 'Bash', command: 'sleep 1', run_in_background: true } as any)
   const ran: any = await $.tool.call({ tool: 'CronCreate', cron: '*/5 * * * *', prompt: 'p' } as any)
   expect(passed.map(p => p.command ?? p.prompt)).toEqual(['sleep 1', 'p'])
