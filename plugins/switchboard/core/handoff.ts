@@ -6,7 +6,7 @@
 export const HANDOFF_PLATFORMS: readonly string[] = ['linux']
 
 /** `job ping` 이 처음 들어간 CLI 판. 이보다 낮으면 ping 이 exit 2(알 수 없는 명령)로 끝나 넘기지 않는다. */
-export const HANDOFF_MIN_VERSION = '0.29.0'
+export const HANDOFF_MIN_VERSION = '0.30.0'
 
 /** `job ping` 종료 코드 → 확인 이름(README 「플러그인 훅 계약」). 0 은 정상이라 없다. */
 export const PING_CHECKS: Readonly<Record<number, string>> = { 10: 'config', 11: 'data', 12: 'server', 13: 'token', 14: 'runner' }
