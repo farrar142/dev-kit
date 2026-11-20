@@ -136,21 +136,21 @@ test('job ping 시간 초과(실행이 던진다): 원래 호출', async ($, on)
 
 test('ping 성공은 기억해 다시 부르지 않고, 실패는 기억하지 않는다', async ($, on) => {
   let code = 0
-  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/memo/switchboard' }, cli: () => ({ exitCode: code }) })
+  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/memo/switchboard' }, cli: a => (a[0] === 'version' ? { stdout: 'switchboard v0.30.0' } : { exitCode: code }) })
   await $.tool.call(BG)
   await $.tool.call(BG)
-  expect(calls.length).toBe(1)
+  expect(calls.length).toBe(2) // job ping + version, 둘째 호출은 기억
   expect(passed.every(p => p.command.includes('job run'))).toBe(true)
 })
 
 test('ping 실패 뒤 고치면 바로 다시 넘어간다', async ($, on) => {
   let code = 12
-  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/fix/switchboard' }, cli: a => (a[1] === 'ping' ? { exitCode: code } : { exitCode: 0 }) })
+  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/fix/switchboard' }, cli: a => (a[1] === 'ping' ? { exitCode: code } : { exitCode: 0, stdout: 'switchboard v0.30.0' }) })
   await $.tool.call(BG)
   code = 0
   await $.tool.call(BG)
   expect(passed.map(p => p.command.startsWith("'/opt/fix/switchboard' job run"))).toEqual([false, true])
-  expect(calls.length).toBe(2)
+  expect(calls.length).toBe(3) // ping(실패), ping, version
 })
 
 test('CLI 가 없으면(실행 실패) 원래 명령 그대로', async ($, on) => {
@@ -160,11 +160,11 @@ test('CLI 가 없으면(실행 실패) 원래 명령 그대로', async ($, on) =
   expect(String(ran.context)).toContain('넘기지 못했다')
 })
 
-test('job ping 으로 건강을 잰다(version 은 부르지 않는다)', async ($, on) => {
-  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/only/switchboard' }, cli: a => (a[0] === 'job' && a[1] === 'ping' ? { exitCode: 0 } : { exitCode: 1 }) })
+test('job ping 과 version 으로 건강을 잰다', async ($, on) => {
+  const { passed, calls } = await setup(on, { env: { SWITCHBOARD_CLI: '/opt/only/switchboard' }, cli: a => (a[0] === 'job' && a[1] === 'ping' ? { exitCode: 0 } : a[0] === 'version' ? { stdout: 'switchboard v0.30.0' } : { exitCode: 1 }) })
   await $.tool.call(BG)
   expect(passed[0].command.startsWith(`'/opt/only/switchboard' job run`)).toBe(true)
-  expect(calls.map(c => c.slice(1).join(' '))).toEqual(['job ping'])
+  expect(calls.map(c => c.slice(1).join(' '))).toEqual(['job ping', 'version'])
 })
 
 test('SWITCHBOARD_CLI 로 실행 파일을 고르고, 바꾼 명령도 그것을 쓴다', async ($, on) => {
