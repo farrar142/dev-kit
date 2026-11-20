@@ -5,7 +5,7 @@ import {
   alreadyHanded,
   cronSchedule,
   handoffLabel,
-  handoffOff,
+  handoffOn,
   isLoopSentinel,
   jobRunCommand,
   monitorExpires,
@@ -82,12 +82,12 @@ test('감싼 명령 자신도 이미 넘긴 것으로 본다(따옴표 친 CLI �
   expect(alreadyHanded(watchStartCommand('/x/switchboard', 'bash', 'x', 'l'))).toBe(true)
 })
 
-test('셸 고르기·끄기 값·꼬리표', () => {
+test('셸 고르기·켜기 값·꼬리표', () => {
   expect(pickShell('/usr/bin/zsh')).toBe('/usr/bin/zsh')
   expect(pickShell('/usr/bin/fish')).toBe('bash')
   expect(pickShell(undefined)).toBe('bash')
-  expect(['0', 'off', 'OFF', ' false ', 'no'].map(handoffOff)).toEqual([true, true, true, true, true])
-  expect(['', '1', 'on', undefined].map(handoffOff)).toEqual([false, false, false, false])
+  expect(['1', 'on', 'ON', ' true ', 'yes'].map(handoffOn)).toEqual([true, true, true, true, true])
+  expect(['', '0', 'off', 'no', 'false', 'enable', undefined].map(handoffOn)).toEqual([false, false, false, false, false, false, false])
   expect(handoffLabel('a\n  b\tc')).toBe('a b c')
 })
 

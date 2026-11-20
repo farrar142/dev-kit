@@ -8,13 +8,20 @@ export const HANDOFF_PLATFORMS: readonly string[] = ['linux']
 /** 실행기(job·schedule·watch)가 처음 들어간 CLI 판. `job ping` 이 없을 때 `version` 으로 대신 잰다. */
 export const HANDOFF_MIN_VERSION = '0.27.0'
 
-/** 끄는 환경변수: 0·off·false·no 면 넘기지 않는다. */
+/** 켜는 환경변수. 기본은 꺼짐 — 1·on·true·yes 일 때만 넘긴다(사용자 범위로 올린 플러그인이 모든 세션을 시험에 넣지 않게). */
 export const HANDOFF_ENV = 'SWITCHBOARD_HANDOFF'
 
 /** CLI 실행 파일을 고르는 환경변수(없으면 PATH 의 `switchboard`). */
 export const HANDOFF_CLI_ENV = 'SWITCHBOARD_CLI'
 
-export const handoffOff = (value: string | undefined): boolean => /^(0|off|false|no)$/i.test(value?.trim() ?? '')
+/** 넘기기 기본값: 꺼짐. 켜는 값은 HANDOFF_ON_VALUES(대소문자 무시)뿐이고 그 밖(빈 값·0·off·오타 포함)은 꺼짐이다. */
+export const HANDOFF_DEFAULT_ON = false
+export const HANDOFF_ON_VALUES = ['1', 'on', 'true', 'yes'] as const
+
+export const handoffOn = (value: string | undefined): boolean => {
+  const v = value?.trim().toLowerCase()
+  return v === undefined || v === '' ? HANDOFF_DEFAULT_ON : (HANDOFF_ON_VALUES as readonly string[]).includes(v)
+}
 
 /** POSIX 셸 인자 하나로 감싼다. 작은따옴표만 끊어 넣으면 줄바꿈·`$`·heredoc 이 그대로 간다(bash·zsh·sh). */
 export const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`

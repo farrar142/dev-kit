@@ -1,5 +1,9 @@
 # switchboard 바뀐 것
 
+## 0.13.2
+
+- 넘기기 기본 꺼짐(#186): `SWITCHBOARD_HANDOFF`가 `1`·`on`·`true`·`yes`일 때만 켠다(없거나 그 밖의 값은 꺼짐). 사용자 범위로 올린 플러그인이 그 뒤 모든 세션을 넘기기 시험에 넣던 것을 막는다. 기본값 상수는 `core/handoff.ts`의 `HANDOFF_DEFAULT_ON`·`HANDOFF_ON_VALUES`.
+
 ## 0.13.1
 
 - 넘기기 고침(#184): CLI v0.27.0 이상이 필요하다(건강 검사 문턱 0.26.0 → 0.27.0).
