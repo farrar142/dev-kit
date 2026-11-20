@@ -1,7 +1,7 @@
 // 넘기기 훅(#182): 세션의 백그라운드 Bash·Monitor·CronCreate/CronDelete/CronList·ScheduleWakeup 을 switchboard 장부로 넘긴다.
 // 계약: sandcorporation/switchboard#288 「Plugin hook contract」. 무엇을 바꾸는지는 core/handoff.ts, 여기는 실행과 훅 연결이다.
 //  - 켜는 조건: 플랫폼이 HANDOFF_PLATFORMS 안, SWITCHBOARD_HANDOFF 가 1·on·true·yes(기본은 꺼짐), 역할 프로필 있음, 본 세션(서브에이전트 아님).
-//  - 건강: `switchboard job ping`(SWITCHBOARD_CLI 로 고른 그 실행 파일) 종료 코드 0 일 때만. 성공은 30초 기억, 실패는 기억하지 않는다. CLI ≥ 0.29.0.
+//  - 건강: `switchboard job ping`(SWITCHBOARD_CLI 로 고른 그 실행 파일) 종료 코드 0 일 때만. 성공은 30초 기억, 실패는 기억하지 않는다. CLI ≥ 0.30.0(0.29.x 의 ping 은 터미널 닫기에 죽는 실행기를 못 봐 version 으로도 잰다).
 //  - 실패하면 원래 호출을 그대로 돌리고 결과에 「넘기지 못했다」 한 줄을 더한다. 훅 자체의 오류도 원래 호출을 막지 않는다.
 import type { On } from 'claude-code'
 
@@ -21,6 +21,8 @@ import {
   scheduleIdOf,
   scheduleRef,
   pingWhy,
+  versionAtLeast,
+  HANDOFF_MIN_VERSION,
   wakeupDenyText,
   wakeupIn,
   watchStartCommand,
@@ -76,13 +78,15 @@ async function checkHealth($: Self, cli: string): Promise<Health> {
   } catch (err) {
     return { ok: false, why: `${cli} job ping 실행 실패 또는 시간 초과: ${firstLine(String(err))}` }
   }
+  let version: string | undefined
+  if (ping.exitCode === 0 || ping.exitCode === 2) version = await quiet(async () => (await $.process.run([cli, 'version'], { timeoutMs: PING_MS })).stdout)
   if (ping.exitCode === 0) {
+    // 0.29.x 의 ping 은 터미널을 닫으면 실행기가 죽는 환경을 못 봐 0 을 낸다 — 판 문턱을 따로 잰다.
+    if (version === undefined || !versionAtLeast(version, HANDOFF_MIN_VERSION)) return { ok: false, why: pingWhy(2, '', version) }
     pingOk.set(cli, Date.now())
 
     return { ok: true }
   }
-  let version: string | undefined
-  if (ping.exitCode === 2) version = await quiet(async () => (await $.process.run([cli, 'version'], { timeoutMs: PING_MS })).stdout)
 
   return { ok: false, why: pingWhy(ping.exitCode, ping.stderr, version) }
 }

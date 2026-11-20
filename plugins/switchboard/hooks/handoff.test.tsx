@@ -12,7 +12,7 @@ type Opts = {
 const BASE_ENV = { SWITCHBOARD_PROFILE: 'worker', HOME: '/home/u', SHELL: '/bin/bash', SWITCHBOARD_HANDOFF: '1' }
 
 // 흉내 CLI: job ping 은 정상(exit 0), 그 밖은 exit 0 빈 출력.
-const cli026 = (args: string[]) => ({ exitCode: 0, stdout: args[0] === 'version' ? 'switchboard v0.29.0\n' : '' })
+const cli026 = (args: string[]) => ({ exitCode: 0, stdout: args[0] === 'version' ? 'switchboard v0.30.0\n' : '' })
 
 async function setup(on: any, opts: Opts = {}) {
   const calls: string[][] = []
@@ -91,7 +91,21 @@ test('건강 실패(옛 CLI): ping exit 2 + version 0.16.0 → 원래 명령 그
   expect(passed[0].command).toBe('sleep 1')
   expect(String(ran.context)).toContain('넘기지 못했다')
   expect(String(ran.context)).toContain('v0.16.0')
-  expect(String(ran.context)).toContain('v0.29.0')
+  expect(String(ran.context)).toContain('v0.30.0')
+})
+
+test('건강 실패(0.29.x): ping 은 0 이어도 version 이 문턱 아래면 원래 명령 그대로 + 한 줄', async ($, on) => {
+  const { passed } = await setup(on, { cli: a => (a[0] === 'version' ? { stdout: 'switchboard v0.29.1' } : {}) })
+  const ran: any = await $.tool.call(BG)
+  expect(passed[0].command).toBe('sleep 1')
+  expect(String(ran.context)).toContain('넘기지 못했다')
+  expect(String(ran.context)).toContain('v0.29.1')
+})
+
+test('0.30.0: ping 0 + version 0.30.0 → 넘긴다', async ($, on) => {
+  const { passed } = await setup(on, { cli: a => (a[0] === 'version' ? { stdout: 'switchboard v0.30.0' } : {}) })
+  await $.tool.call(BG)
+  expect(passed[0].command).not.toBe('sleep 1')
 })
 
 test('job ping 14(runner): 원래 호출 + 까닭에 확인 이름', async ($, on) => {
