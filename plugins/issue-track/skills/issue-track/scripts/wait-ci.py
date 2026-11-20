@@ -3,6 +3,10 @@
 
     wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초] [--no-checks-wait 분]
 
+병합 대기열(merge queue)을 쓰는 저장소: PR이 대기열에 있으면(GraphQL mergeQueueEntry) 검사가 초록이어도
+SUCCESS로 끝내지 않고 병합(MERGED, 종료 코드 2)이나 대기열 이탈(DEQUEUED)까지 기다린다.
+대기열이 없는 저장소의 동작은 그대로다.
+
 기본 CI는 GitHub Actions PR 검사다(병합 뒤 release workflow와 배포는 wait-deploy.py가 본다).
 
 - PR head 커밋 하나만 본다. push하면 head가 바뀌므로 그 커밋의 결과를 새로 기다린다.
@@ -14,6 +18,9 @@
   - 2 MERGED/CLOSED: PR이 이미 닫혔다.
   - 3 TIMEOUT: 제한 시간이 지났다.
   - 4 GONE: PR을 조회하지 못한다.
+  - 6 DEQUEUED: 병합 대기열에 있던 PR이 병합되지 않고 대기열에서 빠졌고 아직 OPEN이다(대기열 실행 실패 등).
+    실패와 구분되는 끝이다. 대기열 실행(merge_group 이벤트)의 실패 잡·로그 끝을 찾으면 덧붙인다.
+    줄을 읽고 고쳐 push한 뒤 다시 대기열에 넣고 같은 명령으로 다시 기다린다.
   - 5 NO_CHECKS: 검사가 하나도 없는 상태가 --no-checks-wait 분(기본 3) 이어졌다. PR에 CI가 붙지
     않는 저장소다. 병합 뒤 배포는 wait-deploy.py로 본다.
 - 빨강일 때 실패 요지를 덧붙인다.
@@ -70,6 +77,35 @@ def pr_state(pr, repo):
     return d["state"], d["headRefOid"], checks
 
 
+QUEUE_QUERY = "query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){mergeQueueEntry{state position}}}}"
+
+
+def queue_entry(pr, repo):
+    """PR의 병합 대기열 항목(`mergeQueueEntry`)을 dict로. 대기열에 없으면 None. 대기열 없는 저장소·조회 실패도 None."""
+    try:
+        name = repo or gh("repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner").strip()
+        owner, _, n = name.partition("/")
+        d = json.loads(gh("api", "graphql", "-f", f"query={QUEUE_QUERY}", "-F", f"o={owner}", "-F", f"n={n}", "-F", f"pr={pr}"))
+        return d["data"]["repository"]["pullRequest"]["mergeQueueEntry"] or None
+    except Exception:
+        return None
+
+
+def queue_failure(pr, repo):
+    """그 PR의 대기열 실행(merge_group)에서 가장 최근 실패한 실행의 실패 잡·로그 끝. 못 찾으면 None."""
+    try:
+        q = ["run", "list", "--event", "merge_group", "--limit", "30", "--json", "databaseId,headBranch,conclusion,url,name"]
+        if repo:
+            q += ["--repo", repo]
+        runs = json.loads(gh(*q))
+    except Exception:
+        return None
+    for r in runs:  # 최신순
+        if f"/pr-{pr}-" in (r.get("headBranch") or "") and (r.get("conclusion") or "") in ("failure", "cancelled", "timed_out", "startup_failure"):
+            return f"--- 대기열 실행 {r.get('name') or '?'} {r.get('conclusion')} {r.get('url') or ''}\n" + actions_excerpt(r.get("url") or "")
+    return None
+
+
 def jenkins_excerpt(url):
     return console_excerpt(url)
 
@@ -109,6 +145,7 @@ def main():
     deadline = time.time() + a.timeout * 60
     errors = 0
     empty_since = None
+    was_queued = False
     last = ""
     while True:
         try:
@@ -127,6 +164,32 @@ def main():
         if state in ("MERGED", "CLOSED"):
             print(f"{state} PR #{a.pr} {last}")
             return 2
+        queued = queue_entry(a.pr, a.repo) is not None
+        if was_queued and not queued:
+            # 병합 직후 state와 대기열 조회가 어긋날 수 있다 — 잠시 뒤 다시 본다
+            time.sleep(min(a.interval, 10))
+            try:
+                state, sha, checks = pr_state(a.pr, a.repo)
+            except Exception:
+                pass
+            else:
+                last = f"{sha[:7]} " + (",".join(f"{n}={s}" for n, s, _ in checks) or "(검사 없음)")
+            if state in ("MERGED", "CLOSED"):
+                print(f"{state} PR #{a.pr} {last}")
+                return 2
+            if queue_entry(a.pr, a.repo) is None:
+                print(f"DEQUEUED PR #{a.pr} {last} — 병합 대기열에서 빠졌고 아직 OPEN이다. 실패 줄을 읽고 고쳐 push한 뒤 다시 대기열에 넣는다")
+                print(queue_failure(a.pr, a.repo) or "(대기열 실행의 실패 기록을 찾지 못했다)")
+                return 6
+            queued = True
+        if queued:
+            was_queued = True
+            empty_since = None
+            if time.time() > deadline:
+                print(f"TIMEOUT PR #{a.pr} {last} (병합 대기열) — 고치지 말고 「CI 멈춤」으로 보고한다")
+                return 3
+            time.sleep(a.interval)
+            continue
         if checks:
             failed = [c for c in checks if c[1] in FAIL]
             if failed:

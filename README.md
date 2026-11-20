@@ -21,7 +21,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
-| [issue-track](#issue-track) | 0.10.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
+| [issue-track](#issue-track) | 0.11.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
 | [switchboard](#switchboard) | 0.12.11 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
@@ -44,12 +44,13 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
 
 | 스크립트 | 쓰임 |
 |---|---|
-| `wait-ci.py <PR> [--repo] [--timeout] [--interval] [--no-checks-wait]` | PR head 커밋의 check-runs·commit status를 기다렸다 한 번 알림. 종료 코드 0 성공 · 1 실패 · 2 병합/닫힘 · 3 시간 초과 · 4 없음 · 5 검사 없음 |
+| `wait-ci.py <PR> [--repo] [--timeout] [--interval] [--no-checks-wait]` | PR head 커밋의 check-runs·commit status를 기다렸다 한 번 알림. 종료 코드 0 성공 · 1 실패 · 2 병합/닫힘 · 3 시간 초과 · 4 없음 · 5 검사 없음 · 6 병합 대기열 이탈(DEQUEUED) |
 | `wait-deploy.py --job <이름> (--pr <번호> \| --since <시각>)` | 병합 뒤 배포(GitHub 커밋 상태 또는 Jenkins 빌드)를 기다렸다 한 번 알림 |
 | `update-plugins.py` | 위 「설치와 갱신」 |
 | `worker-stats.py [agentId…]` | 작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트 |
 
 - 참고(`reference/`): `parallel-runs.md`(체인 병렬 함정), `remote-session.md`(원격 세션에 맡기기), `switchboard.md`(작업자 보고 경로).
+- `wait-ci.py`(0.11.0): 병합 대기열에 있는 PR은 검사가 초록이어도 병합될 때까지 기다리고, 병합 없이 대기열에서 빠져 OPEN으로 남으면 `DEQUEUED`(종료 코드 6)로 끝내 대기열 실행(`merge_group`)의 실패 줄을 덧붙인다. 대기열이 없는 저장소는 그대로.
 - 훅 `detach-guard`(PreToolUse·Bash, 0.10.0): 셸 `&`로 떼어 띄운 명령은 끝나도 세션에 알림이 오지 않아 작업자가 멈춘다. 이를 거절하고 「`&` 없이 `run_in_background: true`로 띄워라」고 안내한다.
   - 거절: 같은 명령 안에서 `wait`로 거두지 않은 `&`(`( … ) & sleep 1`). `wait-ci.py`·`wait-deploy.py`를 `&`·`nohup`·`setsid`·`disown`으로 띄우는 꼴은 `run_in_background: true` 호출 안에서도 거절.
   - 통과: `&&`, `2>&1`·`>&2`·`&>`·`|&`, 따옴표·주석·heredoc 안의 `&`, `… & … ; wait`, `run_in_background: true` 호출 안의 그 밖의 `&`.

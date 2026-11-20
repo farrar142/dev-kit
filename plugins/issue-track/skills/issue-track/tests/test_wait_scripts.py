@@ -51,12 +51,25 @@ def status(name, state, url="https://j.example/job/x/3/"):
 
 
 class WaitCi(unittest.TestCase):
-    def run_ci(self, outputs, args=(), auth=("u", "t")):
+    def run_ci(self, outputs, args=(), auth=("u", "t"), queue=(), runs="[]"):
+        """queue: 대기열 조회(graphql)가 차례로 돌려줄 mergeQueueEntry(None이면 대기열 밖). 비면 대기열 없는 저장소."""
         clock = Clock()
         it = iter(outputs)
+        qit = iter(queue)
+        qlast = [None]
         last = [None]
 
         def fake_gh(*a):
+            if a[:2] == ("repo", "view"):
+                return "o/r\n"
+            if a[:2] == ("api", "graphql"):
+                try:
+                    qlast[0] = next(qit)
+                except StopIteration:
+                    pass
+                return json.dumps({"data": {"repository": {"pullRequest": {"mergeQueueEntry": qlast[0]}}}})
+            if a[:2] == ("run", "list"):
+                return runs
             try:
                 last[0] = next(it)
             except StopIteration:
@@ -66,6 +79,7 @@ class WaitCi(unittest.TestCase):
         with mock.patch.object(wait_ci, "gh", fake_gh), mock.patch.object(wait_ci, "time", clock), \
                 mock.patch.object(wait_ci, "jenkins_excerpt", lambda u: "FAILED line"), \
                 mock.patch.object(wait_ci, "jenkins_auth", lambda: auth), \
+                mock.patch.object(wait_ci, "actions_excerpt", lambda u: "log tail " + u), \
                 mock.patch("builtins.print") as pr:
             code = self._main(["1", *args])
         return code, "\n".join(str(c.args[0]) for c in pr.call_args_list)
@@ -151,6 +165,44 @@ class WaitCi(unittest.TestCase):
         code, out = self.run_ci([pr_json(checks=[status("jenkins", "PENDING")])], ["--timeout", "1", "--interval", "30"])
         self.assertEqual(code, 3)
         self.assertIn("TIMEOUT", out)
+
+    def test_queued_pr_waits_for_merge_even_if_checks_green(self):
+        ok = pr_json(checks=[status("jenkins", "SUCCESS")])
+        q = {"state": "QUEUED", "position": 1}
+        code, out = self.run_ci([ok, ok, pr_json("MERGED")], queue=[q, q, None])
+        self.assertEqual(code, 2)
+        self.assertIn("MERGED", out)
+
+    def test_dequeued_open_pr_ends_as_dequeued_with_queue_run_failure(self):
+        ok = pr_json(checks=[status("jenkins", "SUCCESS")])
+        q = {"state": "QUEUED", "position": 1}
+        runs = json.dumps([
+            {"databaseId": 9, "headBranch": "gh-readonly-queue/main/pr-2-aaa", "conclusion": "failure", "url": "https://github.com/o/r/actions/runs/9", "name": "other"},
+            {"databaseId": 8, "headBranch": "gh-readonly-queue/main/pr-1-bbb", "conclusion": "failure", "url": "https://github.com/o/r/actions/runs/8", "name": "ci"},
+        ])
+        code, out = self.run_ci([ok], queue=[q, None, None], runs=runs)
+        self.assertEqual(code, 6)
+        self.assertTrue(out.startswith("DEQUEUED"))
+        self.assertIn("runs/8", out)
+        self.assertIn("log tail", out)
+        self.assertNotIn("runs/9", out)
+
+    def test_dequeued_without_queue_run_record_still_ends(self):
+        ok = pr_json(checks=[status("jenkins", "SUCCESS")])
+        code, out = self.run_ci([ok], queue=[{"state": "QUEUED"}, None, None])
+        self.assertEqual(code, 6)
+        self.assertIn("찾지 못했다", out)
+
+    def test_dequeue_racing_with_merge_reports_merged(self):
+        ok = pr_json(checks=[status("jenkins", "SUCCESS")])
+        code, out = self.run_ci([ok, pr_json("MERGED")], queue=[{"state": "QUEUED"}, None])
+        self.assertEqual(code, 2)
+        self.assertTrue(out.startswith("MERGED"))
+
+    def test_repo_without_queue_unchanged(self):
+        code, out = self.run_ci([pr_json(checks=[status("jenkins", "SUCCESS")])])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("SUCCESS"))
 
     def test_gone(self):
         def boom(*a):
