@@ -22,7 +22,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
 | [issue-track](#issue-track) | 0.11.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
-| [switchboard](#switchboard) | 0.13.2 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
+| [switchboard](#switchboard) | 0.14.0 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
 | [token-diet](#token-diet) | 0.1.0 | 훅 2·스킬 | 큰 파일 읽기·큰 heredoc 막기, 작업자 토큰 규율 |
@@ -65,7 +65,7 @@ question-panel을 대체하는 세션 교환대. 에이전트를 모르는 코�
 - 명령: `/questions`(패널 토글, `/questions close`), `/questions-clear`(답한 기록 지우기), `/switchboard-takeover`(번호 역할 -1 가져오기).
 - 메일함: `SWITCHBOARD_PROFILE`이 있는 세션이 메일함을 긴 대기로 구독해, 일반 메일은 턴이 끝난 뒤 「메일 #N 을 읽고 처리하라」 새 턴으로, 긴급(`priority=urgent`) 메일은 실행 중인 턴에 끼워 넣는다. 사람이 입력 중이면 보류한다. 유휴이고 컨텍스트가 기준 이상이면 메일 전에 compact.
 - 번호 역할(`<역할>-N`)·presence 보고, 멈춤 감지, 원격 권한 답, 원격 질문(서버 질문으로 올리고, 대장 세션은 패널에서 받아 답).
-- 넘기기(기본 꺼짐, `SWITCHBOARD_HANDOFF=1`로 켠다. 리눅스, CLI v0.27.0 이상, 프로필 있는 본 세션): 세션이 다시 떠도 남게 switchboard 장부로 넘긴다. 건강 검사(`switchboard job ping`, 없으면 `version`)가 실패하면 원래 호출 그대로 돌고 결과에 「넘기지 못했다」 한 줄이 붙는다.
+- 넘기기(기본 꺼짐, `SWITCHBOARD_HANDOFF=1`로 켠다. 리눅스, CLI v0.29.0 이상, 프로필 있는 본 세션): 세션이 다시 떠도 남게 switchboard 장부로 넘긴다. 넘기기 전에 `SWITCHBOARD_CLI`로 고른 CLI의 `switchboard job ping`을 부르고 종료 코드 0일 때만 넘긴다(성공은 30초 기억, 실패는 기억하지 않는다). 0이 아니면(10 config·11 data·12 server·13 token·14 runner, 시간 초과·실행 실패 포함) 원래 호출 그대로 돌고 결과에 종료 코드 이름을 단 「넘기지 못했다」 한 줄이 붙는다. 넘긴 명령이 exit 125(실행기가 못 뜸)로 끝나면 아무것도 넘기지 않고 돌지도 않은 것이라 stderr 줄대로 명령을 직접 돌린다.
 
 | 도구 | 넘긴 꼴 |
 |---|---|

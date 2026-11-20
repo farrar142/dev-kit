@@ -5,8 +5,27 @@
 /** 넘기기를 켜는 플랫폼. 실행기가 있는 곳만 둔다(Windows·macOS 는 실행기가 생기면 여기에 더한다). */
 export const HANDOFF_PLATFORMS: readonly string[] = ['linux']
 
-/** 실행기(job·schedule·watch)가 처음 들어간 CLI 판. `job ping` 이 없을 때 `version` 으로 대신 잰다. */
-export const HANDOFF_MIN_VERSION = '0.27.0'
+/** `job ping` 이 처음 들어간 CLI 판. 이보다 낮으면 ping 이 exit 2(알 수 없는 명령)로 끝나 넘기지 않는다. */
+export const HANDOFF_MIN_VERSION = '0.29.0'
+
+/** `job ping` 종료 코드 → 확인 이름(README 「플러그인 훅 계약」). 0 은 정상이라 없다. */
+export const PING_CHECKS: Readonly<Record<number, string>> = { 10: 'config', 11: 'data', 12: 'server', 13: 'token', 14: 'runner' }
+
+/** ping 이 성공한 결과를 기억하는 시간. 실패는 기억하지 않는다(고친 뒤 바로 다시 넘어가야 한다). */
+export const PING_OK_TTL_MS = 30_000
+
+/** ping 이 실패했을 때 「넘기지 못했다」 뒤에 붙일 까닭. 종료 코드 10~14 는 확인 이름과 stderr 첫 줄, 2 는 옛 CLI. */
+export const pingWhy = (exitCode: number, stderr: string, version: string | undefined): string => {
+  const check = PING_CHECKS[exitCode]
+  const detail = stderr.trim().split('\n')[0]?.slice(0, 200) ?? ''
+  if (check !== undefined) return detail === '' ? `${check} (exit ${exitCode})` : `${check}: ${detail.replace(new RegExp(`^${check}:\\s*`), '')}`
+  if (exitCode === 2) {
+    const v = version?.trim().split('\n')[0]?.slice(0, 80) ?? ''
+    return `CLI ${v || '판 모름'} < v${HANDOFF_MIN_VERSION}(job ping 없음)`
+  }
+
+  return `job ping exit ${exitCode}`
+}
 
 /** 켜는 환경변수. 기본은 꺼짐 — 1·on·true·yes 일 때만 넘긴다(사용자 범위로 올린 플러그인이 모든 세션을 시험에 넣지 않게). */
 export const HANDOFF_ENV = 'SWITCHBOARD_HANDOFF'

@@ -1,7 +1,7 @@
 // 넘기기 훅(#182): 세션의 백그라운드 Bash·Monitor·CronCreate/CronDelete/CronList·ScheduleWakeup 을 switchboard 장부로 넘긴다.
 // 계약: sandcorporation/switchboard#288 「Plugin hook contract」. 무엇을 바꾸는지는 core/handoff.ts, 여기는 실행과 훅 연결이다.
 //  - 켜는 조건: 플랫폼이 HANDOFF_PLATFORMS 안, SWITCHBOARD_HANDOFF 가 1·on·true·yes(기본은 꺼짐), 역할 프로필 있음, 본 세션(서브에이전트 아님).
-//  - 건강: `switchboard job ping`, 없으면 `switchboard version` ≥ 0.27.0.
+//  - 건강: `switchboard job ping`(SWITCHBOARD_CLI 로 고른 그 실행 파일) 종료 코드 0 일 때만. 성공은 30초 기억, 실패는 기억하지 않는다. CLI ≥ 0.29.0.
 //  - 실패하면 원래 호출을 그대로 돌리고 결과에 「넘기지 못했다」 한 줄을 더한다. 훅 자체의 오류도 원래 호출을 막지 않는다.
 import type { On } from 'claude-code'
 
@@ -9,7 +9,7 @@ import {
   alreadyHanded,
   cronDenyText,
   cronSchedule,
-  HANDOFF_MIN_VERSION,
+  PING_OK_TTL_MS,
   HANDOFF_PLATFORMS,
   handoffOn,
   isLoopSentinel,
@@ -20,7 +20,7 @@ import {
   scheduleAddArgs,
   scheduleIdOf,
   scheduleRef,
-  versionAtLeast,
+  pingWhy,
   wakeupDenyText,
   wakeupIn,
   watchStartCommand,
@@ -62,18 +62,29 @@ async function handoffEnv($: Self): Promise<{ off: string | undefined; cli: stri
   }
 }
 
-/** 건강: job ping, 없으면 version ≥ 0.27.0. 결과를 기억하지 않는다(Go CLI 두 번 띄우는 값이 싸고, 판이 바뀌면 바로 따른다). */
-async function checkHealth($: Self, cli: string): Promise<Health> {
-  try {
-    const ping = await $.process.run([cli, 'job', 'ping'], { timeoutMs: PING_MS }).catch(() => undefined)
-    if (ping?.exitCode === 0) return { ok: true }
-    const v = await $.process.run([cli, 'version'], { timeoutMs: PING_MS })
-    if (v.exitCode !== 0) return { ok: false, why: `${cli} version 실패(exit ${v.exitCode})` }
+// 성공한 ping 은 CLI 경로별로 잠깐 기억한다(도구 호출마다 1초씩 더 걸리지 않게). 실패는 기억하지 않는다.
+const pingOk = new Map<string, number>()
 
-    return versionAtLeast(v.stdout, HANDOFF_MIN_VERSION) ? { ok: true } : { ok: false, why: `CLI ${firstLine(v.stdout) || '판 모름'} < v${HANDOFF_MIN_VERSION}` }
+/** 건강: `job ping` 종료 코드 0 일 때만 넘긴다. 그 밖(시간 초과·실행 실패·10~14·옛 CLI)은 까닭을 돌려준다. */
+async function checkHealth($: Self, cli: string): Promise<Health> {
+  const at = pingOk.get(cli)
+  if (at !== undefined && Date.now() - at < PING_OK_TTL_MS) return { ok: true }
+  pingOk.delete(cli)
+  let ping: Awaited<ReturnType<Self['process']['run']>>
+  try {
+    ping = await $.process.run([cli, 'job', 'ping'], { timeoutMs: PING_MS })
   } catch (err) {
-    return { ok: false, why: `${cli} 실행 실패: ${firstLine(String(err))}` }
+    return { ok: false, why: `${cli} job ping 실행 실패 또는 시간 초과: ${firstLine(String(err))}` }
   }
+  if (ping.exitCode === 0) {
+    pingOk.set(cli, Date.now())
+
+    return { ok: true }
+  }
+  let version: string | undefined
+  if (ping.exitCode === 2) version = await quiet(async () => (await $.process.run([cli, 'version'], { timeoutMs: PING_MS })).stdout)
+
+  return { ok: false, why: pingWhy(ping.exitCode, ping.stderr, version) }
 }
 
 /** 넘길 수 있나. skip 은 조용히 원래대로, fail 은 원래대로 + 한 줄. */
