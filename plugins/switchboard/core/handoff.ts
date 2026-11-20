@@ -6,7 +6,7 @@
 export const HANDOFF_PLATFORMS: readonly string[] = ['linux']
 
 /** 실행기(job·schedule·watch)가 처음 들어간 CLI 판. `job ping` 이 없을 때 `version` 으로 대신 잰다. */
-export const HANDOFF_MIN_VERSION = '0.26.0'
+export const HANDOFF_MIN_VERSION = '0.27.0'
 
 /** 끄는 환경변수: 0·off·false·no 면 넘기지 않는다. */
 export const HANDOFF_ENV = 'SWITCHBOARD_HANDOFF'
@@ -40,16 +40,17 @@ export const alreadyHanded = (command: string): boolean => HANDED.test(command)
 export const jobRunCommand = (cli: string, shell: string, command: string): string =>
   `${shellQuote(cli)} job run --wait --label ${shellQuote(handoffLabel(command))} -- ${shellQuote(shell)} -c ${shellQuote(command)}`
 
-/** Monitor 의 시간 한도(ms)를 `--expires` 값으로. 없거나 0 이면 undefined(CLI 기본 7d). 분 단위로 올림. */
+/** Monitor 의 시간 한도(ms)를 `--expires` 값으로(`<ms>ms`). 없거나 0 이면 undefined(CLI 기본 7d, 연장됨). */
 export const monitorExpires = (timeoutMs: number | undefined): string | undefined =>
-  typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? `${Math.max(1, Math.ceil(timeoutMs / 60_000))}m` : undefined
+  typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? `${Math.ceil(timeoutMs)}ms` : undefined
 
 /** Monitor 를 넘긴 명령: 감시를 띄우고 붙어서 줄을 그대로 받는다. 세션이 죽으면 감시는 남고 줄은 메일로 온다. */
 export const watchStartCommand = (cli: string, shell: string, command: string, label: string, expires?: string): string =>
   [
     shellQuote(cli),
     'watch start --attach',
-    ...(expires === undefined ? [] : [`--expires ${expires}`]),
+    // 기한이 있는 감시는 세션이 붙어 있어도 기한을 넘기지 않는다(연장 없음).
+    ...(expires === undefined ? [] : ['--no-extend', `--expires ${expires}`]),
     `--label ${shellQuote(handoffLabel(label) || handoffLabel(command))}`,
     `-- ${shellQuote(shell)} -c ${shellQuote(command)}`,
   ].join(' ')
@@ -85,12 +86,12 @@ export const cronSchedule = (cron: string, recurring: boolean | undefined, now: 
   return days >= 7 ? { at: text, expires: `${days + 1}d` } : { at: text }
 }
 
-/** ScheduleWakeup 의 지연(초)을 `--in` 으로. 하네스처럼 [60, 3600] 으로 자르고 분 단위로 올린다(CLI 는 초를 받지 않는다). */
+/** ScheduleWakeup 의 지연(초)을 `--in` 으로. 하네스처럼 [60, 3600] 으로 자르고 초 단위(`90s`)로 넘긴다. */
 export const wakeupIn = (delaySeconds: number | undefined): string | undefined => {
   if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds)) return undefined
   const s = Math.min(3600, Math.max(60, delaySeconds))
 
-  return `${Math.ceil(s / 60)}m`
+  return `${Math.ceil(s)}s`
 }
 
 /** `switchboard schedule add` 의 argv(CLI 이름 뒤). */

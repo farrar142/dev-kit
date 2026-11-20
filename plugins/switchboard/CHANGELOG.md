@@ -1,5 +1,11 @@
 # switchboard 바뀐 것
 
+## 0.13.1
+
+- 넘기기 고침(#184): CLI v0.27.0 이상이 필요하다(건강 검사 문턱 0.26.0 → 0.27.0).
+  - 시간 한도(timeout)가 있는 Monitor → `watch start --attach --no-extend --expires <timeout_ms>ms`. 세션이 붙어 있어도 기한이 늘지 않아 기한을 넘겨 살아남지 않는다. 한도 없는 Monitor 는 그대로(연장됨).
+  - ScheduleWakeup → `schedule add --in <초>s`. 분으로 올림하던 것을 없앴다.
+
 ## 0.13.0
 
 - 넘기기(#182): 리눅스에서 프로필 있는 본 세션의 백그라운드 명령·예약·감시를 switchboard 장부로 넘겨, 세션이 다시 떠도 남게 한다. CLI v0.26.0 이상이 필요하다.

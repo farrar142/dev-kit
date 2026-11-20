@@ -11,12 +11,12 @@ type Opts = {
 
 const BASE_ENV = { SWITCHBOARD_PROFILE: 'worker', HOME: '/home/u', SHELL: '/bin/bash' }
 
-// 흉내 CLI: job ping 은 없는 판(0.26.0)처럼 exit 2, version 은 v0.26.0.
+// 흉내 CLI: job ping 은 없는 판(0.27.0)처럼 exit 2, version 은 v0.27.0.
 const cli026 = (args: string[]) =>
   args[0] === 'job' && args[1] === 'ping'
     ? { exitCode: 2, stderr: 'switchboard: unknown action' }
     : args[0] === 'version'
-      ? { stdout: 'switchboard v0.26.0\n' }
+      ? { stdout: 'switchboard v0.27.0\n' }
       : { exitCode: 0, stdout: '' }
 
 async function setup(on: any, opts: Opts = {}) {
@@ -120,7 +120,7 @@ test('SWITCHBOARD_CLI 로 실행 파일을 고르고, 바꾼 명령도 그것을
 test('Monitor: watch start --attach --expires --label 설명 으로 바꾼다', async ($, on) => {
   const { passed } = await setup(on)
   await $.tool.call({ tool: 'Monitor', command: "tail -f log | grep --line-buffered 'ERR'", description: '오류 감시', timeout_ms: 300_000 } as any)
-  expect(words(passed[0].command).slice(0, 8)).toEqual(["'switchboard'", 'watch', 'start', '--attach', '--expires', '5m', '--label', "'오류 감시'"])
+  expect(words(passed[0].command).slice(0, 9)).toEqual(["'switchboard'", 'watch', 'start', '--attach', '--no-extend', '--expires', '300000ms', '--label', "'오류 감시'"])
   expect(passed[0].command.endsWith(`-c 'tail -f log | grep --line-buffered '\\''ERR'\\'''`)).toBe(true)
   expect(passed[0].timeout_ms).toBe(300_000)
 })
@@ -175,7 +175,7 @@ test('ScheduleWakeup: once 예약(--in 분)을 만들고 거절, stop 은 그것
   const { passed, calls } = await setup(on, { cli: a => (a[0] === 'schedule' && a[1] === 'add' ? { stdout: '23' } : cli026(a)) })
   const ran: any = await $.tool.call({ tool: 'ScheduleWakeup', delaySeconds: 270, reason: 'r', prompt: '빌드 확인' } as any)
   expect(String(ran.text ?? ran.deny)).toContain('sb-23')
-  expect(calls.at(-1)!.slice(1)).toEqual(['schedule', 'add', '--in', '5m', '--label', '빌드 확인', '--prompt', '빌드 확인'])
+  expect(calls.at(-1)!.slice(1)).toEqual(['schedule', 'add', '--in', '270s', '--label', '빌드 확인', '--prompt', '빌드 확인'])
   expect(passed.length).toBe(0)
   await $.tool.call({ tool: 'ScheduleWakeup', stop: true } as any)
   expect(calls.at(-1)!.slice(1)).toEqual(['schedule', 'rm', '23'])
