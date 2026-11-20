@@ -37,7 +37,7 @@ export type RemoteQuestion = {
 
 /** 서버 응답: 성공이면 value, 아니면 status(연결 실패는 null)와 짧은 까닭. */
 /** 실패 응답: `code`·`askVia` 는 서버가 JSON 으로 준 때만(옛 서버는 평문이라 없다). */
-export type ApiReply<T> = { ok: true; status: number; value: T } | { ok: false; status: number | null; error: string; code?: string; askVia?: string }
+export type ApiReply<T> = { ok: true; status: number; value: T } | { ok: false; status: number | null; error: string; code?: string; askVia?: string; settingsTarget?: string }
 
 export type QuestionsApi = {
   /** POST /api/questions. 201 · 403 can_ask 꺼짐 · 400 모양 · 409 답할 대장 없음. */
@@ -113,6 +113,14 @@ export const parseQuestion = (v: unknown): RemoteQuestion | null => {
   }
 }
 
+/** 문자열 FNV-1a 32비트(16진). 키 구분용이라 충돌 방지 강도는 필요 없다. */
+const fnv = (text: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0
+
+  return h.toString(16).padStart(8, '0')
+}
+
 const json = (text: string): unknown => {
   try {
     return JSON.parse(text)
@@ -143,7 +151,7 @@ export const toRemoteItems = (qs: readonly QuestionPanelQuestion[]): RemoteItem[
 export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
   const go = async <T>(
     path: string,
-    init: { method?: string; body?: string },
+    init: { method?: string; body?: string; headers?: Readonly<Record<string, string>> },
     io: CallIo | undefined,
     parse: (v: unknown) => T | null,
   ): Promise<ApiReply<T>> => {
@@ -153,8 +161,9 @@ export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
       const j = json(r.text)
       const code = isRecord(j) ? str(j.code) : ''
       const askVia = isRecord(j) ? str(j.ask_via).trim() : ''
+      const settingsTarget = isRecord(j) ? str(j.settings_target).trim() : ''
 
-      return { ok: false, status: r.status, error: errorOf(r.status, r.text), ...(code === '' ? {} : { code }), ...(askVia === '' ? {} : { askVia }) }
+      return { ok: false, status: r.status, error: errorOf(r.status, r.text), ...(code === '' ? {} : { code }), ...(askVia === '' ? {} : { askVia }), ...(settingsTarget === '' ? {} : { settingsTarget }) }
     }
     const value = parse(json(r.text))
     if (value === null) return { ok: false, status: r.status, error: '응답 모양이 틀림' }
@@ -170,7 +179,12 @@ export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
   }
 
   return {
-    ask: (items, io) => go('/api/questions', { method: 'POST', body: JSON.stringify({ questions: items }) }, io, parseQuestion),
+    // 같은 문항을 다시 보내도 서버가 전달 메일을 겹쳐 만들지 않게 내용으로 Idempotency-Key 를 만든다(#176).
+    ask: (items, io) => {
+      const body = JSON.stringify({ questions: items })
+
+      return go('/api/questions', { method: 'POST', body, headers: { 'Idempotency-Key': `switchboard-ask-${fnv(body)}` } }, io, parseQuestion)
+    },
     get: (id, io) => go(one(id), {}, io, parseQuestion),
     list: (q = {}, io) => {
       const params = [

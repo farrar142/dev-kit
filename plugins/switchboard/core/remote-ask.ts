@@ -27,7 +27,7 @@ import { GROUP_REFUSAL } from './wire'
 /** here: 이 세션의 대장 패널에도 뜬다(대장 세션). */
 export type RemoteAskResult = { kind: 'remote'; id: string; asker: string; here: boolean } | { kind: 'local'; reason: string | null }
   /** 서버가 이 역할의 질문 권한 없음으로 거절(403 can_ask_off 또는 옛 평문 403). 로컬로 돌리지 않는다(#174). */
-  | { kind: 'refused'; askVia: string | null }
+  | { kind: 'refused'; askVia: string | null; settingsTarget: string | null; code: string | null }
 
 /** 거두기 결과. */
 export type WithdrawResult = { ok: true } | { ok: false; status: number | null; reason: string }
@@ -88,7 +88,7 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
     if (r.status === 403 && r.error !== GROUP_REFUSAL) {
       log(`switchboard 질문: 서버가 질문 권한 없음으로 거절함(403${r.askVia === undefined ? '' : `, ask_via 있음`})`)
 
-      return { kind: 'refused', askVia: r.askVia ?? null }
+      return { kind: 'refused', askVia: r.askVia ?? null, settingsTarget: r.settingsTarget ?? null, code: r.code ?? null }
     }
     const reason =
       r.status === null
@@ -174,9 +174,23 @@ export const remoteAskText = (id: string, asker: string, resolveTool: string, he
 /** 로컬 패널로 돌아갔을 때 결과 글 앞에 붙일 한 줄. */
 export const localFallbackLine = (reason: string) => `원격에 올리지 못했다 — 서버에 질문이 가지 않았다. 대신 이 세션의 로컬 패널에 올렸다(${reason}). 이 세션을 사람이 보고 있지 않으면 답이 오지 않는다.`
 
-/** 질문 권한 없음 거절 글(isError 로 돌려준다). 주소는 서버가 준 ask_via 만 쓴다. */
-export const askRefusedText = (askVia: string | null) =>
-  `질문을 올리지 못했다: 이 역할은 질문을 올릴 수 없다(서버가 거절, 403). 로컬 패널에도 올리지 않았다 — 질문은 ${askVia ?? '대장 역할'}에게 메일로 넘겨라.`
+/** 질문 거절 사유(서버 403 의 code·ask_via·settings_target). 옛 서버의 평문 403 은 셋 다 null. */
+export type AskRefusal = { askVia: string | null; settingsTarget: string | null; code: string | null }
+
+const target = (t: string | null) => (t === null ? '' : `(설정 ${t})`)
+
+/**
+ * 질문 거절 글(isError·훅 사유). 거절 뒤 대화창에 선택지를 쓰고 멈추지 않게, 사유별로 다음 행동을 말한다.
+ * 주소는 서버가 준 ask_via 만 쓴다.
+ */
+export const askRefusedText = (r: AskRefusal | string | null): string => {
+  const f: AskRefusal = typeof r === 'string' ? { askVia: r, settingsTarget: null, code: null } : (r ?? { askVia: null, settingsTarget: null, code: null })
+  if (f.code === 'question_forbidden') return '질문이 거절됐다(서버가 이 질문을 받지 않음, 403). 질문 도구로 다시 올리지 말고 대화창에 선택지를 쓰지도 마라 — 막힌 채 멈추고 보고하라.'
+  if (f.askVia !== null)
+    return `질문이 거절됐다${target(f.settingsTarget)}. ${f.askVia} 에 질문이 전달됐다 — 답 메일을 기다려라. 대화창에 선택지를 쓰지 마라. 질문 도구로 다시 올리지 마라.`
+
+  return `질문을 올릴 곳이 없다${target(f.settingsTarget)} — 막힌 채 멈추고 보고하라. 대화창에 선택지를 쓰지 마라. 질문 도구로 다시 올리지 마라.`
+}
 
 /** resolve(서버 질문) 결과 글. */
 export const withdrawText = (id: string, r: WithdrawResult) =>

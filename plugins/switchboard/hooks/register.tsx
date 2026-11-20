@@ -36,6 +36,7 @@ import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
 import type { RemoteSink } from '../core/remote-inbox'
+import type { AskRefusal } from '../core/remote-ask'
 import { askRefusedText, isRemoteId, localFallbackLine, remoteAskText, withdrawText } from '../core/remote-ask'
 import type { Http } from '../core/host'
 import type { QuestionPanelBatch } from '../types'
@@ -384,6 +385,9 @@ const ASK_DENY_REASON =
   `switchboard: ${TOOL}로 같은 질문을 올려라(입력 모양이 같다). 답을 받기 전에 한 걸음도 못 나가는 급한 확인이면 ` +
   `질문 header를 \`${URGENT}\`으로 시작해 AskUserQuestion을 다시 불러라.`
 
+// 이 세션에서 질문이 서버에 거절된 마지막 사유(#176). 있으면 AskUserQuestion 막는 안내가 「질문 도구로 다시 올려라」를 되풀이하지 않는다.
+let lastRefusal: AskRefusal | null = null
+
 const isUrgent = (questions: unknown): boolean =>
   Array.isArray(questions) &&
   questions.some(
@@ -404,7 +408,7 @@ async function askUserQuestionDenial($: Self, questions: unknown): Promise<strin
   const qp = await $.mcp.connect(SERVER).catch(() => undefined)
   if (qp?.isConnected !== true) return undefined
 
-  return ASK_DENY_REASON
+  return lastRefusal === null ? ASK_DENY_REASON : `switchboard: ${askRefusedText(lastRefusal)}`
 }
 
 export const register: Register = on => {
@@ -416,6 +420,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     const b = board
     board = undefined
+    lastRefusal = null
     await b?.stop()
 
     return next(e)
@@ -518,6 +523,7 @@ export const register: Register = on => {
     // (묻는 쪽이 스스로 답하지 않게 — remote-ask.ts 머리말). 못 올리면 까닭을 결과 글에 적고 로컬 패널로.
     const remote = board === undefined ? { kind: 'local' as const, reason: null } : await board.askRemote(questions, { http: hookHttp($) })
     if (remote.kind === 'remote') {
+      lastRefusal = null
       const text = remoteAskText(remote.id, remote.asker, RESOLVE_TOOL, remote.here)
       // panel_remote(#142): Orca 터미널 세션의 agent.tool.after 훅이 이 호출로 터미널 카드(oN)를 따로 만들지 않게 서버 id 를 싣는다.
       // 같은 질문의 Orca 카드는 대장 끌어오기가 원격 카드로 하나만 올린다(답이 터미널로 한 번 더 들어가지 않게).
@@ -527,7 +533,11 @@ export const register: Register = on => {
 
       return ran
     }
-    if (remote.kind === 'refused') return { deny: askRefusedText(remote.askVia) }
+    if (remote.kind === 'refused') {
+      lastRefusal = { askVia: remote.askVia, settingsTarget: remote.settingsTarget, code: remote.code }
+
+      return { deny: askRefusedText(lastRefusal) }
+    }
     const fallback = remote.reason === null ? [] : [localFallbackLine(remote.reason)]
 
     const now = await $.clock.now()
