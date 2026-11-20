@@ -304,6 +304,21 @@ export async function slotEnv($: Self): Promise<{ label: string | undefined; par
   }
 }
 
+/**
+ * 이 세션이 쓰는 switchboard CLI 의 `version` 출력(슬롯 요청 머리 X-Switchboard-Version 용).
+ * CLI 경로는 넘기기 훅과 같다: SWITCHBOARD_CLI, 없으면 PATH 의 `switchboard`. 없거나 실패·시간 초과면 undefined(머리를 뺀다).
+ */
+export async function readCliVersion($: Self): Promise<string | undefined> {
+  try {
+    const cli = (await $.env.get('SWITCHBOARD_CLI'))?.trim() || 'switchboard'
+    const r = await $.process.run([cli, 'version'], { timeoutMs: 2_500 })
+
+    return r.exitCode === 0 ? r.stdout : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** `$` 하나로 AgentHost 를 만든다. emitter·box 는 wireClaudeEvents 에 준 것과 같아야 한다. */
 export function claudeHost($: Self, emitter: Emitter, box: MidTurnBox): AgentHost {
   return {

@@ -4,7 +4,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { HttpInit } from './host'
 import { EMPTY_GAP_MS } from './mailbox'
-import { duplicateWarning, HEARTBEAT_MS, isSingleRole, singleRolesConfig } from './slot'
+import { CLI_VERSION_TIMEOUT_MS, duplicateWarning, HEARTBEAT_MS, isSingleRole, singleRolesConfig } from './slot'
 import { createSwitchboard } from './switchboard'
 import { fakeClock, fakeHost, flush } from './testing'
 import type { FakeClock, FakeHost } from './testing'
@@ -20,7 +20,7 @@ type Row = { base: string; number: number; machine: string; directory: string; u
 const fakeServer = (clock: FakeClock) => {
   let rows: Row[] = []
   const mails: { id: number; to: string; status: 'pending' | 'read' }[] = []
-  const slotBodies: { action: string; role: string; body: string }[] = []
+  const slotBodies: { action: string; role: string; body: string; version?: string }[] = []
   let nextId = 1
   /** true 면 slot API 가 없는 옛 서버(404). */
   let legacy = false
@@ -68,7 +68,7 @@ const fakeServer = (clock: FakeClock) => {
       if (init.headers?.Authorization !== `Bearer ${TOKEN}`) return { status: 401, text: 'unauthorized' }
       const base = (init.headers['X-Switchboard-Role'] ?? '').replace(/-\d+$/, '')
       const action = url.slice(`${EP}/api/slots/`.length)
-      slotBodies.push({ action, role: init.headers['X-Switchboard-Role'] ?? '', body: init.body ?? '' })
+      slotBodies.push({ action, role: init.headers['X-Switchboard-Role'] ?? '', body: init.body ?? '', ...(init.headers['X-Switchboard-Version'] === undefined ? {} : { version: init.headers['X-Switchboard-Version'] }) })
       const b = JSON.parse(init.body ?? '{}') as Record<string, unknown>
       const now = await clock.now()
       const mine = rows.find(r => r.base === base && r.machine === b.machine && r.directory === b.directory)
@@ -148,7 +148,7 @@ const fakeServer = (clock: FakeClock) => {
 const session = async (
   server: ReturnType<typeof fakeServer>,
   clock: FakeClock,
-  o: { base: string; machine: string; cwd?: string; sessionId?: string; label?: string; parent?: string; singleRoles?: readonly string[] },
+  o: { base: string; machine: string; cwd?: string; sessionId?: string; label?: string; parent?: string; singleRoles?: readonly string[]; cliVersion?: () => Promise<string | undefined> },
 ) => {
   const host = fakeHost({ clock, identity: { machine: o.machine, cwd: o.cwd ?? '/work/repo', sessionId: o.sessionId ?? `sess-${o.machine}` } })
   host.fs.files.set(PROFILE, JSON.stringify({ endpoint: EP, role: o.base, token: TOKEN }))
@@ -164,6 +164,7 @@ const session = async (
         ...(o.label === undefined ? {} : { label: o.label }),
         ...(o.parent === undefined ? {} : { parent: o.parent }),
         ...(o.singleRoles === undefined ? {} : { singleRoles: o.singleRoles }),
+        ...(o.cliVersion === undefined ? {} : { cliVersion: o.cliVersion }),
       },
     },
   })
@@ -376,4 +377,49 @@ test('presence: 서브에이전트가 돌면 subagents 를 싣고, 0이면 싣�
   await flush()
   expect(JSON.parse(server.slotBodies[server.slotBodies.length - 1]!.body)).not.toHaveProperty('subagents')
   a.board.stop()
+})
+
+test('CLI 판: register·heartbeat 요청에 X-Switchboard-Version 을 싣고, 판 읽기는 세션에 한 번이다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  let reads = 0
+  const a = await session(server, clock, {
+    base: 'team/worker',
+    machine: 'box-a',
+    cliVersion: async () => {
+      reads++
+
+      return 'switchboard v0.31.0\n'
+    },
+  })
+  a.host.emit({ type: 'turn.start' })
+  await flush()
+  await clock.advance(HEARTBEAT_MS)
+  expect(server.slotBodies.map(b => b.action)).toEqual(expect.arrayContaining(['register', 'heartbeat']))
+  for (const b of server.slotBodies) expect(b.version).toBe('v0.31.0')
+  expect(reads).toBe(1)
+  a.board.stop()
+})
+
+test('CLI 판: 읽기 실패·이상한 출력·시간 초과면 머리만 빼고 번호 받기·heartbeat 는 그대로다', async () => {
+  const cases: [string, () => Promise<string | undefined>][] = [
+    ['CLI 없음', async () => undefined],
+    ['오류', async () => Promise.reject(new Error('spawn ENOENT'))],
+    ['이상한 출력', async () => 'switchboard dev-build'],
+    ['시간 초과', () => new Promise<string>(() => undefined)],
+  ]
+  for (const [name, cliVersion] of cases) {
+    const clock = fakeClock()
+    const server = fakeServer(clock)
+    const started = session(server, clock, { base: 'team/worker', machine: 'box-a', cliVersion })
+    // 판 읽기가 멈춰도 번호 받기는 한도 뒤에 이어진다.
+    await flush()
+    await clock.advance(CLI_VERSION_TIMEOUT_MS)
+    const a = await started
+    await clock.advance(HEARTBEAT_MS)
+    expect(server.slotBodies.map(b => b.action), name).toEqual(expect.arrayContaining(['register', 'heartbeat']))
+    for (const b of server.slotBodies) expect(b.version, name).toBeUndefined()
+    expect(await server.online(), name).toEqual(['team/worker-1@box-a:/work/repo'])
+    a.board.stop()
+  }
 })

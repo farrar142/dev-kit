@@ -6,7 +6,7 @@
 //  - 단일 역할(boss·coordinator 등)인데 -2 이상을 받으면 경고한다. takeover 로 -1 을 가져올 수 있다.
 //  - 토큰은 요청 머리(Authorization)에만 싣는다. 몸·기록·경고 어디에도 넣지 않는다.
 import type { AgentHost, Timer } from './host'
-import { httpWhy, roleHeaders } from './wire'
+import { httpWhy, parseCliVersion, roleHeaders, VERSION_HEADER } from './wire'
 
 export type PresenceState = 'idle' | 'busy' | 'compacting'
 
@@ -46,6 +46,11 @@ export type SlotOptions = {
   log?: (text: string) => void
   /** 중복을 경고할 단일 역할 이름(기반 역할의 마지막 `/` 뒤 이름이나 전체 이름). */
   singleRoles?: readonly string[]
+  /**
+   * 이 세션이 쓰는 switchboard CLI 의 판(`vX.Y.Z`). 세션에 한 번만 불러 요청 머리 `X-Switchboard-Version` 으로 싣는다.
+   * 못 읽거나(undefined·오류·시간 초과) 모양이 틀리면 머리를 뺀다. 읽기 때문에 번호 받기가 늦어지거나 실패하지 않는다.
+   */
+  cliVersion?: () => Promise<string | undefined>
 }
 
 export type TakeoverResult = { ok: true; role: string; displaced?: string } | { ok: false; reason: string }
@@ -65,6 +70,8 @@ export type Slot = {
 export const HEARTBEAT_MS = 60_000
 /** slot 요청 하나의 한도. 넘으면 실패로 본다. */
 export const SLOT_TIMEOUT_MS = 10_000
+/** CLI 판 읽기의 한도. 넘으면 머리 없이 간다. */
+export const CLI_VERSION_TIMEOUT_MS = 3_000
 export const DEFAULT_SINGLE_ROLES = ['boss', 'coordinator'] as const
 
 /** 환경변수 글(쉼표 목록)로 단일 역할 목록을 만든다. 비면 기본(boss, coordinator), `off` 면 없음. */
@@ -223,15 +230,36 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     return r
   }
 
+  /** CLI 판 머리: 세션에 한 번만 읽는다(성공이든 실패든 다시 부르지 않는다). 실패는 모두 빈 값. */
+  let versionRead: Promise<Record<string, string>> | undefined
+  const versionHeaders = (): Promise<Record<string, string>> => {
+    versionRead ??= (async () => {
+      const read = opts.cliVersion
+      if (read === undefined) return {}
+      let timer: Timer | undefined
+      try {
+        const out = await Promise.race([read(), new Promise<undefined>(done => void (timer = clock.after(CLI_VERSION_TIMEOUT_MS, () => done(undefined))))]).finally(() => timer?.cancel())
+        const v = out === undefined ? undefined : parseCliVersion(out)
+
+        return v === undefined ? {} : { [VERSION_HEADER]: v }
+      } catch {
+        return {}
+      }
+    })()
+
+    return versionRead
+  }
+
   const call1 = async (action: Action): Promise<Reply> => {
     const a = opts.auth
     let timer: Timer | undefined
     try {
+      const vh = await versionHeaders()
       const r = await Promise.race([
         (async () =>
           http.fetch(`${a.endpoint}/api/slots/${action}`, {
             method: 'POST',
-            headers: { ...roleHeaders(a.token, a.role), 'Content-Type': 'application/json' },
+            headers: { ...roleHeaders(a.token, a.role), ...vh, 'Content-Type': 'application/json' },
             body: await body(action),
           }))(),
         new Promise<null>(done => void (timer = clock.after(SLOT_TIMEOUT_MS, () => done(null)))),

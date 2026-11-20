@@ -22,7 +22,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
 | [issue-track](#issue-track) | 0.11.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
-| [switchboard](#switchboard) | 0.14.0 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
+| [switchboard](#switchboard) | 0.15.0 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
 | [token-diet](#token-diet) | 0.1.0 | 훅 2·스킬 | 큰 파일 읽기·큰 heredoc 막기, 작업자 토큰 규율 |
