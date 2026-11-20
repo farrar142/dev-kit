@@ -913,16 +913,27 @@ test('원격 질문: 프로필이 있으면 서버 질문으로 올리고 로컬
   await ui.unmount()
 })
 
-test('원격 질문: 서버가 403 이면 로컬 패널에 올리고 결과 글에 까닭을 적는다', async ($, on) => {
-  await setupRemote($, on, { status: 403, text: JSON.stringify({ error: 'can_ask is off' }) })
-  const text = textOf(await $.tool.call(INPUT as any))
-  expect(text).toContain('원격 질문으로 올리지 못해 로컬 패널에 올렸다(이 역할은 질문을 올릴 수 없음(can_ask 꺼짐, 403))')
-  expect(text).toContain('질문 묶음 q1을 패널에 올렸다')
+test('원격 질문: 403 can_ask_off JSON 이면 로컬로 돌리지 않고 거절(ask_via 를 글에 싣는다)', async ($, on) => {
+  await setupRemote($, on, { status: 403, text: JSON.stringify({ error: 'can_ask is off', code: 'can_ask_off', ask_via: 'team/lead' }) })
+  const ran = await $.tool.call(INPUT as any)
+  expect(String(ran.deny)).toContain('team/lead에게 메일로 넘겨라')
+  expect(String(ran.deny)).not.toContain('질문 묶음')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' } as any)
+  expect(await ui.find({ type: 'Text', text: /어느 DB를 쓸까요/ })).toBeUndefined()
+  await ui.unmount()
 })
 
-test('원격 질문: 서버에 닿지 않으면 로컬 패널로', async ($, on) => {
+test('원격 질문: 옛 평문 403 도 같은 거절(로컬 묶음 없음, 주소 없이 대장 역할)', async ($, on) => {
+  await setupRemote($, on, { status: 403, text: 'forbidden' })
+  const ran = await $.tool.call(INPUT as any)
+  expect(String(ran.deny)).toContain('대장 역할에게 메일로 넘겨라')
+  expect(String(ran.deny)).not.toContain('질문 묶음')
+})
+
+test('원격 질문: 서버에 닿지 않으면 로컬 패널로(글 첫머리가 「원격에 올리지 못했다」)', async ($, on) => {
   await setupRemote($, on, 'down')
   const text = textOf(await $.tool.call(INPUT as any))
+  expect(text.startsWith('원격에 올리지 못했다')).toBe(true)
   expect(text).toContain('로컬 패널에 올렸다(서버에 닿지 않음)')
   expect(text).toContain('질문 묶음 q1')
 })
