@@ -272,9 +272,25 @@ test('원격 질문: 403(질문 권한 없음)은 로컬로 돌리지 않고 거
   const server = fakeServer()
   const w = await session(server, clock)
   server.setMode(403)
-  expect(await w.board.askRemote(QS)).toEqual({ kind: 'refused', askVia: null })
-  expect(askRefusedText(null)).toContain('대장 역할에게 메일로 넘겨라')
-  expect(askRefusedText('x/y')).toContain('x/y에게 메일로 넘겨라')
+  expect(await w.board.askRemote(QS)).toEqual({ kind: 'refused', askVia: null, settingsTarget: null, code: null })
+  expect(askRefusedText(null)).toContain('질문을 올릴 곳이 없다')
+  expect(askRefusedText('x/y')).toContain('x/y 에 질문이 전달됐다')
+  await w.board.stop()
+})
+
+test('원격 질문: 같은 문항은 같은 Idempotency-Key, 다른 문항은 다른 키로 올린다(#176)', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const w = await session(server, clock)
+  const keys: (string | undefined)[] = []
+  const inner = w.host.http
+  const spy = { fetch: (url: string, init: HttpInit) => (url.endsWith('/api/questions') && init.method === 'POST' ? (keys.push(init.headers?.['Idempotency-Key']), inner.fetch(url, init)) : inner.fetch(url, init)) }
+  await w.board.askRemote(QS, { http: spy })
+  await w.board.askRemote(QS, { http: spy })
+  await w.board.askRemote([{ ...QS[0]!, question: '다른 질문?' }], { http: spy })
+  expect(keys[0]).toMatch(/^switchboard-ask-[0-9a-f]{8}$/)
+  expect(keys[1]).toBe(keys[0])
+  expect(keys[2]).not.toBe(keys[0])
   await w.board.stop()
 })
 

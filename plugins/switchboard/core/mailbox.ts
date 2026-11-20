@@ -105,7 +105,7 @@ export type Mailbox = {
   /** 메일을 보낸다(5xx·연결 실패는 NOTICE_TRIES 번까지, 4xx 는 바로 포기). 보냈으면 true. 꺼져 있으면 false. */
   send: (m: OutMail) => Promise<boolean>
   /** 지금 주소(번호 역할)로 인증한 요청. 꺼져 있거나 연결이 안 되면 null. 오류 문구는 옮기지 않는다(토큰). */
-  call: (path: string, init?: { method?: string; body?: string }, io?: CallIo) => Promise<{ status: number; ok: boolean; text: string } | null>
+  call: (path: string, init?: { method?: string; body?: string; headers?: Readonly<Record<string, string>> }, io?: CallIo) => Promise<{ status: number; ok: boolean; text: string } | null>
   /**
    * 긴급 메일 가로채기. 듣는 쪽이 true 를 돌려주면 그 메일은 세션에 넣지 않고 read 로만 표시한다.
    * 돌려준 함수로 끊는다.
@@ -535,7 +535,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       const r = await Promise.race([
         (io.http ?? http).fetch(`${p.endpoint}${path}`, {
           method: init.method ?? 'GET',
-          headers: { ...headers(p), ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+          headers: { ...headers(p), ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...init.headers },
           ...(init.body === undefined ? {} : { body: init.body }),
         }),
         new Promise<null>(done => void (timer = clock.after(io.timeoutMs ?? CHECK_TIMEOUT_MS, () => done(null)))),
