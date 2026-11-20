@@ -36,7 +36,7 @@ import { bossRolesConfig, permissionWaitConfig } from '../core/permission'
 import { singleRolesConfig } from '../core/slot'
 import type { Switchboard } from '../core/switchboard'
 import type { RemoteSink } from '../core/remote-inbox'
-import { isRemoteId, localFallbackLine, remoteAskText, withdrawText } from '../core/remote-ask'
+import { askRefusedText, isRemoteId, localFallbackLine, remoteAskText, withdrawText } from '../core/remote-ask'
 import type { Http } from '../core/host'
 import type { QuestionPanelBatch } from '../types'
 
@@ -527,6 +527,7 @@ export const register: Register = on => {
 
       return ran
     }
+    if (remote.kind === 'refused') return { deny: askRefusedText(remote.askVia) }
     const fallback = remote.reason === null ? [] : [localFallbackLine(remote.reason)]
 
     const now = await $.clock.now()

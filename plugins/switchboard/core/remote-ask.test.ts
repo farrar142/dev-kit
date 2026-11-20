@@ -6,7 +6,7 @@ import type { HttpInit } from './host'
 import { EMPTY_GAP_MS } from './mailbox'
 import { answerMailId, createQuestionsApi, isRemoteId, questionMailId, remoteAnswerText } from './remote-questions'
 import type { RemoteAnswer, RemoteQuestion } from './remote-questions'
-import { localFallbackLine, remoteAskText, withdrawText } from './remote-ask'
+import { askRefusedText, localFallbackLine, remoteAskText, withdrawText } from './remote-ask'
 import { createSwitchboard } from './switchboard'
 import { fakeClock, fakeHost, flush } from './testing'
 import type { FakeClock, FakeHost } from './testing'
@@ -245,12 +245,11 @@ test('원격 질문: 프로필이 있으면 서버 질문으로 올린다(패널
   await w.board.stop()
 })
 
-test('원격 질문: 403·400·5xx·연결 실패면 로컬 패널로(까닭을 남긴다)', async () => {
+test('원격 질문: 400·5xx·연결 실패면 로컬 패널로(까닭을 남긴다)', async () => {
   const clock = fakeClock()
   const server = fakeServer()
   const w = await session(server, clock)
-  const cases: [403 | 400 | 500 | 'down', RegExp][] = [
-    [403, /can_ask 꺼짐, 403/],
+  const cases: [400 | 500 | 'down', RegExp][] = [
     [400, /400: header too long/],
     [500, /서버 오류\(HTTP 500/],
     ['down', /서버에 닿지 않음/],
@@ -265,6 +264,17 @@ test('원격 질문: 403·400·5xx·연결 실패면 로컬 패널로(까닭을 
     }
   }
   expect(server.questions.length).toBe(0)
+  await w.board.stop()
+})
+
+test('원격 질문: 403(질문 권한 없음)은 로컬로 돌리지 않고 거절을 돌려준다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer()
+  const w = await session(server, clock)
+  server.setMode(403)
+  expect(await w.board.askRemote(QS)).toEqual({ kind: 'refused', askVia: null })
+  expect(askRefusedText(null)).toContain('대장 역할에게 메일로 넘겨라')
+  expect(askRefusedText('x/y')).toContain('x/y에게 메일로 넘겨라')
   await w.board.stop()
 })
 

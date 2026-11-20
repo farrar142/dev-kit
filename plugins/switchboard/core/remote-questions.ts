@@ -36,7 +36,8 @@ export type RemoteQuestion = {
 }
 
 /** 서버 응답: 성공이면 value, 아니면 status(연결 실패는 null)와 짧은 까닭. */
-export type ApiReply<T> = { ok: true; status: number; value: T } | { ok: false; status: number | null; error: string }
+/** 실패 응답: `code`·`askVia` 는 서버가 JSON 으로 준 때만(옛 서버는 평문이라 없다). */
+export type ApiReply<T> = { ok: true; status: number; value: T } | { ok: false; status: number | null; error: string; code?: string; askVia?: string }
 
 export type QuestionsApi = {
   /** POST /api/questions. 201 · 403 can_ask 꺼짐 · 400 모양 · 409 답할 대장 없음. */
@@ -148,7 +149,13 @@ export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
   ): Promise<ApiReply<T>> => {
     const r = await call(path, init, io)
     if (r === null) return { ok: false, status: null, error: '서버에 닿지 않음' }
-    if (!r.ok) return { ok: false, status: r.status, error: errorOf(r.status, r.text) }
+    if (!r.ok) {
+      const j = json(r.text)
+      const code = isRecord(j) ? str(j.code) : ''
+      const askVia = isRecord(j) ? str(j.ask_via).trim() : ''
+
+      return { ok: false, status: r.status, error: errorOf(r.status, r.text), ...(code === '' ? {} : { code }), ...(askVia === '' ? {} : { askVia }) }
+    }
     const value = parse(json(r.text))
     if (value === null) return { ok: false, status: r.status, error: '응답 모양이 틀림' }
 

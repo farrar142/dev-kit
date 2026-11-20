@@ -26,6 +26,8 @@ import { GROUP_REFUSAL } from './wire'
 /** ask 결과: 서버 질문이면 그 id, 로컬이면 까닭(메일함이 꺼져 시도하지 않았으면 null). */
 /** here: 이 세션의 대장 패널에도 뜬다(대장 세션). */
 export type RemoteAskResult = { kind: 'remote'; id: string; asker: string; here: boolean } | { kind: 'local'; reason: string | null }
+  /** 서버가 이 역할의 질문 권한 없음으로 거절(403 can_ask_off 또는 옛 평문 403). 로컬로 돌리지 않는다(#174). */
+  | { kind: 'refused'; askVia: string | null }
 
 /** 거두기 결과. */
 export type WithdrawResult = { ok: true } | { ok: false; status: number | null; reason: string }
@@ -82,13 +84,17 @@ export const createRemoteAsk = (mail: Pick<Mailbox, 'call' | 'state'>, opts: Rem
 
       return { kind: 'remote', id: r.value.id, asker: r.value.asker, here: boss() }
     }
+    // 질문 권한 없음 거절은 로컬 패널로 돌리지 않는다: 아무도 보지 않는 패널의 묶음 ID 가 「올렸다」로 읽힌다(#174).
+    if (r.status === 403 && r.error !== GROUP_REFUSAL) {
+      log(`switchboard 질문: 서버가 질문 권한 없음으로 거절함(403${r.askVia === undefined ? '' : `, ask_via 있음`})`)
+
+      return { kind: 'refused', askVia: r.askVia ?? null }
+    }
     const reason =
       r.status === null
         ? `서버에 닿지 않음`
         : r.status === 403
-          ? r.error === GROUP_REFUSAL
-            ? `${GROUP_REFUSAL}(403)`
-            : `이 역할은 질문을 올릴 수 없음(can_ask 꺼짐, 403)`
+          ? `${GROUP_REFUSAL}(403)`
           : r.status === 409
             ? `답할 대장 역할이 없음(409)`
             : r.status === 400
@@ -166,7 +172,11 @@ export const remoteAskText = (id: string, asker: string, resolveTool: string, he
   ].join('\n')
 
 /** 로컬 패널로 돌아갔을 때 결과 글 앞에 붙일 한 줄. */
-export const localFallbackLine = (reason: string) => `원격 질문으로 올리지 못해 로컬 패널에 올렸다(${reason}).`
+export const localFallbackLine = (reason: string) => `원격에 올리지 못했다 — 서버에 질문이 가지 않았다. 대신 이 세션의 로컬 패널에 올렸다(${reason}). 이 세션을 사람이 보고 있지 않으면 답이 오지 않는다.`
+
+/** 질문 권한 없음 거절 글(isError 로 돌려준다). 주소는 서버가 준 ask_via 만 쓴다. */
+export const askRefusedText = (askVia: string | null) =>
+  `질문을 올리지 못했다: 이 역할은 질문을 올릴 수 없다(서버가 거절, 403). 로컬 패널에도 올리지 않았다 — 질문은 ${askVia ?? '대장 역할'}에게 메일로 넘겨라.`
 
 /** resolve(서버 질문) 결과 글. */
 export const withdrawText = (id: string, r: WithdrawResult) =>
