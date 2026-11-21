@@ -2,7 +2,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { announce } from './mailbox'
-import { setup } from './mailtest'
+import { inlined, setup } from './mailtest'
 import { flush } from './testing'
 
 const line = (m: number, n: number) => `메일 #${m} 은 지시 #${n} 의 답이다. #${n} 은 아직 열려 있다 — 끝났으면 \`switchboard close ${n}\`, 더 시킬 것이 있으면 reply.`
@@ -18,7 +18,7 @@ test('answers_directive done 이면 아무것도 더하지 않는다', async () 
   const { host, mail } = await setup()
   const a = mail.send('normal', '', { id: 7, state: 'done' })
   await flush()
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
   expect(host.turns[0]).not.toContain('switchboard close')
 })
 
@@ -26,7 +26,7 @@ test('키가 없으면 아무것도 더하지 않는다', async () => {
   const { host, mail } = await setup()
   const a = mail.send()
   await flush()
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 })
 
 test('여러 통을 한 번에 넣어도 메일마다 붙는다', () => {

@@ -1,8 +1,7 @@
 // #166: 백그라운드 서브에이전트가 도는 동안은 메일 앞에서 compact 를 걸지 않는다.
 import { expect, test } from 'claude-code/testing'
 
-import { announce } from './mailbox'
-import { setup } from './mailtest'
+import { inlined, setup } from './mailtest'
 import { flush } from './testing'
 
 const BOARD = { compactBeforeMail: { thresholdTokens: 200_000, instructions: '메일 전 정리' } }
@@ -14,7 +13,7 @@ test('서브에이전트 1개가 도는 동안 기준 이상이어도 compact 0�
   const a = mail.send()
   await flush()
   expect(host.compacts).toEqual([])
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 })
 
 test('끝 알림 뒤에는 같은 조건에서 compact 를 먼저 건다', async () => {
