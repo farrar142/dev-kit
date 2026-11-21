@@ -29,7 +29,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 | [context-cap](#context-cap) | 0.2.3 | 훅 | 세션 컨텍스트 상한 |
 | [idle-compact](#idle-compact) | 0.1.0 | mod | 입력 없이 30분이면 자동 compact |
 | [leak-guard](#leak-guard) | 0.2.0 | 훅 | 공개 저장소로 나가는 비밀·금지어 차단 |
-| [root-cause](#root-cause) | 0.1.1 | 훅 | 근본 원인 줄 없는 수정·장애 보고 차단 |
+| [root-cause](#root-cause) | 0.2.2 | 훅 | 근본 원인 줄 없는 수정·장애 보고 차단 |
 | [harden](#harden) | 0.1.0 | 스킬 | 재발 방지 장치 고르기 |
 | [django-asgi](#django-asgi) | 0.1.1 | 스킬 | Django ASGI 성능·정합성 |
 | [security-recon](#security-recon) | 0.1.0 | 스킬 | 인가 받은 서버의 외부 보안 점검 |

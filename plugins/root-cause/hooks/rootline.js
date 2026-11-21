@@ -61,10 +61,19 @@ const EVIDENCE_SHAPES = [
 ];
 const evidenceShaped = (v) => EVIDENCE_SHAPES.some((re) => re.test(v));
 
+// `근본 원인:` 줄 안의 괄호 `(…)` 에 증거 꼴이 들어 있는가 — 「…(#1234는 원문 2660자 중 …)」
+// 괄호 밖의 경로·백틱은 증거로 치지 않는다(원인 서술에 섞인 경로가 단정을 통과시키지 못하게).
+function inlineEvidence(value) {
+  const groups = value.match(/[(（][^()（）]*[)）]/g) || [];
+  return groups.some((g) => evidenceShaped(g.slice(1, -1)));
+}
+
 function hasEvidenceLine(text) {
   for (const line of proseLines(text)) {
     const m = EVIDENCE_VALUE.exec(line);
     if (m && evidenceShaped(stripValue(m[1]))) return true;
+    const r = ROOT_VALUE.exec(line);
+    if (r && inlineEvidence(stripValue(r[1]))) return true;
   }
   return false;
 }
