@@ -2,21 +2,21 @@
 // 보는 것: 어떤 메일이 언제 어떤 글로 세션에 들어가는가, 서버에 무엇을 보내는가(토큰이 새지 않는가).
 import { expect, test } from 'claude-code/testing'
 
-import { announce, createMailbox, RETRY_MAX_MS } from './mailbox'
-import { EP, PROFILE, ROLE, runTurn, setup, TOKEN } from './mailtest'
+import { createMailbox, RETRY_MAX_MS } from './mailbox'
+import { EP, inlined, PROFILE, ROLE, runTurn, setup, TOKEN } from './mailtest'
 import { createSwitchboard } from './switchboard'
 import { fakeHost, flush } from './testing'
 import { GROUP_REFUSAL } from './wire'
 
-test('메일함: 유휴 세션은 메일 한 통으로 깨어나 ID만 담은 새 턴을 받는다', async () => {
+test('메일함: 유휴 세션은 메일 한 통으로 깨어나 본문을 담은 새 턴을 받는다', async () => {
   const { host, mail, board } = await setup()
   expect(board.mail().status).toBe('live')
   expect(host.turns).toEqual([])
 
   const id = mail.send()
   await flush()
-  expect(host.turns).toEqual([announce([id])])
-  expect(host.turns[0]).toBe('메일 #1 을 읽고 처리하라(switchboard read <ID>).')
+  expect(host.turns).toEqual([inlined([id])])
+  expect(host.turns[0]).toBe('#1 s1\nteam/lead → team/worker · read')
 })
 
 test('메일함: 바쁜 동안 쌓인 메일은 턴이 끝난 뒤 한 줄로 묶인다', async () => {
@@ -32,7 +32,7 @@ test('메일함: 바쁜 동안 쌓인 메일은 턴이 끝난 뒤 한 줄로 묶
 
   host.emit({ type: 'turn.complete' })
   await flush()
-  expect(host.turns).toEqual([announce([a, b, c])])
+  expect(host.turns).toEqual([inlined([a, b, c])])
 })
 
 test('메일함: 같은 ID 를 두 번 알리지 않고, 알림 턴이 시작되기 전 온 메일은 그 턴 뒤에 알린다', async () => {
@@ -42,10 +42,10 @@ test('메일함: 같은 ID 를 두 번 알리지 않고, 알림 턴이 시작되
   // 알림 턴이 아직 시작되지 않았다: 새 메일은 그 턴 뒤로.
   const b = mail.send()
   await flush()
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 
   await runTurn(host)
-  expect(host.turns).toEqual([announce([a]), announce([b])])
+  expect(host.turns).toEqual([inlined([a]), inlined([b])])
   await runTurn(host)
   // 시간이 흘러 긴 대기가 몇 번 돌아도(a·b 는 아직 pending) 다시 알리지 않는다.
   await host.clock.advance(120_000)
@@ -55,7 +55,7 @@ test('메일함: 같은 ID 를 두 번 알리지 않고, 알림 턴이 시작되
 
 test('메일함: 세션이 막 떴을 때 쌓여 있던 pending 메일을 한 번 알린다', async () => {
   const { host } = await setup({ preload: 3 })
-  expect(host.turns).toEqual([announce([1, 2, 3])])
+  expect(host.turns).toEqual([inlined([1, 2, 3])])
   await runTurn(host)
   await host.clock.advance(60_000)
   expect(host.turns.length).toBe(1)
@@ -70,7 +70,7 @@ test('메일함: 바쁜 동안 세션이 스스로 읽은 메일은 알리지 �
   mail.read(a)
   host.emit({ type: 'turn.complete' })
   await flush()
-  expect(host.turns).toEqual([announce([b])])
+  expect(host.turns).toEqual([inlined([b])])
 })
 
 test('메일함: 서버가 죽어도 세션은 멀쩡하고, 간격을 늘려 다시 이어 끊긴 동안 온 메일을 빠짐없이 받는다', async () => {
@@ -78,7 +78,7 @@ test('메일함: 서버가 죽어도 세션은 멀쩡하고, 간격을 늘려 �
   const a = mail.send()
   await flush()
   await runTurn(host)
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 
   mail.setDown(true)
   await flush()
@@ -101,7 +101,7 @@ test('메일함: 서버가 죽어도 세션은 멀쩡하고, 간격을 늘려 �
   expect(board.mail().status).toBe('live')
   // 다시 이을 때 마지막 커서로 묻는다.
   expect(mail.polls[mail.polls.length - 1]?.after).toBeGreaterThanOrEqual(a)
-  expect(host.turns).toEqual([announce([a]), announce([b, c])])
+  expect(host.turns).toEqual([inlined([a]), inlined([b, c])])
   expect(logs.some(l => l.includes('끊김'))).toBe(true)
 })
 
@@ -172,7 +172,7 @@ test('메일함: 턴을 넣지 못하면 되돌려 두었다 다시 알린다', 
   await flush()
   expect(host.turns).toEqual([])
   await host.clock.advance(5_000)
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 })
 
 test('메일함: 알림 직전 확인 요청이 멈춰도 한도 뒤 알린다', async () => {
@@ -186,7 +186,7 @@ test('메일함: 알림 직전 확인 요청이 멈춰도 한도 뒤 알린다',
   await flush()
   expect(host.turns).toEqual([])
   await host.clock.advance(10_000)
-  expect(host.turns).toEqual([announce([a])])
+  expect(host.turns).toEqual([inlined([a])])
 })
 
 test('메일함: stop 하면 더 묻지도 알리지도 않는다', async () => {

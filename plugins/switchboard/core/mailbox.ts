@@ -14,7 +14,8 @@
 //    구독을 시작하므로 따로 할 일은 없다.
 // 왜 SSE 가 아닌가: Claude 모드의 http 는 본문을 다 받아서만 준다(D1). 서버의 긴 대기는 SSE 와 같은 이벤트·커서 규칙이다.
 import type { AgentHost, Fs, Http, Timer } from './host'
-import { createSlot } from './slot'
+import { versionAtLeast } from './handoff'
+import { CLI_VERSION_TIMEOUT_MS, createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
 import { httpWhy, roleHeaders } from './wire'
 
@@ -66,6 +67,8 @@ export type MailboxOptions = {
    * heartbeat 로 presence 를 보고한다. 없으면 프로필 role 그대로 구독한다(번호 없음).
    */
   slot?: SlotConfig
+  /** CLI 판 읽기(메일 턴 꼬리, #203). 없으면 slot.cliVersion, 그것도 없으면 옛 꼬리. */
+  cliVersion?: () => Promise<string | undefined>
 }
 
 export type SlotConfig = {
@@ -76,6 +79,7 @@ export type SlotConfig = {
   warn?: (text: string) => void
   singleRoles?: readonly string[]
   /** CLI 판 읽기(슬롯 요청 머리 X-Switchboard-Version). 없으면 머리를 싣지 않는다. */
+  /** 메일 턴 꼬리(#203)도 이 판을 본다(세션에 한 번 읽는다). */
   cliVersion?: () => Promise<string | undefined>
   /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE 을 맞춘다). */
   onRole?: (role: string) => void
@@ -210,6 +214,64 @@ export const announce = (ids: readonly number[], open: ReadonlyMap<number, numbe
     }),
   ].join('\n')
 
+/** 일반 메일 본문을 바로 넣는 한 통의 상한(글자). 넘으면 머리만 넣고 read 를 시킨다. */
+export const MAIL_INLINE_MAX = 4000
+/** 한 턴에 넣는 일반 메일 본문의 합 상한(글자). 넘는 통은 머리만. */
+export const MAIL_TURN_MAX = 8000
+/** 새 꼬리(`reply --complete`, `close <답 ID>`)를 내는 CLI 판 문턱. 낮거나 못 읽으면 옛 꼬리. */
+export const MAIL_TAIL_MIN_VERSION = '0.32.0'
+
+/** 세션에 넣을 일반 메일 한 통. body 가 undefined 면 본문을 받지 못했다(옛 꼴: ID 만). */
+export type MailItem = { id: number; sender?: string; subject?: string; to: string; body?: string }
+
+const indent = (body: string) =>
+  body
+    .split('\n')
+    .map(l => (l === '' ? '' : `  ${l}`))
+    .join('\n')
+
+/**
+ * 일반 메일 턴 글(#203). 받은 본문은 CLI `read` 출력 꼴(`#ID 제목` / `보낸이 → 받는이 · read` / 본문)로 넣고,
+ * 한 통이 MAIL_INLINE_MAX 를 넘거나 합이 MAIL_TURN_MAX 를 넘는 통은 머리만, 본문을 못 받은 통은 옛 ID 줄로 넣는다.
+ * newTail 이면 답하기·끝내기 꼬리를, 아니면 옛 꼬리(열린 지시의 답 안내만)를 붙인다.
+ * 본문을 하나도 못 받았고 옛 꼬리면 announce 와 같다.
+ */
+export const mailTurn = (items: readonly MailItem[], o: { open?: ReadonlyMap<number, number>; newTail?: boolean } = {}): string => {
+  const open = o.open ?? new Map<number, number>()
+  const blocks: string[] = []
+  const missing: number[] = []
+  let used = 0
+  for (const m of items) {
+    if (m.body === undefined) {
+      missing.push(m.id)
+      continue
+    }
+    const head = `#${m.id} ${m.subject ?? ''}`.trimEnd()
+    const route = `${m.sender ?? '?'} → ${m.to}`
+    const n = [...m.body].length
+    if (n <= MAIL_INLINE_MAX && used + n <= MAIL_TURN_MAX) {
+      used += n
+      blocks.push([head, `${route} · read`, ...(m.body === '' ? [] : [indent(m.body)])].join('\n'))
+    } else {
+      blocks.push([head, `${route} · 본문 ${n}자 — switchboard read ${m.id} 로 읽어라`].join('\n'))
+    }
+  }
+  if (missing.length > 0) blocks.push(`메일 ${missing.map(i => `#${i}`).join(', ')} 을 읽고 처리하라(switchboard read <ID>).`)
+  const answers = items.flatMap(m => {
+    const n = open.get(m.id)
+
+    return n === undefined ? [] : [{ m: m.id, n }]
+  })
+  const tail = o.newTail
+    ? [
+        (id => `답하고 끝내기: switchboard reply ${id} --complete … / 답 없이 끝내기: switchboard complete ${id}`)(items.length === 1 ? String(items[0]!.id) : '<ID>'),
+        ...answers.map(({ m, n }) => `메일 #${m} 은 지시 #${n} 의 답이다. 끝났으면 switchboard close ${m}`),
+      ]
+    : answers.map(({ m, n }) => `메일 #${m} 은 지시 #${n} 의 답이다. #${n} 은 아직 열려 있다 — 끝났으면 \`switchboard close ${n}\`, 더 시킬 것이 있으면 reply.`)
+
+  return [blocks.join('\n\n'), ...tail].join('\n')
+}
+
 /** 로그용 ID 줄: 앞 5개만. */
 const ids = (xs: readonly number[]) => {
   const sorted = [...xs].sort((a, b) => a - b)
@@ -316,6 +378,36 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
   let queued: number[] = []
   /** 일반 메일 id → 그 답이 닫지 않은(open) 지시 id. */
   const openDirective = new Map<number, number>()
+  /** 기다리는 일반 메일의 머리(보낸이·제목). */
+  const meta = new Map<number, MailEvent>()
+  /**
+   * 받아 두고 아직 턴에 넣지 못한 일반 메일 본문(#203). 본문 GET 이 read 로 바꿨을 수 있어 pending 확인에서 빼지 않고,
+   * 다음 시도에 다시 받지 않는다. 넣으면 지운다.
+   */
+  const bodies = new Map<number, string>()
+  /** CLI 판(세션에 한 번, 슬롯 머리와 메일 꼬리가 함께 쓴다). */
+  let versionRead: Promise<string | undefined> | undefined
+  const readVersion = opts.cliVersion ?? opts.slot?.cliVersion
+  const cliVersion = readVersion === undefined
+    ? undefined
+    : () => {
+        versionRead ??= (async () => {
+          let timer: Timer | undefined
+          try {
+            return await Promise.race([readVersion(), new Promise<undefined>(done => void (timer = clock.after(CLI_VERSION_TIMEOUT_MS, () => done(undefined))))]).finally(() => timer?.cancel())
+          } catch {
+            return undefined
+          }
+        })()
+
+        return versionRead
+      }
+  /** 새 꼬리를 내도 되는가: CLI 가 MAIL_TAIL_MIN_VERSION 이상. 못 읽으면 옛 꼬리. */
+  const newTail = async () => {
+    const v = await cliVersion?.()
+
+    return v !== undefined && versionAtLeast(v, MAIL_TAIL_MIN_VERSION)
+  }
   /** 돌고 있는 일의 세대. stop·다시 잇기 때 올려 늦게 온 응답을 버린다. */
   let gen = 0
   let backoff = RETRY_MIN_MS
@@ -475,6 +567,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       else if (isSystemNotice(e)) noticeQ.push(e)
       else {
         queued.push(e.id)
+        meta.set(e.id, e)
         if (e.answers_directive?.state === 'open') openDirective.set(e.id, e.answers_directive.id)
       }
     }
@@ -581,6 +674,23 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       return isRecord(m) && typeof m.body === 'string' ? m.body : ''
     } catch {
       return ''
+    }
+  }
+
+  /** 일반 메일 본문(#203). 못 받으면(서버 오류·모양 틀림·연결 실패) undefined — 옛 꼴로 물러난다. */
+  const fullBodyOf = async (p: MailProfile, id: number): Promise<string | undefined> => {
+    try {
+      let timer: Timer | undefined
+      const r = await Promise.race([
+        http.fetch(`${p.endpoint}/api/messages/${id}`, { method: 'GET', headers: headers(p) }),
+        new Promise<null>(done => void (timer = clock.after(CHECK_TIMEOUT_MS, () => done(null)))),
+      ]).finally(() => timer?.cancel())
+      if (r === null || !r.ok) return undefined
+      const m: unknown = JSON.parse(r.text)
+
+      return isRecord(m) && typeof m.body === 'string' ? m.body : undefined
+    } catch {
+      return undefined
     }
   }
 
@@ -743,7 +853,10 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
     queued = []
     let failed = false
     void (async () => {
-      const send = await stillPending(p, ids)
+      // 본문을 받아 둔 메일(#203)은 서버에서 read 일 수 있다: pending 확인에서 빼지 않는다.
+      const live = new Set(await stillPending(p, ids))
+      const send = ids.filter(i => live.has(i) || bodies.has(i))
+      for (const i of ids) if (!send.includes(i)) meta.delete(i)
       if (profile === null) return
       if (send.length === 0) return
       // 확인하는 사이 턴이 시작됐으면 다음 턴 끝으로 미룬다.
@@ -760,8 +873,35 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
       }
       if (profile === null) return
       try {
-        await host.submitTurn(announce(send, openDirective))
-        for (const m of send) openDirective.delete(m)
+        // 본문을 받는다(#203). 못 받은 통은 옛 꼴(ID 만)로 넣고 읽음 처리하지 않는다.
+        await Promise.all(
+          send.filter(i => !bodies.has(i)).map(async i => {
+            const b = await fullBodyOf(p, i)
+            if (b !== undefined) bodies.set(i, b)
+          }),
+        )
+        const to = role ?? p.role
+        const items: MailItem[] = send.map(i => {
+          const e = meta.get(i)
+          const body = bodies.get(i)
+
+          return {
+            id: i,
+            to,
+            ...(e?.sender === undefined ? {} : { sender: e.sender }),
+            ...(e?.subject === undefined ? {} : { subject: e.subject }),
+            ...(body === undefined ? {} : { body }),
+          }
+        })
+        await host.submitTurn(mailTurn(items, { open: openDirective, newTail: await newTail() }))
+        const got = send.filter(i => bodies.has(i))
+        for (const m of send) {
+          openDirective.delete(m)
+          meta.delete(m)
+          bodies.delete(m)
+        }
+        // 본문을 넣은 통만 읽음 처리한다(GET 이 이미 했을 수 있지만 서버마다 다를 수 있다).
+        await Promise.all(got.map(i => markRead(p, i)))
         awaitingTurn = true
         grace?.cancel()
         grace = clock.after(TURN_GRACE_MS, () => {
@@ -846,7 +986,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
         log,
         ...(cfg.warn === undefined ? {} : { warn: cfg.warn }),
         ...(cfg.singleRoles === undefined ? {} : { singleRoles: cfg.singleRoles }),
-        ...(cfg.cliVersion === undefined ? {} : { cliVersion: cfg.cliVersion }),
+        ...(cliVersion === undefined ? {} : { cliVersion }),
       })
       slot = s
       // 번호를 받은 뒤 구독한다(-2 세션이 잠깐이라도 -1 메일을 받지 않게). 못 받으면(옛 서버·끊김) 기반 역할로.

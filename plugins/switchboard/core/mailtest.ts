@@ -3,7 +3,7 @@ import { flush } from './testing'
 import type { CompactBehavior, FakeHost } from './testing'
 import { fakeHost } from './testing'
 import type { HttpInit, Usage } from './host'
-import { EMPTY_GAP_MS } from './mailbox'
+import { EMPTY_GAP_MS, mailTurn } from './mailbox'
 import { createSwitchboard } from './switchboard'
 import type { SwitchboardOptions } from './switchboard'
 
@@ -115,6 +115,8 @@ export const setup = async (
     /** 연결 전부터의 컨텍스트(resume 으로 이어 띄운 세션). */
     usage?: Usage
     compact?: CompactBehavior
+    /** 메일함 옵션 덧붙이기(CLI 판 읽기 등). */
+    mail?: { cliVersion?: () => Promise<string | undefined> }
   } = {},
 ) => {
   const host = fakeHost({ identity: { isMain: opts.isMain ?? true }, ...(opts.features === undefined ? {} : { features: opts.features }) })
@@ -124,13 +126,23 @@ export const setup = async (
   const mail = fakeMail(host)
   for (let i = 0; i < (opts.preload ?? 0); i++) mail.send()
   const logs: string[] = []
-  const board = createSwitchboard(host, { ...opts.board, mail: { profilePath: opts.profile === null ? null : PROFILE, log: t => void logs.push(t) } })
+  const board = createSwitchboard(host, { ...opts.board, mail: { ...opts.mail, profilePath: opts.profile === null ? null : PROFILE, log: t => void logs.push(t) } })
   const started = await board.start()
   // 첫 물음(밀린 것 받기) 뒤 긴 대기가 걸리게 한다.
   await host.clock.advance(EMPTY_GAP_MS)
 
   return { host, mail, logs, board, started }
 }
+
+/**
+ * 가짜 서버의 일반 메일(보낸이 team/lead, 제목 s<id>, 본문 기본 빈 글)이 본문째 들어간 턴 글(#203).
+ * bodies 로 메일마다 본문을, newTail 로 새 꼬리를 고른다.
+ */
+export const inlined = (ids: readonly number[], open?: ReadonlyMap<number, number>, o: { bodies?: Readonly<Record<number, string>>; newTail?: boolean } = {}) =>
+  mailTurn(
+    ids.map(id => ({ id, sender: 'team/lead', subject: `s${id}`, to: ROLE, body: o.bodies?.[id] ?? '' })),
+    { ...(open === undefined ? {} : { open }), ...(o.newTail === undefined ? {} : { newTail: o.newTail }) },
+  )
 
 /** 세션이 넣은 턴을 실제처럼 돌렸다 끝낸다. */
 export const runTurn = async (host: FakeHost) => {

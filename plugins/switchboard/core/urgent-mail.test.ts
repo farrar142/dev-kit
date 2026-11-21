@@ -1,8 +1,8 @@
 // D4 긴급 메일: 바쁘면 다음 도구 호출 뒤 끼워 넣고, 유휴면 새 턴. 넣는 즉시 read, 본문은 상한에서 자른다.
 import { expect, test } from 'claude-code/testing'
 
-import { announce, URGENT_MAX_CHARS, urgentText } from './mailbox'
-import { runTurn, setup } from './mailtest'
+import { URGENT_MAX_CHARS, urgentText } from './mailbox'
+import { inlined, runTurn, setup } from './mailtest'
 import { flush } from './testing'
 
 test('긴급: 바쁜 세션에는 다음 도구 호출 뒤에 본문이 들어가고, 그때 read 가 된다', async () => {
@@ -86,7 +86,7 @@ test('긴급: 끼워 넣기 기능이 없으면 새 턴으로(바쁘면 그 턴 
   await flush()
   expect(host.turns.length).toBe(1) // 긴급 턴이 시작되기 전에는 일반을 넣지 않는다.
   await runTurn(host)
-  expect(host.turns[1]).toBe(announce([n]))
+  expect(host.turns[1]).toBe(inlined([n]))
 })
 
 test('긴급: compact 중이면 끝난 뒤에 넣는다', async () => {

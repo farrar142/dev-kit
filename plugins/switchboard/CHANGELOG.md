@@ -1,5 +1,14 @@
 # switchboard 바뀐 것
 
+## 0.16.0
+
+- 일반 메일 본문을 세션에 바로 넣는다(#203). 「메일 #N 을 읽어라」 한 줄만 넣으면 세션이 본문을 보려고 `read` 를 한 번 더 불러, 메일마다 모델 호출 하나가 덧값으로 들었다.
+  - 꼴은 CLI `read` 출력과 같다: `#ID 제목` / `보낸이 → 받는이 · read` / 본문(두 칸 들여쓰기). 넣은 뒤 read 로 표시한다.
+  - 한 통이 4,000자(`MAIL_INLINE_MAX`)를 넘으면 머리만 넣고 `switchboard read <ID>` 를 시킨다. 한 턴에 여러 통이면 본문 합 8,000자(`MAIL_TURN_MAX`)까지 넣고, 넘는 통은 머리만.
+  - 본문을 못 받으면(서버 오류·연결 실패·응답 모양 틀림·10초 한도) 그 통은 읽음 처리하지 않고 옛 꼴(「메일 #N 을 읽고 처리하라」)로 넣는다. 본문을 받은 뒤 턴 넣기가 실패하면 받아 둔 본문으로 다시 넣는다(본문 GET 이 서버에서 read 로 바꿨어도 잃지 않는다).
+- 꼬리는 CLI 판으로 가른다(문턱 `MAIL_TAIL_MIN_VERSION` = 0.32.0). 이상이면 「답하고 끝내기: switchboard reply <ID> --complete … / 답 없이 끝내기: switchboard complete <ID>」, 열린 지시의 답이면 「끝났으면 switchboard close <답 ID>」. 낮거나 CLI 가 없거나 판을 못 읽으면(3초 한도) 옛 꼬리 그대로다. 판은 세션에 한 번 읽고 슬롯 머리(`X-Switchboard-Version`)와 같이 쓴다.
+- 넣는 때(유휴, 입력 중 미룸, 긴급은 바로)는 그대로다.
+
 ## 0.15.0
 
 - 슬롯 register·heartbeat(takeover·release 포함) 요청에 머리 `X-Switchboard-Version: vX.Y.Z` 를 싣는다(#192). 서버가 세션 행의 CLI 판을 이 머리로만 채워, 싣지 않으면 모든 세션이 「판 모름」으로 떴다. 값은 플러그인 판이 아니라 그 세션이 쓰는 `switchboard version` 출력(「switchboard v0.31.0」)의 `vX.Y.Z`다.

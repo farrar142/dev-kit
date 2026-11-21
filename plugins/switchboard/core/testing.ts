@@ -28,7 +28,7 @@ export type FakeClock = Clock & {
 
 /** 쌓인 마이크로태스크를 다 돌린다. */
 export const flush = async () => {
-  for (let i = 0; i < 20; i++) await Promise.resolve()
+  for (let i = 0; i < 50; i++) await Promise.resolve()
 }
 
 export const fakeClock = (start = 1_000_000): FakeClock => {
