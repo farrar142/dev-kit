@@ -132,6 +132,7 @@ class UpdateConfig(TypedDict, total=False):
     remote_claude: str
     shells: dict[str, str]
     skill_copy: str
+    agent_copy: str
 
 
 def config_path() -> str:
@@ -163,6 +164,8 @@ def load_update_config(path: str) -> UpdateConfig:
         cfg["remote_claude"] = str(sect["remote_claude"])
     if isinstance(sect.get("skill_copy"), str) and sect["skill_copy"]:
         cfg["skill_copy"] = str(sect["skill_copy"])
+    if isinstance(sect.get("agent_copy"), str) and sect["agent_copy"]:
+        cfg["agent_copy"] = str(sect["agent_copy"])
     shells = sect.get("shells")
     if isinstance(shells, dict):
         cfg["shells"] = {str(k): str(v) for k, v in shells.items() if v in SHELLS}
@@ -392,25 +395,133 @@ def skill_copy_dir(cfg: UpdateConfig) -> str:
     return os.path.expanduser(cfg.get("skill_copy") or os.path.join(base, "skills", COPY_PLUGIN))
 
 
-def sync_local_copy(report: "MachineReport", cfg: UpdateConfig) -> str | None:
-    """로컬 기계에 스킬 복사본 폴더가 있으면 설치된 판에 맞추고 결과 줄을 돌려준다. 폴더가 없으면 None.
+def agent_copy_dir(cfg: UpdateConfig) -> str:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.expanduser(cfg.get("agent_copy") or os.path.join(base, "agents"))
+
+
+def _backup_path(path: str, today: str) -> str:
+    bak = f"{path}.bak-{today}"
+    n = 2
+    while os.path.exists(bak):
+        bak = f"{path}.bak-{today}-{n}"
+        n += 1
+    return bak
+
+
+def sync_agent_copies(src_dir: str, dst_dir: str, today: str) -> list[str]:
+    """플러그인 agents/*.md 중 dst_dir에 같은 이름이 있는 것만 맞춘다(없는 파일은 만들지 않는다).
+    다르면 덮기 전에 <이름>.bak-<날짜> 사본을 남기고, 복사본에만 있던 줄을 알린다. 반환: 결과 줄."""
+    out: list[str] = []
+    if not os.path.isdir(src_dir) or not os.path.isdir(dst_dir):
+        return out
+    for name in sorted(n for n in os.listdir(src_dir) if n.endswith(".md")):
+        s, d = os.path.join(src_dir, name), os.path.join(dst_dir, name)
+        if not os.path.isfile(d):
+            continue
+        new, old = open(s, "rb").read(), open(d, "rb").read()
+        if new == old:
+            out.append(f"{name}: 이미 같다")
+            continue
+        bak = _backup_path(d, today)
+        shutil.copyfile(d, bak)
+        shutil.copyfile(s, d)
+        src_lines = set(new.decode("utf-8", "replace").splitlines())
+        only = [ln for ln in old.decode("utf-8", "replace").splitlines() if ln.strip() and ln not in src_lines]
+        line = f"{name}: 맞춤(옛 복사본 → {os.path.basename(bak)})"
+        if only:
+            line += f", 복사본에만 있던 줄 {len(only)}개 — 플러그인에 들일 것인지 사본에서 확인:"
+            line += "".join(f"\n    {ln.strip()[:100]}" for ln in only[:5])
+        out.append(line)
+    return out
+
+
+def local_market_plugin(run: Runner, market: str, name: str) -> tuple[str, str] | None:
+    """플러그인이 깔리지 않은 기계: 로컬 마켓 클론에서 그 플러그인 폴더와 판을 찾는다."""
+    r = run(LOCAL, ["claude", "plugin", "marketplace", "list", "--json"])
+    if r.code != 0:
+        return None
+    try:
+        markets: JSON = json.loads(r.out)
+    except json.JSONDecodeError:
+        return None
+    loc = next((str(m.get("installLocation") or "") for m in markets
+                if isinstance(m, dict) and m.get("name") == market), "") if isinstance(markets, list) else ""
+    if not loc:
+        return None
+    try:
+        with open(os.path.join(loc, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
+            manifest: JSON = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    entries = manifest.get("plugins") if isinstance(manifest, dict) else None
+    e = next((x for x in entries if isinstance(x, dict) and x.get("name") == name), None) \
+        if isinstance(entries, list) else None
+    src = e.get("source") if isinstance(e, dict) else None
+    if not isinstance(src, str):
+        return None
+    root = os.path.normpath(os.path.join(loc, src[2:] if src.startswith("./") else src))
+    version = e.get("version") if isinstance(e, dict) else None
+    if not isinstance(version, str):
+        try:
+            with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+                pj: JSON = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        version = pj.get("version") if isinstance(pj, dict) else None
+    return (root, version) if isinstance(version, str) and os.path.isdir(root) else None
+
+
+def copy_source(run: Runner, report: "MachineReport", market: str) -> tuple[str, str, str] | None:
+    """손 복사본의 원본: (플러그인 폴더, 판, 어디서). 설치된 가장 높은 판, 없으면 로컬 마켓 클론."""
+    cands = [i for i in report.after if plugin_name(i) == COPY_PLUGIN and i.get("installPath")
+             and os.path.isdir(i["installPath"])]
+    best = max(cands, key=lambda i: version_tuple(i["version"]) or (), default=None)
+    if best:
+        return best["installPath"], best["version"], "설치"
+    found = local_market_plugin(run, market, COPY_PLUGIN)
+    return (found[0], found[1], "마켓 클론") if found else None
+
+
+def sync_local_copy(run: Runner, report: "MachineReport", cfg: UpdateConfig, market: str,
+                    today: str) -> str | None:
+    """로컬 기계의 손 복사본(스킬 폴더, 사용자 agents/의 같은 이름 에이전트)을 설치된 판에 맞추고 결과 줄을 돌려준다.
+    플러그인이 깔리지 않았으면 로컬 마켓 클론을 원본으로 쓴다. 손 복사본이 하나도 없으면 None.
     (복사본 폴더는 기계끼리 동기화되므로 원격 기계는 따로 하지 않는다.)"""
     dst = skill_copy_dir(cfg)
-    if not os.path.isdir(dst):
+    adir = agent_copy_dir(cfg)
+    has_skill = os.path.isdir(dst)
+    has_agent = os.path.isdir(adir)
+    if not has_skill and not has_agent:
         return None
-    cands = [i for i in report.after if plugin_name(i) == COPY_PLUGIN and i.get("installPath")]
-    best = max(cands, key=lambda i: version_tuple(i["version"]) or (), default=None)
-    src = os.path.join(best["installPath"], "skills", COPY_PLUGIN) if best else ""
-    if not best or not os.path.isdir(src):
-        return f"스킬 복사본 {dst}: 설치된 {COPY_PLUGIN}의 스킬 폴더를 못 찾아 건너뛴다"
+    found = copy_source(run, report, market)
+    if not found:
+        if not has_skill:
+            return None
+        return f"스킬 복사본 {dst}: 설치된 {COPY_PLUGIN}도 마켓 클론도 못 찾아 건너뛴다"
+    root, version, where = found
+    lines: list[str] = []
+    src = os.path.join(root, "skills", COPY_PLUGIN)
+    if has_skill:
+        if not os.path.isdir(src):
+            lines.append(f"스킬 복사본 {dst}: {where}({root})에 스킬 폴더가 없어 건너뛴다")
+        else:
+            try:
+                written, extra = sync_skill_copy(src, dst, version)
+                line = f"스킬 복사본 {dst}: {version} 판에 맞춤({where}) — " + (
+                    f"{len(written)}개 갱신({', '.join(written)})" if written else "이미 같다")
+                if extra:
+                    line += f"\n  복사본에만 있는 파일(지우지 않음): {', '.join(extra)}"
+                lines.append(line)
+            except OSError as e:
+                lines.append(f"스킬 복사본 {dst}: 맞추지 못했다({e})")
     try:
-        written, extra = sync_skill_copy(src, dst, best["version"])
+        agents = sync_agent_copies(os.path.join(root, "agents"), adir, today)
     except OSError as e:
-        return f"스킬 복사본 {dst}: 맞추지 못했다({e})"
-    line = f"스킬 복사본 {dst}: {best['version']} 판에 맞춤 — " + (f"{len(written)}개 갱신({', '.join(written)})" if written else "이미 같다")
-    if extra:
-        line += f"\n  복사본에만 있는 파일(지우지 않음): {', '.join(extra)}"
-    return line
+        agents = [f"맞추지 못했다({e})"]
+    if agents:
+        lines.append(f"에이전트 복사본 {adir}: {version} 판({where})\n" + "\n".join(f"  {a}" for a in agents))
+    return "\n".join(lines) or None
 
 
 TABLE_HEADER = ["기계", "플러그인", "범위", "폴더", "판", "최신", "상태"]
@@ -531,7 +642,7 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
             where = f"{i['scope']}:{folder_name(i['projectPath'])}" if i["projectPath"] else i["scope"]
             print(f"- {host} {plugin_name(i)} ({where}) {i['version']}")
 
-    copy_line = sync_local_copy(reports[0], cfg)
+    copy_line = sync_local_copy(run, reports[0], cfg, market, datetime.now().strftime("%Y%m%d"))
     if copy_line:
         print("\n" + copy_line)
 

@@ -60,5 +60,6 @@ python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts
 | `machines` | ssh 별칭(로컬은 `local`) → switchboard가 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
 | `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
 | `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). posix 원격은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
-| `skill_copy` | 손으로 둔 스킬 복사본 폴더(기본 `~/.claude/skills/issue-track`). 폴더가 있으면 갱신 스크립트가 로컬에서 설치된 판의 스킬 폴더(문서·스크립트·시험)를 거기에 맞추고 `VERSION`을 적는다. 복사본에만 있는 파일은 지우지 않고 이름만 알린다 |
+| `skill_copy` | 손으로 둔 스킬 복사본 폴더(기본 `~/.claude/skills/issue-track`). 폴더가 있으면 갱신 스크립트가 로컬에서 설치된 판의 스킬 폴더(문서·스크립트·시험)를 거기에 맞추고 `VERSION`을 적는다. 복사본에만 있는 파일은 지우지 않고 이름만 알린다. 그 기계에 issue-track 이 깔려 있지 않으면 로컬 마켓 클론의 플러그인 폴더를 원본으로 쓴다 |
+| `agent_copy` | 손으로 둔 에이전트 정의 폴더(기본 `~/.claude/agents`). 플러그인 `agents/` 와 같은 이름의 파일만 설치된 판(없으면 마켓 클론)으로 맞추고, 다르면 덮기 전에 `<이름>.md.bak-<날짜>` 사본을 남기고 복사본에만 있던 줄을 알린다. 없는 이름은 만들지 않는다 |
 | `shells` | ssh 별칭 → 원격 셸(`posix`·`powershell`). 없는 별칭은 `ssh <별칭> 'echo $PSVersionTable.PSVersion.Major'`로 판별한다. PowerShell은 접두 없이 `Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude plugin update <id> --scope local; exit $LASTEXITCODE` |

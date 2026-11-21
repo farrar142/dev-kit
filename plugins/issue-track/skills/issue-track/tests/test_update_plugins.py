@@ -151,6 +151,63 @@ class SkillCopy(unittest.TestCase):
         self.assertNotIn("스킬 복사본", out)
 
 
+class AgentCopy(unittest.TestCase):
+    def test_sync_overwrites_only_existing_names_and_keeps_backup_with_copy_only_lines(self):
+        with tempfile.TemporaryDirectory() as t:
+            src, dst = os.path.join(t, "src"), os.path.join(t, "dst")
+            write(src, "issue-worker.md", "a\nnew rule\n")
+            write(src, "errand.md", "same\n")
+            write(src, "other.md", "x\n")
+            write(dst, "issue-worker.md", "a\nmy local rule\n")
+            write(dst, "errand.md", "same\n")
+            lines = up.sync_agent_copies(src, dst, "20261121")
+            self.assertEqual(open(os.path.join(dst, "issue-worker.md")).read(), "a\nnew rule\n")
+            self.assertEqual(open(os.path.join(dst, "issue-worker.md.bak-20261121")).read(), "a\nmy local rule\n")
+            self.assertFalse(os.path.exists(os.path.join(dst, "other.md")))  # 없는 이름은 만들지 않는다
+            text = "\n".join(lines)
+            self.assertIn("errand.md: 이미 같다", text)
+            self.assertIn("복사본에만 있던 줄 1개", text)
+            self.assertIn("my local rule", text)
+            write(dst, "issue-worker.md", "again\n")
+            up.sync_agent_copies(src, dst, "20261121")
+            self.assertTrue(os.path.exists(os.path.join(dst, "issue-worker.md.bak-20261121-2")))  # 사본을 덮지 않는다
+
+    def test_main_syncs_agent_copy_from_install(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = os.path.join(t, "cache", "issue-track", "0.8.0")
+            write(root, "agents/issue-worker.md", "chain mode\n")
+            agents = os.path.join(t, "agents")
+            write(agents, "issue-worker.md", "old\n")
+            e = inst("issue-track@kit", "0.8.0")
+            e["installPath"] = root
+            fake = FakeMachines({"local": [e]}, LATEST)
+            code, out = run_main(fake, ["--local-only", "--no-sessions"],
+                                 {"update": {"marketplace": "kit", "skill_copy": "/nonexistent/x", "agent_copy": agents}})
+            self.assertEqual(open(os.path.join(agents, "issue-worker.md")).read(), "chain mode\n")
+            self.assertIn("에이전트 복사본", out)
+            self.assertIn("0.8.0", out)
+
+    def test_not_installed_uses_local_market_clone(self):
+        with tempfile.TemporaryDirectory() as t:
+            clone = os.path.join(t, "clone")
+            write(clone, ".claude-plugin/marketplace.json",
+                  json.dumps({"plugins": [{"name": "issue-track", "source": "./plugins/issue-track"}]}))
+            write(clone, "plugins/issue-track/.claude-plugin/plugin.json", json.dumps({"version": "0.9.0"}))
+            write(clone, "plugins/issue-track/skills/issue-track/SKILL.md", "v9")
+            write(clone, "plugins/issue-track/agents/issue-worker.md", "v9 agent")
+            copy, agents = os.path.join(t, "copy"), os.path.join(t, "agents")
+            write(copy, "SKILL.md", "v1")
+            write(agents, "issue-worker.md", "v1 agent")
+            fake = FakeMachines({"local": [inst("switchboard@kit", "0.9.0")]}, LATEST, markets={"local": clone})
+            code, out = run_main(fake, ["--local-only", "--no-sessions"],
+                                 {"update": {"marketplace": "kit", "skill_copy": copy, "agent_copy": agents}})
+            self.assertEqual(open(os.path.join(copy, "SKILL.md")).read(), "v9")
+            self.assertEqual(open(os.path.join(copy, "VERSION")).read().strip(), "0.9.0")
+            self.assertEqual(open(os.path.join(agents, "issue-worker.md")).read(), "v9 agent")
+            self.assertIn("마켓 클론", out)
+            self.assertNotIn("건너뛴다", out)
+
+
 class UpdatePlugins(unittest.TestCase):
     def test_updates_every_machine_and_prints_version_table(self):
         fake = FakeMachines({
