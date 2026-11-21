@@ -1,0 +1,25 @@
+name: ops-shared
+
+on:
+  pull_request:
+    paths:
+      - ops-shared/**
+      - .github/workflows/ops-shared.yml
+  push:
+    branches: [main]
+    paths:
+      - ops-shared/**
+      - .github/workflows/ops-shared.yml
+
+permissions:
+  contents: read
+
+jobs:
+  ops-shared:
+    name: ops-shared
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 자동화 감싸개 시험
+        run: python3 ops-shared/test_automation_run.py
