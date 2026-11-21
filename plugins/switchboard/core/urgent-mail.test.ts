@@ -1,7 +1,7 @@
 // D4 긴급 메일: 바쁘면 다음 도구 호출 뒤 끼워 넣고, 유휴면 새 턴. 넣는 즉시 read, 본문은 상한에서 자른다.
 import { expect, test } from 'claude-code/testing'
 
-import { URGENT_MAX_CHARS, urgentText } from './mailbox'
+import { NOTICE_MAX_CHARS, noticeText, MAIL_INLINE_MAX, URGENT_MAX_CHARS, urgentText } from './mailbox'
 import { inlined, runTurn, setup } from './mailtest'
 import { flush } from './testing'
 
@@ -52,7 +52,7 @@ test('긴급: 본문이 상한을 넘으면 자르고 전문을 읽을 ID를 붙
   const text = urgentText({ id: 42, sender: 'a/b', subject: 'x' }, long)
   expect(text).toContain('가'.repeat(URGENT_MAX_CHARS))
   expect(text).not.toContain('가'.repeat(URGENT_MAX_CHARS + 1))
-  expect(text).toContain('전문은 switchboard read 42')
+  expect(text).toContain('먼저 switchboard read 42 로 전문을 읽어라')
   expect(urgentText({ id: 7 }, '짧음')).not.toContain('전문은')
 
   const { host, mail } = await setup()
@@ -108,4 +108,15 @@ test('긴급: 같은 긴급 메일은 한 번만 넣는다', async () => {
   await runTurn(host)
   await host.clock.advance(120_000)
   expect(host.turns.length).toBe(1)
+})
+
+test('통지·긴급 본문 상한은 일반 메일과 같고, 넘으면 전문을 먼저 읽게 한다(#206)', () => {
+  expect(NOTICE_MAX_CHARS).toBe(MAIL_INLINE_MAX)
+  expect(URGENT_MAX_CHARS).toBe(MAIL_INLINE_MAX)
+  const e = { id: 9, sender: 'switchboard/system', subject: 'x' }
+  const fits = noticeText(e, '가'.repeat(2660))
+  expect(fits).toContain('가'.repeat(2660))
+  expect(fits).not.toContain('잘렸다')
+  const cut = noticeText(e, '가'.repeat(MAIL_INLINE_MAX + 10))
+  expect(cut).toContain('먼저 switchboard read 9 로 전문을 읽어라')
 })
