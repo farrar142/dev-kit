@@ -1,6 +1,6 @@
 {
   "name": "issue-track",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "GitHub 이슈 한 트랙 조율 흐름 — issue-track 스킬, issue-worker·errand 에이전트, 원격 세션 맡기기, 플러그인 갱신 스크립트, 셸 &로 떼어 띄운 기다리기 차단 훅, 패턴으로 프로세스를 죽이는 명령(pkill -f 등) 차단 훅",
   "author": {
     "name": "farrar142"
