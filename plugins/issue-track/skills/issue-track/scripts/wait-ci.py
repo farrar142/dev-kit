@@ -51,7 +51,7 @@ import subprocess
 import sys
 import time
 
-from ci_common import JenkinsUnavailable, actions_excerpt, console_excerpt, jenkins_auth, setting, warn_fallback
+from ci_common import JenkinsUnavailable, actions_excerpt, console_excerpt, jenkins_auth, setting, warn_fallback, warn_if_stale
 
 FAIL = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "failure", "error"}
 OK = {"SUCCESS", "NEUTRAL", "SKIPPED", "success"}
@@ -264,4 +264,5 @@ def main():
 
 
 if __name__ == "__main__":
+    warn_if_stale(__file__)
     sys.exit(main())

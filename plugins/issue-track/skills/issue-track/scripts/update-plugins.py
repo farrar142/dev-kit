@@ -120,6 +120,7 @@ class Install(TypedDict):
     scope: str
     lastUpdated: str
     projectPath: str
+    installPath: str
 
 
 class UpdateConfig(TypedDict, total=False):
@@ -130,6 +131,7 @@ class UpdateConfig(TypedDict, total=False):
     session_plugin: str
     remote_claude: str
     shells: dict[str, str]
+    skill_copy: str
 
 
 def config_path() -> str:
@@ -159,6 +161,8 @@ def load_update_config(path: str) -> UpdateConfig:
         cfg["session_plugin"] = str(sect["session_plugin"])
     if isinstance(sect.get("remote_claude"), str) and sect["remote_claude"]:
         cfg["remote_claude"] = str(sect["remote_claude"])
+    if isinstance(sect.get("skill_copy"), str) and sect["skill_copy"]:
+        cfg["skill_copy"] = str(sect["skill_copy"])
     shells = sect.get("shells")
     if isinstance(shells, dict):
         cfg["shells"] = {str(k): str(v) for k, v in shells.items() if v in SHELLS}
@@ -196,6 +200,7 @@ def parse_installs(text: str, market: str) -> list[Install]:
             scope=str(e.get("scope") or "user"),
             lastUpdated=str(e.get("lastUpdated") or ""),
             projectPath=str(e.get("projectPath") or ""),
+            installPath=str(e.get("installPath") or ""),
         ))
     return out
 
@@ -341,6 +346,73 @@ def update_machine(run: Runner, host: str, market: str, remote_claude: str = "cl
     return MachineReport(host, None, old, after, failed, shell, latest)
 
 
+COPY_PLUGIN = "issue-track"
+COPY_SKIP = ("__pycache__", ".pytest_cache", ".bak")  # 이 이름(.bak은 앞부분)의 폴더는 건드리지 않는다
+
+
+def _skipped(rel: str) -> bool:
+    return any(part == s or (s == ".bak" and part.startswith(s)) for part in rel.split(os.sep) for s in COPY_SKIP)
+
+
+def _files(root: str) -> list[str]:
+    out: list[str] = []
+    for d, dirs, names in os.walk(root):
+        rel_d = os.path.relpath(d, root)
+        dirs[:] = [x for x in dirs if not _skipped(os.path.join(rel_d, x))]
+        out += [os.path.normpath(os.path.join(rel_d, n)) for n in names]
+    return sorted(out)
+
+
+def sync_skill_copy(src: str, dst: str, version: str) -> tuple[list[str], list[str]]:
+    """설치된 스킬 폴더 src를 손으로 둔 복사본 dst에 맞춘다(문서·스크립트·시험 통째, 달라진 파일만 덮어쓴다).
+    dst에만 있는 파일은 지우지 않는다. dst/VERSION에 판을 적는다(스크립트가 자기 판을 알게).
+    반환: (새로 쓴 파일, dst에만 있는 파일)."""
+    written: list[str] = []
+    mine = _files(src)
+    for rel in mine:
+        s, d = os.path.join(src, rel), os.path.join(dst, rel)
+        data = open(s, "rb").read()
+        if os.path.exists(d) and open(d, "rb").read() == data:
+            continue
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copyfile(s, d)
+        shutil.copymode(s, d)
+        written.append(rel)
+    vfile = os.path.join(dst, "VERSION")
+    if not os.path.exists(vfile) or open(vfile, encoding="utf-8").read().strip() != version:
+        with open(vfile, "w", encoding="utf-8") as f:
+            f.write(version + "\n")
+        written.append("VERSION")
+    extra = [r for r in _files(dst) if r not in mine and r != "VERSION"]
+    return written, extra
+
+
+def skill_copy_dir(cfg: UpdateConfig) -> str:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.expanduser(cfg.get("skill_copy") or os.path.join(base, "skills", COPY_PLUGIN))
+
+
+def sync_local_copy(report: "MachineReport", cfg: UpdateConfig) -> str | None:
+    """로컬 기계에 스킬 복사본 폴더가 있으면 설치된 판에 맞추고 결과 줄을 돌려준다. 폴더가 없으면 None.
+    (복사본 폴더는 기계끼리 동기화되므로 원격 기계는 따로 하지 않는다.)"""
+    dst = skill_copy_dir(cfg)
+    if not os.path.isdir(dst):
+        return None
+    cands = [i for i in report.after if plugin_name(i) == COPY_PLUGIN and i.get("installPath")]
+    best = max(cands, key=lambda i: version_tuple(i["version"]) or (), default=None)
+    src = os.path.join(best["installPath"], "skills", COPY_PLUGIN) if best else ""
+    if not best or not os.path.isdir(src):
+        return f"스킬 복사본 {dst}: 설치된 {COPY_PLUGIN}의 스킬 폴더를 못 찾아 건너뛴다"
+    try:
+        written, extra = sync_skill_copy(src, dst, best["version"])
+    except OSError as e:
+        return f"스킬 복사본 {dst}: 맞추지 못했다({e})"
+    line = f"스킬 복사본 {dst}: {best['version']} 판에 맞춤 — " + (f"{len(written)}개 갱신({', '.join(written)})" if written else "이미 같다")
+    if extra:
+        line += f"\n  복사본에만 있는 파일(지우지 않음): {', '.join(extra)}"
+    return line
+
+
 TABLE_HEADER = ["기계", "플러그인", "범위", "폴더", "판", "최신", "상태"]
 
 
@@ -458,6 +530,10 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
         for host, i in stale:
             where = f"{i['scope']}:{folder_name(i['projectPath'])}" if i["projectPath"] else i["scope"]
             print(f"- {host} {plugin_name(i)} ({where}) {i['version']}")
+
+    copy_line = sync_local_copy(reports[0], cfg)
+    if copy_line:
+        print("\n" + copy_line)
 
     if not a.no_sessions:
         machines = {LOCAL: hostname(), **cfg.get("machines", {})}

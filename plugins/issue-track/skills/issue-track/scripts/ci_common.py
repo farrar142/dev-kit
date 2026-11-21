@@ -1,6 +1,7 @@
 """wait-ci.py·wait-deploy.py가 함께 쓰는 도우미: GitHub Actions 실행·로그(기본 CI)와 Jenkins(그런 CI를 쓰는 저장소용).
 자격·토큰은 어디에도 출력하지 않는다."""
 import base64
+import glob
 import json
 import os
 import re
@@ -156,3 +157,43 @@ def failed_job_names(repo, run_id):
     except Exception:
         return []
     return [j.get("name") or "" for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled", "startup_failure")]
+
+
+def _vtuple(v):
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except (ValueError, AttributeError):
+        return None
+
+
+def own_version(script_file):
+    """이 스크립트가 든 스킬 폴더의 판. 복사본이면 스킬 폴더의 VERSION, 플러그인 설치본이면 plugin.json. 못 읽으면 None."""
+    skill = os.path.dirname(os.path.dirname(os.path.abspath(script_file)))
+    for path, key in ((os.path.join(skill, "VERSION"), None),
+                      (os.path.join(skill, "..", "..", ".claude-plugin", "plugin.json"), "version")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            return (json.loads(text)[key] if key else text).strip()
+        except Exception:
+            continue
+    return None
+
+
+def installed_version(plugin="issue-track"):
+    """이 기계에 설치된 플러그인의 가장 높은 판(플러그인 캐시 폴더 이름). 없으면 None."""
+    root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    found = [os.path.basename(p) for p in glob.glob(os.path.join(root, "plugins", "cache", "*", plugin, "*"))]
+    found = [v for v in found if _vtuple(v)]
+    return max(found, key=_vtuple) if found else None
+
+
+def warn_if_stale(script_file, plugin="issue-track"):
+    """이 스크립트의 판이 설치된 플러그인 판보다 옛것이면 표준 오류에 한 줄. 판을 못 읽으면 말없이 지나간다."""
+    try:
+        mine, installed = own_version(script_file), installed_version(plugin)
+        if mine and installed and _vtuple(mine) and _vtuple(mine) < _vtuple(installed):
+            print(f"경고: {os.path.basename(script_file)}가 {mine} 판이다 — 설치된 {plugin}은 {installed}. "
+                  "update-plugins.py로 스킬 복사본을 맞춘다", file=sys.stderr)
+    except Exception:
+        pass
