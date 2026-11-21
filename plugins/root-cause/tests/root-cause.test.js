@@ -232,6 +232,19 @@ test('Stop: 모양 있는 증거는 통과한다', () => {
   }
 });
 
+test('Stop: 근본 원인 줄 안 괄호의 증거 꼴은 통과한다', () => {
+  const r = stop('근본 원인: 예약 본문이 2000자에서 잘립니다(#1234는 원문 2660자 중 2000자만 들어옴). 한도를 올린다.');
+  assert.strictEqual(r.status, 0, r.stderr);
+});
+
+test('Stop: 괄호 밖 경로나 증거 꼴 없는 괄호는 막고, 메시지는 증거 줄만 덧붙이라 말한다', () => {
+  for (const t of ['근본 원인: /etc/app.conf 가 비어 있다.', '근본 원인: 캐시 만료(확인함).']) {
+    const r = stop(t);
+    assert.ok(blocked(r), t);
+    assert.match(r.stderr, /다시 쓰지 말고/);
+  }
+});
+
 test('Stop: 「증거: 확인함」은 막는다', () => {
   assert.ok(blocked(stop('근본 원인: 캐시 만료.\n증거: 확인함')));
 });
