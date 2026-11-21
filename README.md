@@ -21,7 +21,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
-| [issue-track](#issue-track) | 0.12.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
+| [issue-track](#issue-track) | 0.12.1 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
 | [switchboard](#switchboard) | 0.15.0 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
@@ -44,7 +44,7 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
 
 | 스크립트 | 쓰임 |
 |---|---|
-| `wait-ci.py <PR> [--repo] [--timeout] [--interval] [--no-checks-wait]` | PR head 커밋의 check-runs·commit status를 기다렸다 한 번 알림. 종료 코드 0 성공 · 1 실패 · 2 병합/닫힘 · 3 시간 초과 · 4 없음 · 5 검사 없음 · 6 병합 대기열 이탈(DEQUEUED) |
+| `wait-ci.py <PR> [--repo] [--timeout] [--interval] [--no-checks-wait] [--sha]` | PR head 커밋의 check-runs·commit status를 기다렸다 한 번 알림. 종료 코드 0 성공 · 1 실패 · 2 병합/닫힘 · 3 시간 초과 · 4 없음 · 5 검사 없음 · 6 병합 대기열 이탈(DEQUEUED) |
 | `wait-deploy.py --job <이름> (--pr <번호> \| --since <시각>)` | 병합 뒤 배포(GitHub 커밋 상태 또는 Jenkins 빌드)를 기다렸다 한 번 알림 |
 | `update-plugins.py` | 위 「설치와 갱신」 |
 | `worker-stats.py [agentId…]` | 작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트 |
@@ -55,6 +55,7 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
   - 거절: 같은 명령 안에서 `wait`로 거두지 않은 `&`(`( … ) & sleep 1`). `wait-ci.py`·`wait-deploy.py`를 `&`·`nohup`·`setsid`·`disown`으로 띄우는 꼴은 `run_in_background: true` 호출 안에서도 거절.
   - 통과: `&&`, `2>&1`·`>&2`·`&>`·`|&`, 따옴표·주석·heredoc 안의 `&`, `… & … ; wait`, `run_in_background: true` 호출 안의 그 밖의 `&`.
   - 빠져나갈 길: 명령 앞에 `ISSUE_TRACK_ALLOW_DETACH=1`(또는 훅 프로세스 환경변수). 훅이 오류로 죽으면 통과.
+- `wait-ci.py`(0.12.1): push 직후 GitHub가 새 head를 반영하기 전에 옛 head의 검사 결과로 끝나지 않는다. `--sha <기대 head>`(없으면 작업 폴더가 그 PR의 브랜치일 때 로컬 HEAD)와 PR head가 다르면 결과를 읽지 않고 기다린다. 기대를 알 수 없으면 맞춰 보지 않아 옵션 없이 부르던 쓰임은 그대로다.
 - 훅 `kill-guard`(PreToolUse·Bash, 0.12.0): 패턴으로 프로세스를 죽이는 명령은 같은 기계의 다른 세션·작업의 프로세스에도 걸려 거절한다. 띄울 때 `$!`로 PID를 받아 두고 그 PID로 죽이거나, `pgrep -af <패턴>`으로 먼저 보고 PID를 골라 `kill <PID>` 하라고 안내한다.
   - 거절: `pkill -f`·`pkill --full`(`-9f`·`-fl` 묶음 포함), `killall -r`·`--regexp`, 패턴 조회 결과를 곧장 kill에 넘기는 `pgrep -f … | xargs kill`·`kill $(pgrep -f …)`·`pgrep -f … | while read p; do kill $p; done`. `sudo`·`env`·경로가 붙어도 같다.
   - 통과: `kill <PID>`·`kill %1`·`kill $!`, `pkill -P <PID>`, `pkill -x <이름>`, `pgrep -af <패턴>`(조회만), 따옴표·주석·heredoc 안의 낱말.

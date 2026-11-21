@@ -66,7 +66,7 @@ PR 본문 꼬리말: <system-reminder가 준 줄>
 한 번에 작업자 **하나**. 다음 루프:
 
 1. 띄운다 → 사용자에게 한 줄(무엇을, 어떤 모델로, 지시서에 넣은 특이사항).
-2. 작업자가 `SendMessage`로 「PR 열림」을 보내면 한 줄로 전한다. **그리고 조율자도 같은 PR을 배경으로 지켜본다**: `python3 <이 스킬 폴더>/scripts/wait-ci.py <PR>`을 Bash `run_in_background: true`로 띄운다. 작업자가 멈춰도 CI 결과가 조율자를 깨운다.
+2. 작업자가 `SendMessage`로 「PR 열림」을 보내면 한 줄로 전한다. **그리고 조율자도 같은 PR을 배경으로 지켜본다**: `python3 <이 스킬 폴더>/scripts/wait-ci.py <PR> [--sha <push한 커밋>]`을 Bash `run_in_background: true`로 띄운다(push 직후 옛 head 결과를 읽지 않게 `--sha`를 주거나 그 PR의 브랜치 폴더에서 부른다). 작업자가 멈춰도 CI 결과가 조율자를 깨운다.
    - FAILURE로 깼는데 작업자 완료 알림이 없거나, 작업자가 「CI 기다린다」로만 끝났으면 바로 작업자에게 `SendMessage`로 실패 줄을 넘겨 잇게 한다. 작업자가 push로 고친 뒤에는 다시 띄운다.
    - 종료 코드 5(NO_CHECKS)는 PR에 CI 검사가 없다는 뜻이다(CI가 병합 뒤에만 도는 저장소). 40분을 기다리지 않는다. 병합 뒤 배포를 봐야 하면 `wait-deploy.py --job <잡 이름> --pr <PR>`을 같은 방식으로 배경에 띄운다(0 SUCCESS / 1 FAILURE 또는 `FAILURE_PRE_DEPLOY` / 3 TIMEOUT / 4 GONE / 5 NO_BUILD). 병합 뒤 배포 사이에 release workflow가 돌면 그것이 끝날 때까지 시작 시한을 세지 않고, release가 실패했는데 배포 상태가 없으면 첫 낱말 `FAILURE_PRE_DEPLOY`(배포 전 단계 실패 — 원인은 실패 workflow·잡·로그 끝)로 끝난다. 배포 FAILURE와 구분해 보고한다. Jenkins 자격이 없거나 401·403·연결 실패면 Jenkins 빌드 대신 병합 커밋(또는 함께 배포된 뒤 커밋)의 GitHub 배포 커밋 상태를 기다린다.
 
