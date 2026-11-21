@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PR의 CI 결과가 날 때까지 조용히 기다리고, 끝나면 한 번만 말한다.
 
-    wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초] [--no-checks-wait 분]
+    wait-ci.py <PR 번호> [--repo owner/name] [--timeout 분] [--interval 초] [--no-checks-wait 분] [--sha 커밋]
 
 병합 대기열(merge queue)을 쓰는 저장소: PR이 대기열에 있으면(GraphQL mergeQueueEntry) 검사가 초록이어도
 SUCCESS로 끝내지 않고 병합(MERGED, 종료 코드 2)이나 대기열 이탈(DEQUEUED)까지 기다린다.
@@ -11,6 +11,9 @@ SUCCESS로 끝내지 않고 병합(MERGED, 종료 코드 2)이나 대기열 이�
 
 - PR head 커밋 하나만 본다. push하면 head가 바뀌므로 그 커밋의 결과를 새로 기다린다.
   옛 커밋의 빨강을 새 결과로 읽지 않는다.
+- 기대 head: `--sha`(없으면 작업 폴더가 그 PR의 브랜치를 체크아웃 중일 때 로컬 `git rev-parse HEAD`).
+  push 직후 GitHub가 새 head를 아직 반영하지 않아 PR head가 기대와 다르면 검사 결과를 읽지 않고 계속 기다린다
+  (MERGED/CLOSED는 head와 무관하게 끝으로 본다). 끝내 안 바뀌면 TIMEOUT(3). 기대를 알 수 없으면(저장소 밖·다른 브랜치) 맞춰 보지 않는다.
 - check-runs(GitHub Actions)와 상태(commit statuses: Jenkins 등 외부 CI)를 함께 본다.
 - 끝나는 경우와 종료 코드:
   - 0 SUCCESS: 모든 검사가 초록이다.
@@ -62,7 +65,7 @@ def gh(*args):
 
 
 def pr_state(pr, repo):
-    q = ["pr", "view", str(pr), "--json", "state,headRefOid,statusCheckRollup"]
+    q = ["pr", "view", str(pr), "--json", "state,headRefOid,headRefName,statusCheckRollup"]
     if repo:
         q += ["--repo", repo]
     d = json.loads(gh(*q))
@@ -74,7 +77,25 @@ def pr_state(pr, repo):
         else:
             st = c.get("conclusion") or c.get("status") or "PENDING"
         checks.append((name, st.upper(), c.get("targetUrl") or c.get("detailsUrl") or ""))
-    return d["state"], d["headRefOid"], checks
+    return d["state"], d["headRefOid"], checks, d.get("headRefName") or ""
+
+
+def local_head():
+    """작업 폴더의 (HEAD 커밋, 현재 브랜치). git 저장소가 아니거나 git이 없으면 (None, None)."""
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+        br = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None, None
+    if sha.returncode != 0:
+        return None, None
+    return sha.stdout.strip() or None, br.stdout.strip() or None
+
+
+def same_commit(expected, actual):
+    """기대 커밋(전체 또는 앞부분)과 PR head가 같은 커밋인가."""
+    e, a = expected.lower(), actual.lower()
+    return bool(e) and bool(a) and (a.startswith(e) or e.startswith(a))
 
 
 QUEUE_QUERY = "query($o:String!,$n:String!,$pr:Int!){repository(owner:$o,name:$n){pullRequest(number:$pr){mergeQueueEntry{state position}}}}"
@@ -140,7 +161,9 @@ def main():
     ap.add_argument("--no-checks-wait", type=float, default=3, help="검사가 하나도 없는 채로 이만큼(분) 지나면 NO_CHECKS로 끝낸다")
     ap.add_argument("--comment-wait", type=float, default=60, help="Jenkins 자격이 없을 때 실패 댓글을 기다리는 시간(초)")
     ap.add_argument("--comment-prefix", help="실패 댓글 첫 줄 표지(기본: 환경변수 ISSUE_TRACK_PR_COMMENT_PREFIX, 없으면 「PR 검사 실패 — 」)")
+    ap.add_argument("--sha", help="기대하는 PR head 커밋(전체 또는 앞부분). PR head가 다르면 결과를 읽지 않고 기다린다. 없으면 작업 폴더가 그 PR의 브랜치일 때 로컬 HEAD")
     a = ap.parse_args()
+    expected = a.sha
 
     deadline = time.time() + a.timeout * 60
     errors = 0
@@ -149,7 +172,7 @@ def main():
     last = ""
     while True:
         try:
-            state, sha, checks = pr_state(a.pr, a.repo)
+            state, sha, checks, branch = pr_state(a.pr, a.repo)
             errors = 0
         except Exception as e:
             errors += 1
@@ -164,12 +187,25 @@ def main():
         if state in ("MERGED", "CLOSED"):
             print(f"{state} PR #{a.pr} {last}")
             return 2
+        if expected is None and not a.sha:
+            # --sha가 없으면 작업 폴더가 이 PR의 브랜치를 체크아웃하고 있을 때만 그 HEAD를 기대로 본다
+            # (다른 브랜치·다른 저장소에서 불렸으면 맞춰 보지 않는다)
+            head, cur = local_head()
+            expected = head if head and branch and cur == branch else ""
+        if expected and not same_commit(expected, sha):
+            # GitHub가 새 head를 아직 반영하지 않았다 — 옛 head의 검사 결과를 읽지 않고 기다린다
+            empty_since = None
+            if time.time() > deadline:
+                print(f"TIMEOUT PR #{a.pr} {last} — PR head가 기대한 {expected[:7]}로 바뀌지 않았다. push가 반영됐는지 확인한다")
+                return 3
+            time.sleep(a.interval)
+            continue
         queued = queue_entry(a.pr, a.repo) is not None
         if was_queued and not queued:
             # 병합 직후 state와 대기열 조회가 어긋날 수 있다 — 잠시 뒤 다시 본다
             time.sleep(min(a.interval, 10))
             try:
-                state, sha, checks = pr_state(a.pr, a.repo)
+                state, sha, checks, branch = pr_state(a.pr, a.repo)
             except Exception:
                 pass
             else:

@@ -42,8 +42,8 @@ class Clock:
         self.t += s
 
 
-def pr_json(state="OPEN", checks=()):
-    return json.dumps({"state": state, "headRefOid": "abcdef1234", "statusCheckRollup": list(checks)})
+def pr_json(state="OPEN", checks=(), head="abcdef1234", branch="feat"):
+    return json.dumps({"state": state, "headRefOid": head, "headRefName": branch, "statusCheckRollup": list(checks)})
 
 
 def status(name, state, url="https://j.example/job/x/3/"):
@@ -51,7 +51,7 @@ def status(name, state, url="https://j.example/job/x/3/"):
 
 
 class WaitCi(unittest.TestCase):
-    def run_ci(self, outputs, args=(), auth=("u", "t"), queue=(), runs="[]"):
+    def run_ci(self, outputs, args=(), auth=("u", "t"), queue=(), runs="[]", local=(None, None)):
         """queue: 대기열 조회(graphql)가 차례로 돌려줄 mergeQueueEntry(None이면 대기열 밖). 비면 대기열 없는 저장소."""
         clock = Clock()
         it = iter(outputs)
@@ -79,6 +79,7 @@ class WaitCi(unittest.TestCase):
         with mock.patch.object(wait_ci, "gh", fake_gh), mock.patch.object(wait_ci, "time", clock), \
                 mock.patch.object(wait_ci, "jenkins_excerpt", lambda u: "FAILED line"), \
                 mock.patch.object(wait_ci, "jenkins_auth", lambda: auth), \
+                mock.patch.object(wait_ci, "local_head", lambda: local), \
                 mock.patch.object(wait_ci, "actions_excerpt", lambda u: "log tail " + u), \
                 mock.patch("builtins.print") as pr:
             code = self._main(["1", *args])
@@ -92,6 +93,34 @@ class WaitCi(unittest.TestCase):
         code, out = self.run_ci([pr_json(checks=[status("jenkins", "SUCCESS")])])
         self.assertEqual(code, 0)
         self.assertIn("SUCCESS", out)
+
+    def test_stale_head_result_is_not_read_until_new_head_appears(self):
+        old = pr_json(head="1111111aaa", checks=[status("ci", "FAILURE")])
+        new = pr_json(head="2222222bbb", checks=[status("ci", "SUCCESS")])
+        code, out = self.run_ci([old, old, new], args=["--sha", "2222222"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("FAILURE", out)
+        self.assertIn("2222222", out)
+
+    def test_stale_head_never_updating_times_out(self):
+        old = pr_json(head="1111111aaa", checks=[status("ci", "SUCCESS")])
+        code, out = self.run_ci([old], args=["--sha", "2222222"])
+        self.assertEqual(code, 3)
+        self.assertIn("TIMEOUT", out)
+
+    def test_default_expected_is_local_head_on_same_branch(self):
+        old = pr_json(head="1111111aaa", checks=[status("ci", "SUCCESS")])
+        new = pr_json(head="2222222bbb", checks=[status("ci", "FAILURE")])
+        code, out = self.run_ci([old, new], local=("2222222bbb", "feat"))
+        self.assertEqual(code, 1)
+
+    def test_local_head_on_other_branch_is_ignored(self):
+        code, out = self.run_ci([pr_json(checks=[status("ci", "SUCCESS")])], local=("9999999", "main"))
+        self.assertEqual(code, 0)
+
+    def test_merged_pr_ends_even_if_head_differs(self):
+        code, out = self.run_ci([pr_json(state="MERGED", head="1111111aaa")], args=["--sha", "2222222"])
+        self.assertEqual(code, 2)
 
     def test_failure_appends_excerpt(self):
         code, out = self.run_ci([pr_json(checks=[status("jenkins", "FAILURE")])])
