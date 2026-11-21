@@ -148,8 +148,8 @@ export const CHECK_TIMEOUT_MS = 10_000
 
 /** 시스템 통지(연결 통지 등)의 제목 머리. 이것으로 시작하는 일반 메일은 ID 대신 본문을 넣는다. */
 export const SYSTEM_SUBJECT_PREFIX = '[switchboard] '
-/** 시스템 통지 본문 상한(글자). */
-export const NOTICE_MAX_CHARS = 2000
+/** 시스템 통지(예약이 울려 온 메일 포함) 본문 상한(글자). 일반 메일 MAIL_INLINE_MAX 와 같다. */
+export const NOTICE_MAX_CHARS = 4000
 /** 연결 통지 보내기 시도 횟수(간격 RETRY_MIN_MS*5). 4xx 는 다시 하지 않는다. */
 export const NOTICE_TRIES = 3
 
@@ -194,7 +194,7 @@ const noticeSubject = (subject: string) => (subject.startsWith(SYSTEM_SUBJECT_PR
 /** 시스템 통지를 세션에 넣을 글. */
 export const noticeText = (e: MailEvent, body: string, max = NOTICE_MAX_CHARS): string => {
   const chars = [...body]
-  const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
+  const shown = chars.length > max ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지 잘렸다. 이 글만으로 일을 시작하지 말고 먼저 switchboard read ${e.id} 로 전문을 읽어라)` : body
 
   return [
     `[메일 #${e.id} 시스템 통지] ${e.sender ?? '?'} | ${noticeSubject(e.subject ?? '')}`.trimEnd(),
@@ -326,15 +326,15 @@ const toEvent = (e: Record<string, unknown>, id: number): MailEvent => {
   return out
 }
 
-/** 긴급 메일 본문 상한(글자). 넘으면 자르고 전문 읽는 길(ID)을 붙인다. */
-export const URGENT_MAX_CHARS = 2000
+/** 긴급 메일 본문 상한(글자). 일반 메일 MAIL_INLINE_MAX 와 같다. 넘으면 자르고 전문 읽는 길(ID)을 붙인다. */
+export const URGENT_MAX_CHARS = 4000
 
 /** 긴급 메일을 세션에 넣을 글. 본문이 상한을 넘으면 잘라 ID로 전문을 읽게 한다. */
 export const urgentText = (e: MailEvent, body: string, max = URGENT_MAX_CHARS): string => {
   const head = `[긴급 메일 #${e.id}] ${e.sender ?? '?'} | ${e.subject ?? ''}`.trimEnd()
   const chars = [...body]
   const cut = chars.length > max
-  const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지, 전문은 switchboard read ${e.id})` : body
+  const shown = cut ? `${chars.slice(0, max).join('')}\n…(본문 ${chars.length}자 중 ${max}자까지 잘렸다. 이 글만으로 일을 시작하지 말고 먼저 switchboard read ${e.id} 로 전문을 읽어라)` : body
 
   // 도구 결과 자리에 붙으므로 모델이 주입으로 의심할 수 있다: 출처와 확인 길을 밝힌다(명령조를 피한다).
   return [
