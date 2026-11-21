@@ -61,7 +61,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from ci_common import (JenkinsUnavailable, actions_excerpt, commit_runs, console_excerpt, deploy_state, failed_job_names, gh, jenkins_auth, jenkins_base_url, jenkins_get, setting,
-                       warn_fallback)
+                       warn_if_stale, warn_fallback)
 
 BAD_URL = "빌드 목록 조회 실패"
 DESCENDANTS = 30  # GitHub 길: M 뒤에서 상태를 찾아볼 커밋 수
@@ -327,4 +327,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    warn_if_stale(__file__)
     sys.exit(main())

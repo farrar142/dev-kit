@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
@@ -92,13 +93,62 @@ def run_main(fake, args, config=None, hostname="box-local", which=only("switchbo
         with open(path, "w") as f:
             json.dump(config or {}, f)
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": d}):
             code = up.main(["--config", path, *args], run=fake, hostname=lambda: hostname, which=which)
         return code, buf.getvalue()
 
 
 LATEST = {"issue-track@kit": ("0.8.0", "2026-02-01T00:00:00Z"),
           "switchboard@kit": ("0.9.0", "2026-02-01T00:00:00Z")}
+
+
+def write(root, rel, text):
+    p = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+class SkillCopy(unittest.TestCase):
+    def test_sync_overwrites_changed_keeps_extra_and_writes_version(self):
+        with tempfile.TemporaryDirectory() as t:
+            src, dst = os.path.join(t, "src"), os.path.join(t, "dst")
+            write(src, "SKILL.md", "new")
+            write(src, "scripts/wait-ci.py", "new")
+            write(src, "reference/switchboard.md", "doc")
+            write(dst, "SKILL.md", "old")
+            write(dst, "scripts/wait-ci.py", "new")
+            write(dst, "scripts/worker-stats.py", "mine")
+            write(dst, ".bak-1/x.py", "keep")
+            write(dst, "scripts/__pycache__/x.pyc", "c")
+            written, extra = up.sync_skill_copy(src, dst, "0.12.1")
+            self.assertEqual(sorted(written), ["SKILL.md", "VERSION", os.path.join("reference", "switchboard.md")])
+            self.assertEqual(extra, [os.path.join("scripts", "worker-stats.py")])
+            self.assertEqual(open(os.path.join(dst, "SKILL.md")).read(), "new")
+            self.assertEqual(open(os.path.join(dst, "scripts/worker-stats.py")).read(), "mine")
+            self.assertEqual(open(os.path.join(dst, "VERSION")).read().strip(), "0.12.1")
+            self.assertEqual(up.sync_skill_copy(src, dst, "0.12.1")[0], [])  # 두 번째는 할 일 없음
+
+    def test_main_syncs_local_copy_from_install_path_and_names_extras(self):
+        with tempfile.TemporaryDirectory() as t:
+            src, dst = os.path.join(t, "cache", "issue-track", "0.8.0", "skills", "issue-track"), os.path.join(t, "copy")
+            write(src, "scripts/wait-ci.py", "v8")
+            write(dst, "scripts/wait-ci.py", "v1")
+            write(dst, "scripts/worker-stats.py", "mine")
+            e = inst("issue-track@kit", "0.7.0")
+            e["installPath"] = os.path.join(t, "cache", "issue-track", "0.8.0")
+            fake = FakeMachines({"local": [e]}, LATEST)
+            code, out = run_main(fake, ["--local-only", "--no-sessions"], {"update": {"marketplace": "kit", "skill_copy": dst}})
+            self.assertEqual(code, 0)
+            self.assertEqual(open(os.path.join(dst, "scripts/wait-ci.py")).read(), "v8")
+            self.assertIn("0.8.0 판에 맞춤", out)
+            self.assertIn("worker-stats.py", out)
+            self.assertTrue(os.path.exists(os.path.join(dst, "scripts/worker-stats.py")))
+
+    def test_main_without_copy_folder_says_nothing(self):
+        fake = FakeMachines({"local": [inst("issue-track@kit", "0.7.0")]}, LATEST)
+        code, out = run_main(fake, ["--local-only", "--no-sessions"], {"update": {"marketplace": "kit", "skill_copy": "/nonexistent/x"}})
+        self.assertNotIn("스킬 복사본", out)
 
 
 class UpdatePlugins(unittest.TestCase):

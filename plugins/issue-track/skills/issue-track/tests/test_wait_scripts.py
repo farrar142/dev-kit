@@ -50,6 +50,41 @@ def status(name, state, url="https://j.example/job/x/3/"):
     return {"__typename": "StatusContext", "context": name, "state": state, "targetUrl": url}
 
 
+class StaleCopyWarning(unittest.TestCase):
+    def layout(self, t, version_file=None):
+        skill = os.path.join(t, "copy")
+        os.makedirs(os.path.join(skill, "scripts"))
+        if version_file:
+            with open(os.path.join(skill, "VERSION"), "w") as f:
+                f.write(version_file + "\n")
+        os.makedirs(os.path.join(t, "cfg", "plugins", "cache", "m", "issue-track", "0.12.1"))
+        os.makedirs(os.path.join(t, "cfg", "plugins", "cache", "m", "issue-track", "0.9.0"))
+        return os.path.join(skill, "scripts", "wait-ci.py")
+
+    def warn(self, t, script):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf), mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(t, "cfg")}):
+            ci_common.warn_if_stale(script)
+        return buf.getvalue()
+
+    def test_older_copy_warns_once_line(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            out = self.warn(t, self.layout(t, "0.11.0"))
+        self.assertEqual(len(out.strip().splitlines()), 1)
+        self.assertIn("0.11.0", out)
+        self.assertIn("0.12.1", out)
+
+    def test_current_copy_and_unknown_version_are_silent(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(self.warn(t, self.layout(t, "0.12.1")), "")
+        with tempfile.TemporaryDirectory() as t:
+            self.assertEqual(self.warn(t, self.layout(t)), "")
+
+
 class WaitCi(unittest.TestCase):
     def run_ci(self, outputs, args=(), auth=("u", "t"), queue=(), runs="[]", local=(None, None)):
         """queue: 대기열 조회(graphql)가 차례로 돌려줄 mergeQueueEntry(None이면 대기열 밖). 비면 대기열 없는 저장소."""
