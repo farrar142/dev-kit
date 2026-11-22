@@ -4,7 +4,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { HttpInit } from './host'
 import { EMPTY_GAP_MS } from './mailbox'
-import { CLI_VERSION_TIMEOUT_MS, duplicateWarning, HEARTBEAT_MS, isSingleRole, singleRolesConfig } from './slot'
+import { CLI_VERSION_TIMEOUT_MS, CLI_VERSION_TTL_MS, duplicateWarning, HEARTBEAT_MS, isSingleRole, singleRolesConfig } from './slot'
 import { createSwitchboard } from './switchboard'
 import { fakeClock, fakeHost, flush } from './testing'
 import type { FakeClock, FakeHost } from './testing'
@@ -379,7 +379,7 @@ test('presence: 서브에이전트가 돌면 subagents 를 싣고, 0이면 싣�
   a.board.stop()
 })
 
-test('CLI 판: register·heartbeat 요청에 X-Switchboard-Version 을 싣고, 판 읽기는 세션에 한 번이다', async () => {
+test('CLI 판: register·heartbeat 요청에 X-Switchboard-Version 을 싣고, 판 읽기는 캐시 수명 안에서는 다시 부르지 않는다', async () => {
   const clock = fakeClock()
   const server = fakeServer(clock)
   let reads = 0
@@ -398,6 +398,50 @@ test('CLI 판: register·heartbeat 요청에 X-Switchboard-Version 을 싣고, �
   expect(server.slotBodies.map(b => b.action)).toEqual(expect.arrayContaining(['register', 'heartbeat']))
   for (const b of server.slotBodies) expect(b.version).toBe('v0.31.0')
   expect(reads).toBe(1)
+  a.board.stop()
+})
+
+test('CLI 판: 캐시 수명이 지나면 다시 읽어 새 판을 싣고, 다시 읽기가 실패하면 앞의 판이 남는다', async () => {
+  const clock = fakeClock()
+  const server = fakeServer(clock)
+  const outputs: (string | 'fail' | 'hang')[] = ['switchboard v0.31.0', 'switchboard v0.32.0', 'fail', 'hang']
+  let reads = 0
+  const a = await session(server, clock, {
+    base: 'team/worker',
+    machine: 'box-a',
+    cliVersion: () => {
+      const o = outputs[reads++]!
+      if (o === 'hang') return new Promise<string>(() => undefined)
+
+      return o === 'fail' ? Promise.resolve(undefined) : Promise.resolve(o)
+    },
+  })
+  const last = () => server.slotBodies[server.slotBodies.length - 1]!.version
+  // 수명 안: 다시 부르지 않는다.
+  a.host.emit({ type: 'turn.start' })
+  await flush()
+  await clock.advance(HEARTBEAT_MS * 5)
+  expect(reads).toBe(1)
+  expect(last()).toBe('v0.31.0')
+  // 수명 뒤: 다시 읽고 새 판을 싣는다(그 heartbeat 는 앞 판으로 나가도 다음 것부터 새 판).
+  await clock.advance(CLI_VERSION_TTL_MS)
+  await flush()
+  await clock.advance(HEARTBEAT_MS)
+  expect(reads).toBe(2)
+  expect(last()).toBe('v0.32.0')
+  // 다시 읽기 실패: 앞의 판이 남는다.
+  await clock.advance(CLI_VERSION_TTL_MS)
+  await flush()
+  await clock.advance(HEARTBEAT_MS)
+  expect(reads).toBe(3)
+  expect(last()).toBe('v0.32.0')
+  // 다시 읽기가 멈춰도 heartbeat 는 밀리지 않고 앞의 판을 싣는다.
+  await clock.advance(CLI_VERSION_TTL_MS)
+  const before = server.slotBodies.length
+  await clock.advance(HEARTBEAT_MS)
+  expect(reads).toBe(4)
+  expect(server.slotBodies.length).toBeGreaterThan(before)
+  expect(last()).toBe('v0.32.0')
   a.board.stop()
 })
 
