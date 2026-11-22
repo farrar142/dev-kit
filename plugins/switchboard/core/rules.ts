@@ -235,3 +235,124 @@ export function createRuleHints(call: RulesCall, clock: Pick<Clock, 'after'>): R
     },
   }
 }
+
+// 미분류 답 붙들기(#221): 사람이 이 역할의 패널 질문에 준 답이 분류되지 않은 채 남으면 턴 끝(Stop)을 막는다.
+// 계약은 switchboard 저장소 docs/rules-hints.md 「The Stop hook: unclassified answers」.
+
+export interface UnclassifiedAnswer {
+  id: string
+  asker: string
+  header: string
+}
+
+/** 받은 몸을 좁힌다. 모양이 틀리면 null. answers 의 칸이 틀린 줄은 버린다. */
+export function parseUnclassified(body: unknown): UnclassifiedAnswer[] | null {
+  if (typeof body !== 'object' || body === null || !('answers' in body)) return null
+  const raw = body.answers
+  if (raw === null) return []
+  if (!Array.isArray(raw)) return null
+  const out: UnclassifiedAnswer[] = []
+  for (const a of raw as unknown[]) {
+    if (typeof a !== 'object' || a === null) continue
+    const o = a as Record<string, unknown> // JSON 경계: 칸마다 좁힌다
+    if (typeof o.id !== 'string' || o.id === '') continue
+    out.push({ id: o.id, asker: typeof o.asker === 'string' ? o.asker : '', header: typeof o.header === 'string' ? o.header : '' })
+  }
+
+  return out
+}
+
+/** 턴 끝을 막는 요청 한도(ms): 넘으면 턴을 그대로 끝낸다. */
+export const UNCLASSIFIED_TIMEOUT_MS = 1500
+/** 같은 답 묶음으로 잇달아 막는 횟수. 넘으면 메모와 함께 놓아주고, 묶음이 바뀌기 전에는 다시 막지 않는다. */
+export const UNCLASSIFIED_MAX_HOLDS = 3
+
+/** end: 턴을 끝낸다. block: 까닭을 모델에 돌려주고 턴을 잇는다. release: 막기를 다 써서 메모와 함께 끝낸다. */
+export type StopVerdict = { kind: 'end' } | { kind: 'block'; reason: string } | { kind: 'release'; note: string }
+
+export type UnclassifiedHold = {
+  /** 본 세션이 턴을 끝내려 할 때 부른다. 서버가 안 닿거나 느리거나 오류면 end. */
+  check: (io?: { http?: Pick<Http, 'fetch'> }) => Promise<StopVerdict>
+}
+
+/** 막을 때 모델에 돌려줄 까닭. */
+export function unclassifiedReason(answers: readonly UnclassifiedAnswer[], hold: number): string {
+  return [
+    `switchboard: 사람이 이 역할의 패널 질문에 준 답 ${answers.length}건이 아직 분류되지 않았다. 턴을 끝내기 전에 하나씩 분류하라.`,
+    ...answers.map(a => `${a.id} ${a.header}`.trimEnd()),
+    '- 답이 규칙이 됐으면: switchboard rules classify <id> --rule N (새 줄을 더하면 switchboard rules add … --source <id> 가 분류까지 한다)',
+    '- 이번 일에만 해당하면: switchboard rules classify <id> --once',
+    `(같은 답으로 ${hold}/${UNCLASSIFIED_MAX_HOLDS}번째 붙듦. 그 뒤에는 놓아준다.)`,
+  ].join('\n')
+}
+
+/** 놓아줄 때 남기는 메모. */
+export function unclassifiedReleaseNote(answers: readonly UnclassifiedAnswer[]): string {
+  return `switchboard: 미분류 답 ${answers.length}건(${answers.map(a => a.id).join(', ')})으로 ${UNCLASSIFIED_MAX_HOLDS}번 붙들었으나 분류되지 않아 턴을 놓아준다. 다음에 switchboard rules unclassified 로 보고 분류하라.`
+}
+
+/**
+ * role 은 이 세션이 서버에 보내는 역할(번호 역할 포함). 없으면 막지 않는다.
+ * 전역 대장·admin 은 서버에서 모든 역할의 답을 받으므로 `?role=` 로 제 것만 묻고, 받은 줄도 asker 로 한 번 더 거른다.
+ */
+export function createUnclassifiedHold(call: RulesCall, role: () => string | null): UnclassifiedHold {
+  let kept: { role: string; etag: string; answers: UnclassifiedAnswer[] } | null = null
+  /** 잇달아 막은 묶음과 횟수. */
+  let streak: { key: string; n: number } | null = null
+  /** 놓아준 묶음: 바뀌기 전에는 다시 막지 않는다. */
+  let released: string | null = null
+
+  const fetchAnswers = async (me: string, io?: { http?: Pick<Http, 'fetch'> }): Promise<UnclassifiedAnswer[] | null> => {
+    const etag = kept?.role === me ? kept.etag : undefined
+    const r = await call(`/api/rules/unclassified?role=${encodeURIComponent(me)}`, etag === undefined ? {} : { headers: { 'If-None-Match': etag } }, {
+      ...io,
+      timeoutMs: UNCLASSIFIED_TIMEOUT_MS,
+    })
+    if (r === null) return null
+    if (r.status === 304) return kept?.role === me ? kept.answers : null
+    if (r.status !== 200) return null
+    let answers: UnclassifiedAnswer[] | null
+    try {
+      answers = parseUnclassified(JSON.parse(r.text))
+    } catch {
+      return null
+    }
+    if (answers === null) return null
+    const tag = header(r.headers, 'etag')
+    kept = tag === undefined ? null : { role: me, etag: tag, answers }
+
+    return answers
+  }
+
+  return {
+    check: async io => {
+      const me = role()
+      if (me === null || me === '') return { kind: 'end' }
+      const got = await fetchAnswers(me, io).catch(() => null)
+      if (got === null) return { kind: 'end' } // 제 고장으로 세션을 가두지 않는다.
+      const mine = got.filter(a => a.asker === '' || a.asker === me)
+      if (mine.length === 0) {
+        streak = null
+        released = null
+
+        return { kind: 'end' }
+      }
+      const key = mine
+        .map(a => a.id)
+        .sort()
+        .join(',')
+      if (released !== null && released !== key) released = null
+      if (released === key) return { kind: 'end' }
+      if (streak?.key !== key) streak = { key, n: 0 }
+      if (streak.n >= UNCLASSIFIED_MAX_HOLDS) {
+        released = key
+        streak = null
+
+        return { kind: 'release', note: unclassifiedReleaseNote(mine) }
+      }
+      streak.n++
+
+      return { kind: 'block', reason: unclassifiedReason(mine, streak.n) }
+    },
+  }
+}

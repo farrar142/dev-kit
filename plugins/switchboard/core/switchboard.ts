@@ -17,8 +17,8 @@ import type { RemoteAnswerOutcome } from './questions'
 import type { RemoteAsk, RemoteAskResult, WithdrawResult } from './remote-ask'
 import type { PresenceReport, TakeoverResult } from './slot'
 import type { QuestionPanelQuestion } from '../types'
-import { createRuleHints } from './rules'
-import type { RuleHintsBox, ToolCall } from './rules'
+import { createRuleHints, createUnclassifiedHold } from './rules'
+import type { RuleHintsBox, StopVerdict, ToolCall, UnclassifiedHold } from './rules'
 import { createStall } from './stall'
 import type { Stall, StallNotice, StallOptions } from './stall'
 
@@ -78,6 +78,11 @@ export type Switchboard = {
   ruleLines: (call: ToolCall, loop: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<string[]>
   /** 규칙 원장을 다시 확인할 때가 됐으면 미리 띄운다(도구가 도는 동안 받게). */
   warmRules: (io?: { http?: Pick<Http, 'fetch'> }) => void
+  /**
+   * 미분류 답 붙들기(#221): 본 세션이 턴을 끝내려 할 때. 이 역할의 패널 질문 답이 분류되지 않았으면 block,
+   * 같은 묶음으로 여러 번 막았으면 release(메모), 그 밖(없음·프로필 없음·서버 불통·오류)은 end.
+   */
+  stopCheck: (io?: { http?: Pick<Http, 'fetch'> }) => Promise<StopVerdict>
 }
 
 export type SwitchboardOptions = {
@@ -180,6 +185,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   let stall: Stall | undefined
   let permissions: Permissions | undefined
   let rules: RuleHintsBox | undefined
+  let unclassified: UnclassifiedHold | undefined
   let boss: BossJudge | undefined
   let remote: { ask: RemoteAsk; off: () => void } | undefined
   let inbox: RemoteInbox | undefined
@@ -427,6 +433,8 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
       if (mailbox.state().status !== 'off') {
         rules = createRuleHints(mailbox.call, host.services.clock)
         rules.warm()
+        const mb = mailbox
+        unclassified = createUnclassifiedHold(mailbox.call, () => mb.state().role)
       }
       // 대장 판정 하나(#130): 연결될 때마다 whoami, 옛 서버·실패면 전역 목록. 권한·질문 양쪽이 같이 쓴다.
       const judge = createBossJudge(mailbox, { bosses: opts.permissions?.bosses ?? [], log, onChange: () => inbox?.recheck() })
@@ -452,6 +460,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     permissions?.stop()
     permissions = undefined
     rules = undefined
+    unclassified = undefined
     boss?.stop()
     boss = undefined
     remote?.off()
@@ -597,6 +606,16 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     }
   }
   const warmRules = (io?: { http?: Pick<Http, 'fetch'> }): void => rules?.warm(io)
+  const stopCheck = async (io?: { http?: Pick<Http, 'fetch'> }): Promise<StopVerdict> => {
+    try {
+      const v = (await unclassified?.check(io)) ?? { kind: 'end' }
+      if (v.kind === 'release') log(v.note)
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, takeover, askPermission, askRemote, withdrawRemote, answerRemote, ruleLines, warmRules }
+      return v
+    } catch {
+      return { kind: 'end' }
+    }
+  }
+
+  return { start, stop, state: () => ({ ...st }), compact, mail, takeover, askPermission, askRemote, withdrawRemote, answerRemote, ruleLines, warmRules, stopCheck }
 }

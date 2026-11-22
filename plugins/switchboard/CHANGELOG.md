@@ -1,5 +1,14 @@
 # switchboard 바뀐 것
 
+## 0.19.0
+
+- 사람이 이 역할의 패널 질문에 준 답이 분류되지 않은 채 남으면 턴 끝을 막는다(#221). 계약은 switchboard 저장소 `docs/rules-hints.md` 「The Stop hook: unclassified answers」.
+  - 프로필 있는 본 세션의 Stop(`classic.Stop`)에서 `GET /api/rules/unclassified?role=<제 역할>` 을 역할 토큰·역할 머리로 읽는다(`ETag` 를 지니고 `If-None-Match`, 304 는 지닌 몸). 전역 대장·admin 은 서버가 모든 역할의 답을 주므로 `?role=` 로 제 것만 묻고, 받은 줄도 `asker` 로 한 번 더 거른다.
+  - 남은 답이 있으면 `decision: block` 으로 막고, 까닭에 줄마다 `<id> <머리>` 와 할 일(`switchboard rules classify <id> --rule N`, 새 줄이면 `rules add … --source <id>`, 이번 일에만이면 `--once`)을 적는다. 다 분류되면 턴이 끝난다.
+  - 같은 답 묶음(id 집합)으로는 잇달아 3번(`UNCLASSIFIED_MAX_HOLDS`)까지 막고, 그다음 Stop 에서 메모(Stop 의 additionalContext 와 로그)와 함께 놓아준다. 놓아준 묶음으로는 다시 막지 않고, 답이 더해지거나 일부가 분류돼 묶음이 바뀌면 처음부터 센다.
+  - 다른 붙들기와 가리지 않는다: 다른 훅이 이미 막은 Stop 에서는 묻지도 세지도 않고 그 까닭을 그대로 둔다(다음 Stop 에 다시 본다).
+  - 제 고장으로 가두지 않는다: 서버 불통·느림(한도 1.5초)·오류·이상한 몸이면 턴을 끝낸다. 서브에이전트 루프(`agent_id`)와 프로필 없는 세션은 건드리지 않는다.
+
 ## 0.18.0
 
 - 규칙 원장의 걸림 줄을 도구 호출에 넣는다(#219). 계약은 switchboard 저장소 `docs/rules-hints.md`, 걸림 판정은 서버 기준 구현 `wire.RuleMatch.Hits` 를 옮겼다(`core/rules.ts`, 서버 시험 사례를 그대로 옮긴 시험).
