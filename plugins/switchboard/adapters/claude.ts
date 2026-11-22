@@ -7,6 +7,7 @@
 //  - 메일함 프로필 경로 → switchboard CLI 규칙(SWITCHBOARD_PROFILE·SWITCHBOARD_CONFIG_DIR·APPDATA·XDG_CONFIG_HOME·HOME·USERPROFILE,
 //    mailProfilePath), 프로필 값 덮어쓰기 SWITCHBOARD_ENDPOINT·SWITCHBOARD_TOKEN. 옛 AGENT_MAIL_* 는 대체값(3단계에 제거)
 //  - 메일 전 compact 설정 → SWITCHBOARD_COMPACT_TOKENS·SWITCHBOARD_COMPACT_INSTRUCTIONS(compactEnv)
+//  - 턴 끝 붙들기(미분류 답 #221) → classic.Stop 의 block(wireStopHold)
 //  - 멈춤(D8) → classic.StopFailure(stop.failure)·classic.Notification(notification)·도구 호출 끝(tool.complete)
 //  - 원격 권한 설정 → SWITCHBOARD_PERMISSION_WAIT_SECONDS·SWITCHBOARD_BOSS_ROLES(permissionEnv), 요약 → permissionSummary
 import type { Hook, On } from 'claude-code'
@@ -141,6 +142,26 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox, hint
     const add = [...(ruled.length === 0 ? [] : [ruled.join('\n')]), ...mid]
 
     return add.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...add] }
+  }).catch(($, e, next) => next(e))
+}
+
+/** 턴 끝 붙들기 판정(미분류 답 #221). 코어의 StopVerdict 와 같은 모양. */
+export type StopVerdictLike = { kind: 'end' } | { kind: 'block'; reason: string } | { kind: 'release'; note: string }
+
+/**
+ * 미분류 답 붙들기(#221): 본 세션의 Stop 에서 턴 끝을 막는다(classic 훅의 decision: block, 까닭은 모델에 간다).
+ * 다른 붙들기와 가리지 않는다: 다른 훅이 이미 막았으면 그 까닭을 그대로 두고 묻지도 세지도 않는다(다음 Stop 에 다시 본다).
+ * 서브에이전트 루프(agent_id)는 붙들지 않는다. 판정이 던지면 턴을 끝낸다.
+ */
+export function wireStopHold(on: On, check: (http: Pick<Http, 'fetch'>) => Promise<StopVerdictLike>): void {
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agent_id !== undefined || (r.block ?? '') !== '') return r
+    const v = await check(hookHttp($)).catch((): StopVerdictLike => ({ kind: 'end' }))
+    if (v.kind === 'block') return { ...r, block: v.reason }
+    if (v.kind === 'release') return { ...r, additionalContext: [...(r.additionalContext ?? []), v.note] }
+
+    return r
   }).catch(($, e, next) => next(e))
 }
 

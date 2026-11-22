@@ -17,6 +17,7 @@ import {
   slotEnv,
   wireClaudeEvents,
   wireStallEvents,
+  wireStopHold,
 } from '../adapters/claude'
 import type { Self } from '../adapters/claude'
 import { wireHandoff } from '../adapters/handoff'
@@ -413,6 +414,8 @@ export const register: Register = on => {
     warm: http => board?.warmRules({ http }),
     lines: async (http, e) => (await board?.ruleLines(toolCallOf(e.tool, e), e.agentId ?? '', { http })) ?? [],
   })
+  // 미분류 답 붙들기(#221): 이 역할의 패널 질문 답이 분류되지 않았으면 턴 끝을 막는다. 프로필 없는 세션은 board 가 end.
+  wireStopHold(on, async http => (await board?.stopCheck({ http })) ?? { kind: 'end' })
   // 멈춤 감지(D8): API 오류 멈춤·사람 기다림을 코어로.
   wireStallEvents(on, emitter)
   // 백그라운드 명령·예약·감시를 switchboard 장부로 넘긴다(#182). 끄기: SWITCHBOARD_HANDOFF=0.
