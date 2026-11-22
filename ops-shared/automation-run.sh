@@ -13,6 +13,11 @@
 # 왜: 자동화 실행기는 precheck 가 0 이 아니면 어떤 코드든 건너뜀으로 넘긴다. 체크아웃이 묵어 스크립트가 없어도(127)
 # 운영에 못 닿아도(2) 「없음(1)」과 똑같이 조용하다. 또 체크아웃을 따라잡는 장치가 없으면 묵은 코드로 돈다.
 #
+# 잠금: 따라잡기(fetch → fast-forward) 전체를 저장소 단위 잠금(fetch-lock.sh) 안에서 돌린다 — 같은 체크아웃에서
+# 자동화 둘이 같은 분에 fetch 하면 ref 갱신이 부딪힌다. AUTOMATION_RUN_LOCK_WAIT(기본 60)초 안에 못 잡으면 재시도 없이
+# 원인 `lock`(「잠금 대기 초과」)으로 알리고 70 으로 끝난다. `flock` 이 없는 환경은 mkdir 대체 잠금(fetch-lock.sh 머리말).
+# 사람·다른 세션은 같은 잠금을 쓰는 git-fetch-locked.sh 로 fetch 한다.
+#
 # 따라잡기: 체크아웃이 기본 브랜치에 있고, 추적 파일이 깨끗하고, 원격보다 앞서지 않을 때만 `merge --ff-only`.
 # 아니면 건드리지 않고 알린다(다른 세션의 커밋을 버리지 않는다). 따라잡기에 실패하면 본 명령을 돌리지 않고 70 으로 끝난다.
 #
@@ -20,14 +25,17 @@
 # 상태는 `$AUTOMATION_RUN_STATE_DIR/<이름>.state` 한 파일(`원인 마지막_알림_epoch`).
 #
 # 환경변수: AUTOMATION_RUN_REPO(기본: 이 스크립트가 있는 저장소 루트 — 보통 체크아웃 경로를 준다) · _REMOTE(origin)
-# · _BRANCH(main) · _STATE_DIR(~/.cache/automation-run) · _REPEAT_SECS(3600) · _SWITCHBOARD(switchboard)
+# · _BRANCH(main) · _STATE_DIR(~/.cache/automation-run) · _REPEAT_SECS(3600) · _LOCK_WAIT(60) · _SWITCHBOARD(switchboard)
 set -uo pipefail
 
+# shellcheck source=fetch-lock.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fetch-lock.sh"
 REPO="${AUTOMATION_RUN_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 STATE_DIR="${AUTOMATION_RUN_STATE_DIR:-$HOME/.cache/automation-run}"
 REMOTE="${AUTOMATION_RUN_REMOTE:-origin}"
 BRANCH="${AUTOMATION_RUN_BRANCH:-main}"
 REPEAT_SECS="${AUTOMATION_RUN_REPEAT_SECS:-3600}"
+LOCK_WAIT="${AUTOMATION_RUN_LOCK_WAIT:-60}"
 RELAY_TO="${AUTOMATION_RUN_TO:-}"
 RELAY_PROFILE="${AUTOMATION_RUN_PROFILE:-}"
 RELAY_TASK="${AUTOMATION_RUN_TASK:-automation-run}"
@@ -106,10 +114,17 @@ main() {
   [ "$#" -gt 0 ] || usage
 
   local reason
-  if ! reason="$(catch_up)"; then
+  local sync_rc=0
+  reason="$(fetch_lock_run "$REPO" "$LOCK_WAIT" catch_up 2>&1)" || sync_rc=$?
+  if [ "$sync_rc" -ne 0 ]; then
     echo "$reason" >&2
-    problem sync "체크아웃을 최신 $BRANCH 로 따라잡지 못했다" "$reason
+    if [ "$sync_rc" -eq 75 ]; then
+      problem lock "체크아웃 fetch 잠금 대기 초과" "$reason
 체크아웃: $REPO"
+    else
+      problem sync "체크아웃을 최신 $BRANCH 로 따라잡지 못했다" "$reason
+체크아웃: $REPO"
+    fi
     return 70
   fi
 
