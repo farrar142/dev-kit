@@ -1110,3 +1110,38 @@ test('좁은 터미널(#136): 자리를 못 잡고 기다리는 패널이면 /qu
   expect(closes).toEqual([])
   expect(paneSeated.value).toBe(true)
 })
+
+// 규칙 원장(#219): 프로필 있는 세션은 도구 호출에 걸린 규칙을 context 한 줄로 받고, 같은 줄은 다시 받지 않는다.
+test('규칙 원장: 걸린 규칙을 도구 결과의 context 로 한 번 넣고 hits 를 보내며, 막힌 호출에는 넣지 않는다', async ($, on) => {
+  const hits: string[] = []
+  on('env.get', (_: any, e: any) => ({ value: ({ SWITCHBOARD_PROFILE: 'sbtest', SWITCHBOARD_CONFIG_DIR: '/cfg' } as Record<string, string>)[e.name] }))
+  on('fs.exists', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' }))
+  on('fs.read', (_: any, e: any) => ({ value: e.path === '/cfg/sbtest.json' ? JSON.stringify({ endpoint: 'http://mail.test', role: 'team/worker', token: 'tok' }) : '' }))
+  on('http.fetch', (_: any, e: any) => {
+    const url = String(e.url)
+    const reply = (status: number, body: unknown) => ({ value: { status, ok: status < 300, headers: { etag: '"r1"' }, text: JSON.stringify(body) } })
+    if (url.includes('/api/slots/register')) return reply(200, { role: 'team/worker-1', base: 'team/worker', number: 1, other_active: 0, reclaimed: false })
+    if (url.includes('/api/slots/')) return reply(200, {})
+    if (url.includes('/api/events/poll')) return reply(200, { events: [], cursor: 0 })
+    if (url === 'http://mail.test/api/rules/mine') {
+      return reply(200, { rules: [{ id: 5, kind: 'decision', topic: 'release', summary: 'no force push', match: { tool: 'Bash', command: '--force' } }] })
+    }
+    if (url === 'http://mail.test/api/rules/hits') {
+      hits.push(String(e.init?.body))
+      throw new Error('connect ECONNREFUSED') // 세기 실패는 삼킨다
+    }
+
+    return reply(404, { error: 'not found' })
+  })
+  on('tool.call', { tool: 'Bash' }, (_: any, e: any) => (e.command === 'blocked --force' ? { deny: 'no' } : { result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await setup($, on)
+  const blocked: any = await $.tool.call({ tool: 'Bash', command: 'blocked --force' } as any)
+  expect(blocked.deny).toBe('no')
+  const first: any = await $.tool.call({ tool: 'Bash', command: 'git push origin x --force' } as any)
+  expect(first.context).toEqual(['결정 #5 참고: no force push'])
+  const again: any = await $.tool.call({ tool: 'Bash', command: 'git push origin y --force' } as any)
+  expect(again.context ?? []).toEqual([])
+  const other: any = await $.tool.call({ tool: 'Bash', command: 'ls' } as any)
+  expect(other.context ?? []).toEqual([])
+  expect(hits).toEqual(['{"ids":[5]}'])
+})

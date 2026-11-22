@@ -8,6 +8,7 @@ import {
   compactEnv,
   emitSubmit,
   exportRole,
+  hookHttp,
   typingEnv,
   mailProfilePath,
   permissionEnv,
@@ -40,7 +41,7 @@ import type { Switchboard } from '../core/switchboard'
 import type { RemoteSink } from '../core/remote-inbox'
 import type { AskRefusal } from '../core/remote-ask'
 import { askRefusedText, isRemoteId, localFallbackLine, normalizeRelayTo, relayNotDeliveredLine, remoteAskText, withdrawText } from '../core/remote-ask'
-import type { Http } from '../core/host'
+import { toolCallOf } from '../core/rules'
 import type { QuestionPanelBatch } from '../types'
 
 // Claude Code 쪽 껍데기: 코어(../core)를 Claude 어댑터(../adapters/claude)로 잇고, 질문 패널을 그린다.
@@ -111,14 +112,6 @@ const openPanel = async ($: Self, toast: string): Promise<boolean> => {
 
   return false
 }
-
-const hookHttp = ($: Self): Pick<Http, 'fetch'> => ({
-  fetch: async (url, init) => {
-    const r = await $.http.fetch(url, init)
-
-    return { status: r.status, ok: r.ok, headers: r.headers, text: r.text }
-  },
-})
 
 /** 이 `$` 로 질문 패널 코어를 만든다(가볍다: 상태는 atom 에 있다). */
 const panelOf = ($: Self) =>
@@ -415,7 +408,11 @@ async function askUserQuestionDenial($: Self, questions: unknown): Promise<strin
 
 export const register: Register = on => {
   // 포트 이벤트(턴·입력·compact)를 코어로 넘긴다. 관찰만 하므로 세션 흐름은 그대로다.
-  wireClaudeEvents(on, emitter, box)
+  // 규칙 원장(#219): 걸린 규칙 줄을 도구 결과의 context 로. 프로필 없는 세션은 board 에 규칙이 없어 아무것도 하지 않는다.
+  wireClaudeEvents(on, emitter, box, {
+    warm: http => board?.warmRules({ http }),
+    lines: async (http, e) => (await board?.ruleLines(toolCallOf(e.tool, e), e.agentId ?? '', { http })) ?? [],
+  })
   // 멈춤 감지(D8): API 오류 멈춤·사람 기다림을 코어로.
   wireStallEvents(on, emitter)
   // 백그라운드 명령·예약·감시를 switchboard 장부로 넘긴다(#182). 끄기: SWITCHBOARD_HANDOFF=0.
