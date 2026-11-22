@@ -21,7 +21,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
-| [issue-track](#issue-track) | 0.13.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
+| [issue-track](#issue-track) | 0.16.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
 | [switchboard](#switchboard) | 0.16.2 | mod·MCP | 세션 교환대: 질문 패널, 메일함 구독, 대장 질문, 백그라운드 작업 넘기기 |
 | [question-panel](#question-panel) | 0.9.0 | mod·MCP | switchboard 이전의 질문 패널 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
@@ -38,7 +38,7 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
 
 ### issue-track
 
-- 스킬 `issue-track`: 열린 이슈를 한 트랙으로 `issue-worker`에게 차례로 맡기거나, 한 건을 원격 기계의 작업자 세션에 Orca·메일로 맡긴다. 결과 확인, 작업자 내리기, 토큰 측정, 지시서 개선까지.
+- 스킬 `issue-track`: 이슈 한 건이든 여러 건이든 건다(한 건은 큐 없이 바로 지시서, 여러 건은 사슬 모드 한 통). 열린 이슈를 한 트랙으로 `issue-worker`에게 차례로 맡기거나, 한 건을 원격 기계의 작업자 세션에 Orca·메일로 맡긴다. 결과 확인, 작업자 내리기, 토큰 측정, 지시서 개선까지.
 - 에이전트 `issue-track:issue-worker`(sonnet, 이슈 하나를 워크트리 → 시험 → PR → 병합 → 정리), `issue-track:errand`(haiku, 읽기 전용 찾기 심부름꾼).
 - 스크립트(`skills/issue-track/scripts/`):
 
