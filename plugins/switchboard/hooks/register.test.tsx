@@ -956,6 +956,18 @@ test('거절된 뒤 AskUserQuestion 은 여전히 막히고 안내가 「답 메
   expect(String(ran.deny)).not.toContain('같은 질문을 올려라')
 })
 
+test('원격 질문: relay_to 를 줬는데 로컬 패널로 떨어지면 「중계되지 않음」 줄이 붙는다', async ($, on) => {
+  await setupRemote($, on, 'down')
+  const text = textOf(await $.tool.call({ ...INPUT, relay_to: ['team/coordinator'] } as any))
+  expect(text).toContain('중계되지 않음')
+  expect(text).toContain('질문 묶음 q1')
+})
+
+test('원격 질문: relay_to 가 없으면 로컬로 떨어져도 「중계되지 않음」이 없다', async ($, on) => {
+  await setupRemote($, on, 'down')
+  expect(textOf(await $.tool.call(INPUT as any))).not.toContain('중계되지 않음')
+})
+
 test('원격 질문: 서버에 닿지 않으면 로컬 패널로(글 첫머리가 「원격에 올리지 못했다」)', async ($, on) => {
   await setupRemote($, on, 'down')
   const text = textOf(await $.tool.call(INPUT as any))

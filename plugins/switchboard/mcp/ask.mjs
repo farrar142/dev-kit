@@ -28,7 +28,7 @@
 export const ASK = {
   name: 'ask',
   description:
-    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 「질문」 패널(Claude Code 데스크톱 앱·CLI, Orca 사이드바)에 쌓인다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(q4)」 정도로 짧게 말하고 턴을 마쳐라. 답은 「[질문 패널 답] 질문 = 고른 것」 메시지나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 목록에 없는 답은 패널의 「기타」로 글이 올 수 있다(「q4 기타 / [질문 패널 답] 질문 = 기타: 글」). 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
+    '사용자에게 객관식 질문을 한다. AskUserQuestion과 같은 모양이지만 기다리지 않는다. 질문은 「질문」 패널(Claude Code 데스크톱 앱·CLI, Orca 사이드바)에 쌓인다. 질문을 대화창에 다시 쓰지 말고 「질문 패널에 올렸습니다(q4)」 정도로 짧게 말하고 턴을 마쳐라. 답은 「[질문 패널 답] 질문 = 고른 것」 메시지나 대화창의 글(「q4 1-2」처럼 묶음 ID와 번호)로 온다. Orca 채팅 세션이면 Orca 사이드바 질문 패널의 답이 제목 「[질문 패널 답] q4」 오케스트레이션 메일로 온다(본문 「q4 1-2 / [질문 패널 답] 질문 = 고른 것」). 목록에 없는 답은 패널의 「기타」로 글이 올 수 있다(「q4 기타 / [질문 패널 답] 질문 = 기타: 글」). 답을 그대로 받아야 하는 역할이 따로 있으면 relay_to에 그 역할들을 준다. 선택지를 비교하려면 option의 preview에 코드·ASCII 목업·설정 예시를 마크다운으로 넣는다(AskUserQuestion의 preview와 같다).',
   inputSchema: {
     type: 'object',
     properties: {
@@ -63,6 +63,12 @@ export const ASK = {
           },
           required: ['question', 'header', 'options', 'multiSelect'],
         },
+      },
+      relay_to: {
+        type: 'array',
+        maxItems: 8,
+        items: { type: 'string' },
+        description: '선택. 이 답 원문을 받을 역할들(예: team/coordinator). 답을 그대로 받아야 하는 역할이 따로 있을 때만 쓴다. 서버 질문일 때만 중계되고, 로컬 패널로 떨어지면 중계되지 않는다.',
       },
     },
     required: ['questions'],

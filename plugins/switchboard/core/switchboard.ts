@@ -64,7 +64,7 @@ export type Switchboard = {
    * 원격 질문(#111): 메일함이 켜져 있으면 서버 질문으로 올린다. 못 올리면 로컬(까닭), 메일함이 꺼져 있으면 로컬(까닭 null).
    * 답 메일은 메일함이 「[질문 패널 답 <id>] …」 글로 바꿔 넣는다.
    */
-  askRemote: (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }) => Promise<RemoteAskResult>
+  askRemote: (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }, relayTo?: readonly string[]) => Promise<RemoteAskResult>
   /** 서버 질문을 거둔다(resolve). 메일함이 꺼져 있으면 실패. */
   withdrawRemote: (id: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<WithdrawResult>
   /** 원격 질문(#112, 대장 세션): 패널 답을 서버로 보낸다. 끌어오기가 꺼져 있으면 failed. */
@@ -542,11 +542,11 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     }
   }
 
-  const askRemote = async (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }): Promise<RemoteAskResult> => {
+  const askRemote = async (questions: readonly QuestionPanelQuestion[], io?: { http?: Pick<Http, 'fetch'> }, relayTo?: readonly string[]): Promise<RemoteAskResult> => {
     const r = remote
     if (!st.active || r === undefined) return { kind: 'local', reason: null }
     try {
-      return await r.ask.ask(questions, io?.http === undefined ? {} : { http: io.http })
+      return await r.ask.ask(questions, io?.http === undefined ? {} : { http: io.http }, relayTo)
     } catch {
       return { kind: 'local', reason: '서버에 닿지 않음' }
     }

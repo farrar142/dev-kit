@@ -41,7 +41,7 @@ export type ApiReply<T> = { ok: true; status: number; value: T } | { ok: false; 
 
 export type QuestionsApi = {
   /** POST /api/questions. 201 · 403 can_ask 꺼짐 · 400 모양 · 409 답할 대장 없음. */
-  ask: (items: readonly RemoteItem[], io?: CallIo) => Promise<ApiReply<RemoteQuestion>>
+  ask: (items: readonly RemoteItem[], io?: CallIo, relayTo?: readonly string[]) => Promise<ApiReply<RemoteQuestion>>
   /** GET /api/questions/{id}. 403 묻는 쪽 base 도 대장도 아님 · 404. */
   get: (id: string, io?: CallIo) => Promise<ApiReply<RemoteQuestion>>
   /** GET /api/questions?status=&limit= (새것부터). */
@@ -180,8 +180,9 @@ export const createQuestionsApi = (call: Mailbox['call']): QuestionsApi => {
 
   return {
     // 같은 문항을 다시 보내도 서버가 전달 메일을 겹쳐 만들지 않게 내용으로 Idempotency-Key 를 만든다(#176).
-    ask: (items, io) => {
-      const body = JSON.stringify({ questions: items })
+    ask: (items, io, relayTo) => {
+      // relay_to: 답 원문을 받을 역할들. 비었으면 칸을 뺀다(옛 서버는 모르는 칸을 무시한다).
+      const body = JSON.stringify({ questions: items, ...(relayTo === undefined || relayTo.length === 0 ? {} : { relay_to: relayTo }) })
 
       return go('/api/questions', { method: 'POST', body, headers: { 'Idempotency-Key': `switchboard-ask-${fnv(body)}` } }, io, parseQuestion)
     },

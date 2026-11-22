@@ -53,6 +53,15 @@ test('질문이 없으면 오류', () => {
   assert.equal(callAsk({}).isError, true)
 })
 
+test('ask 입력에 선택 칸 relay_to(문자열 배열, 최대 8)가 있고 필수가 아니다', () => {
+  const r = ASK.inputSchema.properties.relay_to
+  assert.equal(r.type, 'array')
+  assert.equal(r.maxItems, 8)
+  assert.deepEqual(r.items, { type: 'string' })
+  assert.deepEqual(ASK.inputSchema.required, ['questions'])
+  assert.match(ASK.description, /relay_to/)
+})
+
 test('tools/list는 ask·resolve를 낸다, 모르는 도구·메서드는 오류, 알림에는 답하지 않는다', () => {
   assert.deepEqual(handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }).result.tools.map(t => t.name), ['ask', 'resolve', 'sync'])
   assert.equal(RESOLVE.inputSchema.properties.panel_result, undefined)
