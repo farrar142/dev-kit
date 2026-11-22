@@ -78,7 +78,7 @@ class AutomationRun(unittest.TestCase):
         _git(self.pusher, "push", "-q", "origin", "main")
         return _git(self.pusher, "rev-parse", "HEAD")
 
-    def run_script(self, *extra: str, repeat_secs: int = 3600) -> subprocess.CompletedProcess:
+    def run_script(self, *extra: str, repeat_secs: int = 3600, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess:
         env = {
             **os.environ,
             "FAKE": str(self.fake),
@@ -89,6 +89,7 @@ class AutomationRun(unittest.TestCase):
             "AUTOMATION_RUN_TO": "team/lead",
             "AUTOMATION_RUN_PROFILE": "worker-profile",
             "AUTOMATION_RUN_TASK": "ops-task",
+            **(env_extra or {}),
         }
         env.pop("SWITCHBOARD_PROFILE", None)
         return subprocess.run(
@@ -162,6 +163,68 @@ class AutomationRun(unittest.TestCase):
         _git(self.checkout, "checkout", "-q", "-b", "other")
         self.assertEqual(self.run_script().returncode, 70)
         self.assertEqual(len(self.mails()), 1)
+
+    def lock_path(self) -> Path:
+        return Path(_git(self.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "ops-shared-fetch.lock"
+
+    def test_concurrent_catch_ups_both_succeed(self) -> None:
+        self.push_new_commit()
+        for force_mkdir in ("", "1"):
+            with self.subTest(force_mkdir=force_mkdir):
+                env = {"FETCH_LOCK_FORCE_MKDIR": force_mkdir}
+                procs = [self.start_script(env) for _ in range(4)]
+                for p in procs:
+                    p.communicate(timeout=30)
+                    self.assertEqual(p.returncode, 0)
+        self.assertEqual(self.mails(), [])
+
+    def start_script(self, env_extra: dict[str, str]) -> subprocess.Popen:
+        env = {**os.environ, "FAKE": str(self.fake), "AUTOMATION_RUN_REPO": str(self.checkout),
+               "AUTOMATION_RUN_STATE_DIR": str(self.state), "AUTOMATION_RUN_SWITCHBOARD": str(self.fake / "switchboard"),
+               "AUTOMATION_RUN_TO": "team/lead", **env_extra}
+        return subprocess.Popen(["bash", str(SCRIPT), "feedback-relay", "--", str(self.fake / "cmd.sh")],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_lock_wait_timeout_is_its_own_cause(self) -> None:
+        import fcntl
+        with open(self.lock_path(), "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            res = self.run_script(env_extra={"AUTOMATION_RUN_LOCK_WAIT": "1"})
+        self.assertEqual(res.returncode, 70)
+        self.assertIn("잠금 대기 초과", res.stderr)
+        mails = self.mails()
+        self.assertEqual(len(mails), 1)
+        self.assertIn("잠금 대기 초과", self.subject(mails[0]))
+        self.assertEqual(self.ran(), [])
+
+    def test_lock_wait_timeout_with_mkdir_fallback(self) -> None:
+        lock_dir = Path(str(self.lock_path()) + ".d")
+        lock_dir.mkdir()
+        (lock_dir / "pid").write_text(str(os.getpid()))  # 살아 있는 프로세스가 쥔 것으로 본다
+        res = self.run_script(env_extra={"AUTOMATION_RUN_LOCK_WAIT": "1", "FETCH_LOCK_FORCE_MKDIR": "1"})
+        self.assertEqual(res.returncode, 70)
+        self.assertIn("잠금 대기 초과", res.stderr)
+
+    def test_mkdir_fallback_takes_over_dead_holder(self) -> None:
+        lock_dir = Path(str(self.lock_path()) + ".d")
+        lock_dir.mkdir()
+        dead = subprocess.Popen(["true"]); dead.wait()
+        (lock_dir / "pid").write_text(str(dead.pid))
+        res = self.run_script(env_extra={"AUTOMATION_RUN_LOCK_WAIT": "5", "FETCH_LOCK_FORCE_MKDIR": "1"})
+        self.assertEqual(res.returncode, 0)
+        self.assertFalse(lock_dir.exists())
+
+    def test_fetch_helper_uses_the_same_lock(self) -> None:
+        helper = SCRIPT.parent / "git-fetch-locked.sh"
+        env = {**os.environ, "AUTOMATION_RUN_REPO": str(self.checkout), "AUTOMATION_RUN_LOCK_WAIT": "1"}
+        ok = subprocess.run(["bash", str(helper), "-q", "origin", "main"], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(ok.returncode, 0)
+        import fcntl
+        with open(self.lock_path(), "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            blocked = subprocess.run(["bash", str(helper), "-q", "origin", "main"], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(blocked.returncode, 75)
+        self.assertIn("잠금 대기 초과", blocked.stderr)
 
     def test_fetch_failure_is_reported(self) -> None:
         _git(self.checkout, "remote", "set-url", "origin", str(self.fake / "없는 저장소"))
