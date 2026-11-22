@@ -15,7 +15,7 @@
 // 왜 SSE 가 아닌가: Claude 모드의 http 는 본문을 다 받아서만 준다(D1). 서버의 긴 대기는 SSE 와 같은 이벤트·커서 규칙이다.
 import type { AgentHost, Fs, Http, Timer } from './host'
 import { versionAtLeast } from './handoff'
-import { CLI_VERSION_TIMEOUT_MS, createSlot } from './slot'
+import { cachedCliVersion, createSlot } from './slot'
 import type { PresenceReport, Slot, TakeoverResult } from './slot'
 import { httpWhy, roleHeaders } from './wire'
 
@@ -79,7 +79,7 @@ export type SlotConfig = {
   warn?: (text: string) => void
   singleRoles?: readonly string[]
   /** CLI 판 읽기(슬롯 요청 머리 X-Switchboard-Version). 없으면 머리를 싣지 않는다. */
-  /** 메일 턴 꼬리(#203)도 이 판을 본다(세션에 한 번 읽는다). */
+  /** 메일 턴 꼬리(#203)도 이 판을 본다(약 10분 캐시로 읽는다). */
   cliVersion?: () => Promise<string | undefined>
   /** 번호 역할을 받았다·바뀌었다(D8: 자식 프로세스의 SWITCHBOARD_ROLE 을 맞춘다). */
   onRole?: (role: string) => void
@@ -385,23 +385,9 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
    * 다음 시도에 다시 받지 않는다. 넣으면 지운다.
    */
   const bodies = new Map<number, string>()
-  /** CLI 판(세션에 한 번, 슬롯 머리와 메일 꼬리가 함께 쓴다). */
-  let versionRead: Promise<string | undefined> | undefined
+  /** CLI 판(시각 붙은 캐시, 슬롯 머리와 메일 꼬리가 같은 읽기 함수를 각자 감싸 쓴다). */
   const readVersion = opts.cliVersion ?? opts.slot?.cliVersion
-  const cliVersion = readVersion === undefined
-    ? undefined
-    : () => {
-        versionRead ??= (async () => {
-          let timer: Timer | undefined
-          try {
-            return await Promise.race([readVersion(), new Promise<undefined>(done => void (timer = clock.after(CLI_VERSION_TIMEOUT_MS, () => done(undefined))))]).finally(() => timer?.cancel())
-          } catch {
-            return undefined
-          }
-        })()
-
-        return versionRead
-      }
+  const cliVersion = readVersion === undefined ? undefined : cachedCliVersion(readVersion, clock)
   /** 새 꼬리를 내도 되는가: CLI 가 MAIL_TAIL_MIN_VERSION 이상. 못 읽으면 옛 꼬리. */
   const newTail = async () => {
     const v = await cliVersion?.()
@@ -986,7 +972,7 @@ export const createMailbox = (host: AgentHost, opts: MailboxOptions): Mailbox =>
         log,
         ...(cfg.warn === undefined ? {} : { warn: cfg.warn }),
         ...(cfg.singleRoles === undefined ? {} : { singleRoles: cfg.singleRoles }),
-        ...(cliVersion === undefined ? {} : { cliVersion }),
+        ...(readVersion === undefined ? {} : { cliVersion: readVersion }),
       })
       slot = s
       // 번호를 받은 뒤 구독한다(-2 세션이 잠깐이라도 -1 메일을 받지 않게). 못 받으면(옛 서버·끊김) 기반 역할로.

@@ -5,7 +5,7 @@
 //  - 같은 기계·폴더를 지금 다른 세션이 쥐고 있으면(GET /api/slots 의 session_id) 폴더에 세션 표지를 붙여 다음 번호를 받는다.
 //  - 단일 역할(boss·coordinator 등)인데 -2 이상을 받으면 경고한다. takeover 로 -1 을 가져올 수 있다.
 //  - 토큰은 요청 머리(Authorization)에만 싣는다. 몸·기록·경고 어디에도 넣지 않는다.
-import type { AgentHost, Timer } from './host'
+import type { AgentHost, Clock, Timer } from './host'
 import { httpWhy, parseCliVersion, roleHeaders, VERSION_HEADER } from './wire'
 
 export type PresenceState = 'idle' | 'busy' | 'compacting'
@@ -47,7 +47,7 @@ export type SlotOptions = {
   /** 중복을 경고할 단일 역할 이름(기반 역할의 마지막 `/` 뒤 이름이나 전체 이름). */
   singleRoles?: readonly string[]
   /**
-   * 이 세션이 쓰는 switchboard CLI 의 판(`vX.Y.Z`). 세션에 한 번만 불러 요청 머리 `X-Switchboard-Version` 으로 싣는다.
+   * 이 세션이 쓰는 switchboard CLI 의 판(`vX.Y.Z`). 약 10분마다 다시 읽어(시각 붙은 캐시) 요청 머리 `X-Switchboard-Version` 으로 싣는다.
    * 못 읽거나(undefined·오류·시간 초과) 모양이 틀리면 머리를 뺀다. 읽기 때문에 번호 받기가 늦어지거나 실패하지 않는다.
    */
   cliVersion?: () => Promise<string | undefined>
@@ -72,6 +72,51 @@ export const HEARTBEAT_MS = 60_000
 export const SLOT_TIMEOUT_MS = 10_000
 /** CLI 판 읽기의 한도. 넘으면 머리 없이 간다. */
 export const CLI_VERSION_TIMEOUT_MS = 3_000
+/** CLI 판 읽기 결과의 수명. 지나면 뒤에서 다시 읽는다(디스크의 CLI 를 올려도 세션이 옛 판으로 남지 않게). */
+export const CLI_VERSION_TTL_MS = 600_000
+
+/**
+ * CLI 판 읽기를 시각 붙은 캐시로 감싼다. 처음 한 번만 한도(CLI_VERSION_TIMEOUT_MS)까지 기다리고,
+ * 수명(CLI_VERSION_TTL_MS)이 지난 뒤에는 앞의 값을 바로 돌려주며 뒤에서 다시 읽는다 — 읽기가 느려도 호출자(heartbeat)는 밀리지 않는다.
+ * 다시 읽기가 실패(undefined·오류·한도 초과·`valid` 아님)하면 앞의 값을 그대로 둔다. 실패한 시도도 수명 동안은 다시 부르지 않는다.
+ */
+export const cachedCliVersion = (
+  read: () => Promise<string | undefined>,
+  clock: Clock,
+  valid: (text: string) => boolean = () => true,
+): (() => Promise<string | undefined>) => {
+  let value: string | undefined
+  let triedAt: number | undefined
+  let settled = false
+  let inflight: Promise<void> | undefined
+  const load = (now: number): Promise<void> => {
+    triedAt = now
+    const run = (async () => {
+      let timer: Timer | undefined
+      try {
+        const out = await Promise.race([read(), new Promise<undefined>(done => void (timer = clock.after(CLI_VERSION_TIMEOUT_MS, () => done(undefined))))]).finally(() => timer?.cancel())
+        if (out !== undefined && valid(out)) value = out
+      } catch {
+        // 앞의 값을 남긴다.
+      } finally {
+        settled = true
+        inflight = undefined
+      }
+    })()
+    inflight = run
+
+    return run
+  }
+
+  return async () => {
+    const now = await clock.now()
+    if (triedAt === undefined) await load(now)
+    else if (!settled) await inflight
+    else if (inflight === undefined && now - triedAt >= CLI_VERSION_TTL_MS) void load(now)
+
+    return value
+  }
+}
 export const DEFAULT_SINGLE_ROLES = ['boss', 'coordinator'] as const
 
 /** 환경변수 글(쉼표 목록)로 단일 역할 목록을 만든다. 비면 기본(boss, coordinator), `off` 면 없음. */
@@ -230,24 +275,13 @@ export const createSlot = (host: AgentHost, opts: SlotOptions): Slot => {
     return r
   }
 
-  /** CLI 판 머리: 세션에 한 번만 읽는다(성공이든 실패든 다시 부르지 않는다). 실패는 모두 빈 값. */
-  let versionRead: Promise<Record<string, string>> | undefined
-  const versionHeaders = (): Promise<Record<string, string>> => {
-    versionRead ??= (async () => {
-      const read = opts.cliVersion
-      if (read === undefined) return {}
-      let timer: Timer | undefined
-      try {
-        const out = await Promise.race([read(), new Promise<undefined>(done => void (timer = clock.after(CLI_VERSION_TIMEOUT_MS, () => done(undefined))))]).finally(() => timer?.cancel())
-        const v = out === undefined ? undefined : parseCliVersion(out)
+  /** CLI 판 머리: 시각 붙은 캐시(CLI_VERSION_TTL_MS)로 읽는다. 실패는 앞의 값, 처음부터 실패면 빈 값. */
+  const readVersion = opts.cliVersion === undefined ? undefined : cachedCliVersion(opts.cliVersion, clock, text => parseCliVersion(text) !== undefined)
+  const versionHeaders = async (): Promise<Record<string, string>> => {
+    const out = await readVersion?.()
+    const v = out === undefined ? undefined : parseCliVersion(out)
 
-        return v === undefined ? {} : { [VERSION_HEADER]: v }
-      } catch {
-        return {}
-      }
-    })()
-
-    return versionRead
+    return v === undefined ? {} : { [VERSION_HEADER]: v }
   }
 
   const call1 = async (action: Action): Promise<Reply> => {
