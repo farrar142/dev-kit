@@ -17,6 +17,8 @@ import type { RemoteAnswerOutcome } from './questions'
 import type { RemoteAsk, RemoteAskResult, WithdrawResult } from './remote-ask'
 import type { PresenceReport, TakeoverResult } from './slot'
 import type { QuestionPanelQuestion } from '../types'
+import { createRuleHints } from './rules'
+import type { RuleHintsBox, ToolCall } from './rules'
 import { createStall } from './stall'
 import type { Stall, StallNotice, StallOptions } from './stall'
 
@@ -69,6 +71,13 @@ export type Switchboard = {
   withdrawRemote: (id: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<WithdrawResult>
   /** 원격 질문(#112, 대장 세션): 패널 답을 서버로 보낸다. 끌어오기가 꺼져 있으면 failed. */
   answerRemote: (id: string, answers: readonly RemoteAnswer[]) => Promise<RemoteAnswerOutcome>
+  /**
+   * 규칙 원장(#219): 도구 호출에 걸린 규칙 줄(`결정 #N 참고: …`). 루프(본 세션 '', 서브에이전트는 그 id)마다 한 번,
+   * 본 세션은 compact 뒤 한 번 더. 메일함이 꺼져 있으면(프로필 없음) 서버를 부르지 않고 빈 목록.
+   */
+  ruleLines: (call: ToolCall, loop: string, io?: { http?: Pick<Http, 'fetch'> }) => Promise<string[]>
+  /** 규칙 원장을 다시 확인할 때가 됐으면 미리 띄운다(도구가 도는 동안 받게). */
+  warmRules: (io?: { http?: Pick<Http, 'fetch'> }) => void
 }
 
 export type SwitchboardOptions = {
@@ -170,6 +179,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
   const st: BoardState = { active: false, activity: 'idle', typing: false, lastInputAt: null, condition: null }
   let stall: Stall | undefined
   let permissions: Permissions | undefined
+  let rules: RuleHintsBox | undefined
   let boss: BossJudge | undefined
   let remote: { ask: RemoteAsk; off: () => void } | undefined
   let inbox: RemoteInbox | undefined
@@ -370,6 +380,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
           }
           break
         case 'compact.complete':
+          rules?.compacted()
           st.activity = 'idle'
           compactWatch?.cancel()
           compactWatch = undefined
@@ -412,6 +423,11 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
         beforeDeliver: compactBeforeMail,
       })
       await mailbox.start().catch(() => false)
+      // 규칙 원장(#219): 프로필이 없으면 call 이 서버를 부르지 않는다. 세션 시작에 미리 받아 둔다.
+      if (mailbox.state().status !== 'off') {
+        rules = createRuleHints(mailbox.call, host.services.clock)
+        rules.warm()
+      }
       // 대장 판정 하나(#130): 연결될 때마다 whoami, 옛 서버·실패면 전역 목록. 권한·질문 양쪽이 같이 쓴다.
       const judge = createBossJudge(mailbox, { bosses: opts.permissions?.bosses ?? [], log, onChange: () => inbox?.recheck() })
       boss = judge
@@ -435,6 +451,7 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     compactWatch = undefined
     permissions?.stop()
     permissions = undefined
+    rules = undefined
     boss?.stop()
     boss = undefined
     remote?.off()
@@ -572,5 +589,14 @@ export const createSwitchboard = (host: AgentHost, opts: SwitchboardOptions = {}
     }
   }
 
-  return { start, stop, state: () => ({ ...st }), compact, mail, takeover, askPermission, askRemote, withdrawRemote, answerRemote }
+  const ruleLines = async (call: ToolCall, loop: string, io?: { http?: Pick<Http, 'fetch'> }): Promise<string[]> => {
+    try {
+      return (await rules?.lines(call, loop, io)) ?? []
+    } catch {
+      return []
+    }
+  }
+  const warmRules = (io?: { http?: Pick<Http, 'fetch'> }): void => rules?.warm(io)
+
+  return { start, stop, state: () => ({ ...st }), compact, mail, takeover, askPermission, askRemote, withdrawRemote, answerRemote, ruleLines, warmRules }
 }

@@ -11,7 +11,7 @@
 //  - 원격 권한 설정 → SWITCHBOARD_PERMISSION_WAIT_SECONDS·SWITCHBOARD_BOSS_ROLES(permissionEnv), 요약 → permissionSummary
 import type { Hook, On } from 'claude-code'
 
-import type { AgentHost, HostEvent, HttpReply } from '../core/host'
+import type { AgentHost, HostEvent, Http, HttpReply } from '../core/host'
 import { pickEnv, profileLocation } from '../core/profile'
 import type { ProfileEnv, ProfilePlatform } from '../core/profile'
 
@@ -65,8 +65,28 @@ export const createMidTurnBox = () => {
 
 export type MidTurnBox = ReturnType<typeof createMidTurnBox>
 
-/** 본 세션의 이벤트를 포트 이벤트로 넘긴다. 서브에이전트(agentId 가 있는 루프)의 것은 넘기지 않는다. */
-export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): void {
+/**
+ * 도구 호출에 덧붙일 글(규칙 원장 #219). warm 은 도구가 돌기 전에(기다리지 않는다), lines 는 도구가 끝난 뒤
+ * 막히지 않은 호출에만 부른다. 실패는 삼킨다.
+ */
+export type ToolHints = {
+  warm: (http: Pick<Http, 'fetch'>) => void
+  lines: (http: Pick<Http, 'fetch'>, e: { tool: string; agentId?: string }) => Promise<string[]>
+}
+
+/** 이 훅의 `$.http` 로 요청한다(훅 예산은 `$` 응답을 기다리는 동안 멈춘다). */
+export function hookHttp($: Self): Pick<Http, 'fetch'> {
+  return {
+    fetch: async (url, init) => {
+      const r = await $.http.fetch(url, init)
+
+      return { status: r.status, ok: r.ok, headers: r.headers, text: r.text }
+    },
+  }
+}
+
+/** 본 세션의 이벤트를 포트 이벤트로 넘긴다. 서브에이전트(agentId 가 있는 루프)의 것은 넘기지 않는다(규칙 줄은 서브에이전트 호출에도 붙인다). */
+export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox, hints?: ToolHints): void {
   // 관찰만 한다: 실패해도 원래 흐름은 그대로 간다.
   on('turn.start', ($, e, next) => {
     if (e.agentId === undefined) emitter.emit({ type: 'turn.start' })
@@ -105,12 +125,22 @@ export function wireClaudeEvents(on: On, emitter: Emitter, box: MidTurnBox): voi
     return r
   }).catch(($, e, next) => next(e))
   // injectMidTurn: 본 세션 도구 호출이 끝나면 쌓인 글을 결과의 context 로 붙인다.
+  // 규칙 원장(#219): 걸린 규칙 줄도 같은 자리에 붙인다(서브에이전트 호출 포함). 막지 않는다: 확인은 도구가 도는 동안 한다.
   on('tool.call', async ($, e, next) => {
+    const http = hookHttp($)
+    try {
+      hints?.warm(http)
+    } catch {
+      // 덤이다.
+    }
     const r = await next(e)
     if (e.agentId === undefined) emitter.emit({ type: 'tool.complete' })
-    if (e.agentId !== undefined || box.size() === 0 || r.deny !== undefined) return r
+    if (r.deny !== undefined) return r
+    const ruled = hints === undefined ? [] : await hints.lines(http, e).catch(() => [])
+    const mid = e.agentId === undefined && box.size() > 0 ? box.take() : []
+    const add = [...(ruled.length === 0 ? [] : [ruled.join('\n')]), ...mid]
 
-    return { ...r, context: [...(r.context ?? []), ...box.take()] }
+    return add.length === 0 ? r : { ...r, context: [...(r.context ?? []), ...add] }
   }).catch(($, e, next) => next(e))
 }
 
