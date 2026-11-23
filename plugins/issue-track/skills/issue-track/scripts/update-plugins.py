@@ -2,7 +2,7 @@
 """로컬과 원격 기계(ssh 별칭)에서 한 마켓의 플러그인을 모든 범위에서 갱신하고 범위별 판 표를 찍는다.
 
     update-plugins.py [--config 경로] [--marketplace 이름] [--hosts 별칭,별칭 | --local-only]
-                      [--no-sessions]
+                      [--no-sessions(무시, 옛 호출용)]
 
 기계마다 차례로:
   0. 원격 셸 판별: 설정 update.shells[별칭](posix·powershell), 없으면
@@ -10,6 +10,8 @@
   1. `claude plugin marketplace update <마켓>`
   2. `claude plugin list --json`에서 `<이름>@<마켓>` 설치를 모두(user·project·local, 폴더마다) 찾아
      `claude plugin update <이름>@<마켓> --scope <scope>`. local·project는 그 설치의 projectPath 폴더에서 돈다.
+     마켓 클론의 marketplace.json 에서 빠진 플러그인(마켓에서 지운 것)의 설치는 갱신하지 않고 표에서도 빼며,
+     기계마다 한 줄(「마켓에 없어 건너뜀」)로 알린다. 설치 항목은 건드리지 않는다(지우기·끄기·켜기 없음).
   3. 다시 `claude plugin list --json`을 읽고, 그 기계의 마켓 클론(marketplace list의 installLocation)에서
      플러그인마다 최신 판(marketplace.json 항목의 version, 없으면 source 폴더의 .claude-plugin/plugin.json)을 읽어
      「범위별 판」 표(기계·플러그인·범위·폴더·판·최신·상태)를 만든다. 최신 판을 못 읽으면 그 기계에 깔린 가장 높은 판.
@@ -17,10 +19,8 @@
 powershell은 `ssh <별칭> "Set-Location -LiteralPath '<폴더>' -ErrorAction Stop; claude …; exit $LASTEXITCODE"`.
 한 기계가 실패해도 나머지는 계속한다. reload·재시작은 하지 않는다.
 
-그다음 「옛 판으로 떠 있는 세션」을 찾는다: `switchboard status --json`(설정의 메일 프로필)에서 online이고
-registered_at이 그 기계 세션 플러그인(기본 switchboard)의 lastUpdated보다 이른 세션. 세션의 machine 이름과
-ssh 별칭이 다르면 설정 update.machines로 잇는다(기본: 로컬은 hostname, 원격은 별칭 그대로).
-CLI는 `switchboard`를 먼저 찾고 없을 때만 옛 이름 `agent-mail`을 쓴다. 둘 다 없거나 실패하면 그 표는 건너뛴다고만 찍는다.
+세션 플러그인(switchboard)은 이 마켓이 아니라 switchboard CLI 가 깐다. 그 판과 옛 판 세션은
+`switchboard plugin status`·`switchboard status`(세션마다 cli_version)가 말하므로 이 스크립트는 보지 않는다.
 
 설정: ~/.config/dev-kit/issue-track.json(환경변수 DEV_KIT_CONFIG로 바꾼다)의 update 절.
 예시는 이 스킬 폴더의 issue-track.example.json.
@@ -35,12 +35,11 @@ import os
 import re
 import shlex
 import shutil
-import socket
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
 LOCAL = "local"
 POSIX = "posix"
@@ -126,9 +125,6 @@ class Install(TypedDict):
 class UpdateConfig(TypedDict, total=False):
     marketplace: str
     hosts: list[str]
-    mail_profile: str
-    machines: dict[str, str]
-    session_plugin: str
     remote_claude: str
     shells: dict[str, str]
     skill_copy: str
@@ -153,13 +149,6 @@ def load_update_config(path: str) -> UpdateConfig:
     hosts = sect.get("hosts")
     if isinstance(hosts, list):
         cfg["hosts"] = [str(h) for h in hosts]
-    if isinstance(sect.get("mail_profile"), str):
-        cfg["mail_profile"] = str(sect["mail_profile"])
-    machines = sect.get("machines")
-    if isinstance(machines, dict):
-        cfg["machines"] = {str(k): str(v) for k, v in machines.items()}
-    if isinstance(sect.get("session_plugin"), str):
-        cfg["session_plugin"] = str(sect["session_plugin"])
     if isinstance(sect.get("remote_claude"), str) and sect["remote_claude"]:
         cfg["remote_claude"] = str(sect["remote_claude"])
     if isinstance(sect.get("skill_copy"), str) and sect["skill_copy"]:
@@ -244,6 +233,7 @@ class MachineReport:
     failed: dict[InstallKey, str]
     shell: str = POSIX
     latest: dict[str, str] = field(default_factory=dict)  # 플러그인 이름 -> 최신 판
+    gone: list[Install] = field(default_factory=list)  # 마켓에서 빠진 플러그인의 설치(갱신하지 않음)
 
     def stale(self) -> list[Install]:
         return [i for i in self.after if is_older(i["version"], self.latest.get(plugin_name(i), i["version"]))]
@@ -283,25 +273,42 @@ def read_json(run: Runner, host: str, path: str, shell: str) -> JSON:
     return data
 
 
-def market_latest(run: Runner, host: str, market: str, claude: str, shell: str,
-                  names: list[str]) -> dict[str, str]:
-    """그 기계의 마켓 클론에서 플러그인마다 최신 판. 못 읽은 이름은 빠진다."""
+def market_manifest(run: Runner, host: str, market: str, claude: str, shell: str) -> tuple[str, list[JSON]] | None:
+    """그 기계의 마켓 클론 폴더와 marketplace.json 의 plugins 항목. 못 읽으면 None."""
     r = run(host, [claude, "plugin", "marketplace", "list", "--json"], shell=shell)
     if r.code != 0:
-        return {}
+        return None
     try:
         markets: JSON = json.loads(r.out)
     except json.JSONDecodeError:
-        return {}
+        return None
     loc = next((str(m.get("installLocation") or "") for m in markets
                 if isinstance(m, dict) and m.get("name") == market), "") if isinstance(markets, list) else ""
     if not loc:
-        return {}
+        return None
     root = loc.rstrip("\\/")
     manifest = read_json(run, host, f"{root}/.claude-plugin/marketplace.json", shell)
     entries = manifest.get("plugins") if isinstance(manifest, dict) else None
     if not isinstance(entries, list):
+        return None
+    return root, entries
+
+
+def market_names(run: Runner, host: str, market: str, claude: str, shell: str) -> set[str] | None:
+    """마켓 클론에 있는 플러그인 이름. 못 읽으면 None(그때는 아무것도 건너뛰지 않는다)."""
+    m = market_manifest(run, host, market, claude, shell)
+    if m is None:
+        return None
+    return {str(e["name"]) for e in m[1] if isinstance(e, dict) and isinstance(e.get("name"), str)}
+
+
+def market_latest(run: Runner, host: str, market: str, claude: str, shell: str,
+                  names: list[str]) -> dict[str, str]:
+    """그 기계의 마켓 클론에서 플러그인마다 최신 판. 못 읽은 이름은 빠진다."""
+    m = market_manifest(run, host, market, claude, shell)
+    if m is None:
         return {}
+    root, entries = m
     out: dict[str, str] = {}
     for e in entries:
         if not isinstance(e, dict) or e.get("name") not in names:
@@ -329,6 +336,11 @@ def update_machine(run: Runner, host: str, market: str, remote_claude: str = "cl
     before = list_installs(run, host, market, claude, shell)
     if isinstance(before, str):
         return MachineReport(host, before, {}, [], {}, shell)
+    # 마켓에서 지운 플러그인의 설치(꺼진 옛 항목 등)는 갱신 명령을 보내지 않는다: 마켓에 없어 실패할 뿐이다.
+    known = market_names(run, host, market, claude, shell)
+    gone = [i for i in before if known is not None and plugin_name(i) not in known]
+    gone_keys = {ikey(i) for i in gone}
+    before = [i for i in before if ikey(i) not in gone_keys]
     failed: dict[InstallKey, str] = {}
     for i in before:
         argv = [claude, "plugin", "update", i["id"], "--scope", i["scope"]]
@@ -339,14 +351,15 @@ def update_machine(run: Runner, host: str, market: str, remote_claude: str = "cl
     old = {ikey(i): i["version"] for i in before}
     after = list_installs(run, host, market, claude, shell)
     if isinstance(after, str):
-        return MachineReport(host, after, old, [], failed, shell)
+        return MachineReport(host, after, old, [], failed, shell, gone=gone)
+    after = [i for i in after if ikey(i) not in gone_keys]
     names = sorted({plugin_name(i) for i in after})
     latest = market_latest(run, host, market, claude, shell, names)
     for i in after:  # 마켓 클론에서 못 읽은 플러그인은 이 기계에 깔린 가장 높은 판
         n = plugin_name(i)
         if n not in latest or is_older(latest[n], i["version"]):
             latest[n] = i["version"]
-    return MachineReport(host, None, old, after, failed, shell, latest)
+    return MachineReport(host, None, old, after, failed, shell, latest, gone)
 
 
 COPY_PLUGIN = "issue-track"
@@ -556,56 +569,26 @@ def render_table(reports: list[MachineReport]) -> str:
             notes.append(f"- {rep.host} {pid.rsplit('@', 1)[0]} ({where}): {msg}")
     if notes:
         out += ["", "실패:"] + notes
+    gone = [f"- {rep.host}: {gone_line(rep.gone)}" for rep in reports if rep.gone]
+    if gone:
+        out += ["", "마켓에 없어 건너뜀(설치 항목은 그대로):"] + gone
     return "\n".join(out)
 
 
-def parse_time(s: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+def gone_line(gone: list[Install]) -> str:
+    """마켓에서 빠진 설치를 플러그인마다 「이름 N곳(범위…)」으로."""
+    by: dict[str, list[str]] = {}
+    for i in gone:
+        by.setdefault(plugin_name(i), []).append(i["scope"])
+    parts = []
+    for name in sorted(by):
+        scopes = by[name]
+        kinds = ", ".join(f"{sc}×{scopes.count(sc)}" if scopes.count(sc) > 1 else sc for sc in sorted(set(scopes)))
+        parts.append(f"{name} {len(scopes)}곳({kinds})")
+    return ", ".join(parts)
 
 
-def stale_sessions(status_text: str, reports: list[MachineReport], machines: dict[str, str],
-                   plugin: str) -> list[str]:
-    """online이고 registered_at이 그 기계 plugin의 lastUpdated보다 이른 세션을 `역할 기계 폴더`로."""
-    data: JSON = json.loads(status_text)
-    sessions = data.get("sessions") if isinstance(data, dict) else data
-    if not isinstance(sessions, list):
-        return []
-    by_machine = {machines.get(r.host, r.host): r for r in reports if not r.error}
-    out: list[str] = []
-    for s in sessions:
-        if not isinstance(s, dict) or s.get("online") is not True:
-            continue
-        rep = by_machine.get(str(s.get("machine")))
-        reg = parse_time(str(s.get("registered_at") or ""))
-        if rep is None or reg is None:
-            continue
-        directory = str(s.get("directory") or "")
-        cands = [i for i in rep.after if i["id"].rsplit("@", 1)[0] == plugin]
-        local = [i for i in cands if i["projectPath"] and directory.startswith(i["projectPath"])]
-        user = [i for i in cands if i["scope"] in ("user", "managed")]
-        pick = (local or user or [None])[0]
-        upd = parse_time(pick["lastUpdated"]) if pick else None
-        if upd is not None and reg < upd:
-            out.append(f"{s.get('role')}  {s.get('machine')}  {directory}  (등록 {s.get('registered_at')})")
-    return out
-
-
-def mail_cli(which: Callable[[str], str | None] = shutil.which) -> str:
-    """메일함 CLI 이름: `switchboard`가 있으면 그것, 없을 때만 옛 이름 `agent-mail`(3단계에 제거).
-    둘 다 없으면 `switchboard`(실행이 실패해 표를 건너뛴다)."""
-    if which("switchboard"):
-        return "switchboard"
-    if which("agent-mail"):  # 옛 이름. 3단계에 제거
-        return "agent-mail"
-    return "switchboard"
-
-
-def main(argv: list[str] | None = None, run: Runner = run_cmd,
-         hostname: Callable[[], str] = socket.gethostname,
-         which: Callable[[str], str | None] = shutil.which) -> int:
+def main(argv: list[str] | None = None, run: Runner = run_cmd) -> int:
     for stream in (sys.stdout, sys.stderr):  # Windows 로캘(cp949)에서 한국어 출력이 깨지지 않게
         reconf = getattr(stream, "reconfigure", None)
         if reconf:
@@ -615,7 +598,7 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
     ap.add_argument("--marketplace", default=None)
     ap.add_argument("--hosts", default=None, help="쉼표로 나눈 ssh 별칭(설정보다 앞선다)")
     ap.add_argument("--local-only", action="store_true")
-    ap.add_argument("--no-sessions", action="store_true")
+    ap.add_argument("--no-sessions", action="store_true", help="무시한다(옛 판 세션 표는 없어졌다, 옛 호출용)")
     a = ap.parse_args(argv)
 
     cfg = load_update_config(a.config or config_path())
@@ -645,26 +628,6 @@ def main(argv: list[str] | None = None, run: Runner = run_cmd,
     copy_line = sync_local_copy(run, reports[0], cfg, market, datetime.now().strftime("%Y%m%d"))
     if copy_line:
         print("\n" + copy_line)
-
-    if not a.no_sessions:
-        machines = {LOCAL: hostname(), **cfg.get("machines", {})}
-        cli = mail_cli(which)
-        argv_s = [cli, "status", "--json"]
-        if cfg.get("mail_profile"):
-            argv_s = ["env", f"SWITCHBOARD_PROFILE={cfg['mail_profile']}",
-                      f"AGENT_MAIL_PROFILE={cfg['mail_profile']}", *argv_s]  # 뒤쪽은 옛 CLI용. 3단계에 제거
-        r = run(LOCAL, argv_s)
-        print()
-        try:
-            if r.code != 0:
-                raise ValueError(last_line(r))
-            old_sessions = stale_sessions(r.out, reports, machines, cfg.get("session_plugin", "switchboard"))
-        except (ValueError, json.JSONDecodeError) as e:
-            print(f"옛 판 세션: {cli} status를 못 읽어 건너뛴다({e})")
-        else:
-            print("옛 판으로 떠 있는 세션:" if old_sessions else "옛 판으로 떠 있는 세션: 없음")
-            for s in old_sessions:
-                print("  " + s)
 
     bad = bool(stale) or any(r.error or r.failed for r in reports)
     return 1 if bad else 0

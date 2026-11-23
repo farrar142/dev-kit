@@ -15,9 +15,6 @@
   "update": {
     "marketplace": "dev-kit",
     "hosts": ["remote-1", "remote-2"],
-    "mail_profile": "boss",
-    "machines": { "local": "laptop", "remote-1": "build-box" },
-    "session_plugin": "switchboard",
     "remote_claude": "claude",
     "shells": { "remote-2": "powershell" }
   }

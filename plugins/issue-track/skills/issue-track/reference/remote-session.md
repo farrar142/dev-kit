@@ -47,18 +47,15 @@
 ```bash
 python3 <스킬 폴더>/scripts/update-plugins.py            # 설정의 update 절대로. Windows는 python3 대신 py 런처: py <스킬 폴더>/scripts/update-plugins.py
 python3 <스킬 폴더>/scripts/update-plugins.py --local-only
-python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts remote-1,remote-2 --no-sessions
+python3 <스킬 폴더>/scripts/update-plugins.py --marketplace <마켓> --hosts remote-1,remote-2
 ```
 
-기계마다 셸 판별 → 마켓 갱신 → 그 마켓 플러그인을 설치된 모든 범위(user·project·local, local·project는 그 폴더에서)에서 갱신 → 범위별 판 표(기계·플러그인·범위·폴더·판·최신·상태; 최신은 그 기계 마켓 클론의 판), 그리고 「옛 판으로 떠 있는 세션」(online이고 switchboard를 마지막으로 갱신하기 전에 등록한 세션)을 찍는다. reload·재시작은 하지 않는다 — 표의 세션을 언제 다시 띄울지는 사람이 정한다. 종료 코드: 0 모든 설치가 최신 / 1 기계·갱신 명령 실패 또는 옛 판이 남은 설치 / 2 설정 오류. `update` 절 키:
+기계마다 셸 판별 → 마켓 갱신 → 그 마켓 플러그인을 설치된 모든 범위(user·project·local, local·project는 그 폴더에서)에서 갱신 → 범위별 판 표(기계·플러그인·범위·폴더·판·최신·상태; 최신은 그 기계 마켓 클론의 판)를 찍는다. 마켓 클론의 `marketplace.json` 에서 빠진 플러그인(마켓에서 지운 것)의 설치는 갱신하지 않고 표에서 빼며 「마켓에 없어 건너뜀」 아래 기계마다 한 줄로 알린다(설치 항목은 그대로 둔다). reload·재시작은 하지 않는다. 세션 플러그인(switchboard)은 이 마켓이 아니라 switchboard CLI 가 깔므로, 그 판과 옛 판으로 떠 있는 세션은 `switchboard plugin status`·`switchboard status`(세션마다 `cli_version`)로 본다. `--no-sessions` 는 옛 호출을 깨지 않으려고 받기만 한다. 종료 코드: 0 모든 설치가 최신 / 1 기계·갱신 명령 실패 또는 옛 판이 남은 설치 / 2 설정 오류. `update` 절 키:
 
 | 키 | 뜻 |
 |---|---|
 | `marketplace` | 갱신할 마켓 이름 |
 | `hosts` | 원격 기계 ssh 별칭 목록(`ssh <별칭> '<명령>'`이 비밀번호 없이 돼야 한다) |
-| `mail_profile` | `switchboard status`를 읽을 프로필 |
-| `machines` | ssh 별칭(로컬은 `local`) → switchboard가 보고하는 기계 이름. 없으면 별칭 그대로, 로컬은 hostname |
-| `session_plugin` | 옛 판 세션을 가를 플러그인(기본 `switchboard`) |
 | `remote_claude` | 원격 기계의 claude 실행 파일(기본 `claude`). posix 원격은 `PATH="$HOME/.local/bin:$PATH" <remote_claude> plugin …`으로 나간다(ssh 비대화형 셸 PATH 보완) |
 | `skill_copy` | 손으로 둔 스킬 복사본 폴더(기본 `~/.claude/skills/issue-track`). 폴더가 있으면 갱신 스크립트가 로컬에서 설치된 판의 스킬 폴더(문서·스크립트·시험)를 거기에 맞추고 `VERSION`을 적는다. 복사본에만 있는 파일은 지우지 않고 이름만 알린다. 그 기계에 issue-track 이 깔려 있지 않으면 로컬 마켓 클론의 플러그인 폴더를 원본으로 쓴다 |
 | `agent_copy` | 손으로 둔 에이전트 정의 폴더(기본 `~/.claude/agents`). 플러그인 `agents/` 와 같은 이름의 파일만 설치된 판(없으면 마켓 클론)으로 맞추고, 다르면 덮기 전에 `<이름>.md.bak-<날짜>` 사본을 남기고 복사본에만 있던 줄을 알린다. 없는 이름은 만들지 않는다 |

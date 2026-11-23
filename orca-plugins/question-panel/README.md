@@ -1,6 +1,6 @@
 # 질문 패널 (Orca 플러그인 0.7.2 — Claude Code switchboard 또는 question-panel 0.9.0 이상과 함께)
 
-Claude Code의 `switchboard`(`plugins/switchboard/`)·`question-panel`(`plugins/question-panel/`) 플러그인이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
+Claude Code의 `switchboard` 플러그인(switchboard 저장소 릴리스, 예전에는 이 저장소의 `switchboard`·`question-panel`)이 올린 객관식 질문을 **Orca 오른쪽 사이드바 「질문」 패널**에 카드로 띄우고, 사용자가 고른 답을 **질문한 Claude의 터미널에 한 줄로 넣고 Enter**를 누른다. Claude는 질문을 올린 뒤 턴을 끝내고 기다리지 않는다(비블로킹).
 
 **0.4.0부터 Orca 채팅 UI 세션도 된다.** 채팅 세션의 질문은 Claude Code question-panel MCP 서버(0.6.1+)가 집 폴더 `~/.question-panel/orca-inbox`에 남기고, 이 플러그인이 읽어 카드로 띄운다. 답은 그 세션의 **오케스트레이션 메일함**으로 보낸다(Run에 묶였으면 `run:<run_id>`, 아니면 `orca_session_id:<세션 ID>`). 카드에 전달 경로(「터미널」·「메일함 run:run_xxxx」)가 보인다. 아래 「채팅 세션(0.4.0)」.
 
@@ -238,7 +238,6 @@ mod: 대기 묶음이 있으면 2초마다 sync(keys) ─▶ 장부 ◀─ 1.5�
 
 ```sh
 orca plugin test orca-plugins/question-panel --json    # 시험 67건(0.6.0; 2026-11-17 이 기계에서는 Orca 시험 하네스가 없어 못 돌림)
-node --test plugins/question-panel/mcp                 # Claude Code 쪽 MCP 서버(폴더에 남기기·resolve·장부 sync·stdio 포함) 17건
 # orca CLI 가 orcad-artifacts 의 orca-test-register.mjs 를 못 찾으면(리눅스 설치에서 봄) node 로 바로:
 # node --import <Orca 설치>/resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test src/*.test.ts* worker/*.test.ts
 orca plugin check orca-plugins/question-panel --json
@@ -252,5 +251,5 @@ npx tsc -p orca-plugins/question-panel                 # 먼저 orca plugin type
 - `src/protocol.ts` — 패널 ↔ 워커 요청(`qp.answer`(0.4.4부터 `texts`)·`qp.refresh`·`qp.remove`·`qp.undoRemove`·`qp.clearSent`·`qp.clearClosed`)
 - `src/panel.tsx` — 질문 카드(하나만: RadioGroup, 여럿: Checkbox, 둘 다 「기타」+Textarea)
 - `worker/main.ts` — 훅·폴더로 저장, 답을 터미널에 넣거나 메일함으로 보내기
-- Claude Code 쪽: `plugins/question-panel/mcp/ask.mjs`(`toOrca`: 채팅 세션 판정·질문 파일 모양·안내 한 줄)·`mcp/orca.mjs`(진짜 폴더 쓰기·`run-current`)
+- Claude Code 쪽(switchboard 저장소의 세션 플러그인): `mcp/ask.mjs`(`toOrca`: 채팅 세션 판정·질문 파일 모양·안내 한 줄)·`mcp/orca.mjs`(진짜 폴더 쓰기·`run-current`)
 - `worker/io.ts`·`worker/node-io.ts` — 폴더 읽기·닫힘 장부(배타 생성·읽기·거두기, 0.5.0)·`orca` CLI 실행(시험은 가짜 io), `worker/node.d.ts` — 쓰는 Node API만 적은 타입
