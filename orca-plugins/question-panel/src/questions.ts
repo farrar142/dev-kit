@@ -708,7 +708,7 @@ export const parseSendResult = (
 // ── 닫힘 장부(0.5.0, question-panel 0.9.0 과 같은 계약) ─────────────────────────
 // 집 폴더 `~/.question-panel/ledger/<key>.json`. 닫힌 묶음마다 파일 하나를 배타 생성(O_EXCL)으로 만든다.
 // 없으면 대기, 있으면 닫힘. Claude Code 패널(mod, MCP 서버 sync 도구)과 이 플러그인이 둘 다 보내기 전에
-// 먼저 만들어 보고, 이긴 쪽만 세션에 답을 보낸다. 모양은 plugins/question-panel/mcp/ask.mjs 의 ledgerRecord.
+// 먼저 만들어 보고, 이긴 쪽만 세션에 답을 보낸다. 모양은 Claude Code 쪽 세션 플러그인(switchboard 저장소) mcp/ask.mjs 의 ledgerRecord.
 
 /** 닫힘 장부 폴더(집 폴더 아래). */
 export const LEDGER_DIR_PARTS = ['.question-panel', 'ledger']

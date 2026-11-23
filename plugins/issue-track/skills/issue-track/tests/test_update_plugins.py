@@ -82,19 +82,14 @@ def row(out, *cells):
     raise AssertionError(f"{cells} 줄 없음:\n{out}")
 
 
-def only(*names):
-    """shutil.which 대역: names에 든 실행 파일만 있다."""
-    return lambda n: f"/opt/bin/{n}" if n in names else None
-
-
-def run_main(fake, args, config=None, hostname="box-local", which=only("switchboard")):
+def run_main(fake, args, config=None):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "c.json")
         with open(path, "w") as f:
             json.dump(config or {}, f)
         buf = io.StringIO()
         with redirect_stdout(buf), mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": d}):
-            code = up.main(["--config", path, *args], run=fake, hostname=lambda: hostname, which=which)
+            code = up.main(["--config", path, *args], run=fake)
         return code, buf.getvalue()
 
 
@@ -249,60 +244,37 @@ class UpdatePlugins(unittest.TestCase):
         code, _ = run_main(FakeMachines({}, LATEST), ["--local-only"])
         self.assertEqual(code, 2)
 
-    def test_stale_sessions_registered_before_switchboard_update(self):
-        fake = FakeMachines({
-            "local": [inst("switchboard@kit", "0.8.0")],
-            "remote-1": [inst("switchboard@kit", "0.8.0")],
-        }, LATEST, status={"sessions": [
-            {"role": "myorg/boss", "machine": "box-local", "directory": "/w/a", "online": True,
-             "registered_at": "2026-01-15T00:00:00Z"},
-            {"role": "app/worker-1", "machine": "build-box", "directory": "/w/b", "online": True,
-             "registered_at": "2026-03-01T00:00:00Z"},
-            {"role": "app/worker-2", "machine": "build-box", "directory": "/w/c", "online": False,
-             "registered_at": "2026-01-15T00:00:00Z"},
-            {"role": "app/coordinator", "machine": "build-box", "directory": "/w/d", "online": True,
-             "registered_at": "2026-01-20T00:00:00Z"},
-            {"role": "x/elsewhere", "machine": "unknown", "directory": "/w/e", "online": True,
-             "registered_at": "2026-01-01T00:00:00Z"},
-        ]})
-        cfg = {"update": {"marketplace": "kit", "hosts": ["remote-1"], "mail_profile": "boss",
-                          "machines": {"remote-1": "build-box"}}}
-        code, out = run_main(fake, [], cfg)
-        self.assertEqual(code, 0)
-        stale = out.split("옛 판으로 떠 있는 세션:")[1]
-        self.assertIn("myorg/boss", stale)
-        self.assertIn("app/coordinator", stale)
-        for role in ("app/worker-1", "app/worker-2", "x/elsewhere"):
-            self.assertNotIn(role, stale)
-        self.assertIn(("local", ("env", "SWITCHBOARD_PROFILE=boss", "AGENT_MAIL_PROFILE=boss", "switchboard", "status", "--json"), None),
-                      fake.calls)
-
-    def test_stale_check_prefers_local_scope_install_for_its_folder(self):
+    def test_installs_missing_from_market_are_skipped_with_one_line(self):
+        # 마켓에서 지운 플러그인(꺼진 옛 설치)은 갱신 명령을 보내지 않고 표에서 빼며, 기계마다 한 줄로 알린다.
         fake = FakeMachines({"local": [
-            inst("switchboard@kit", "0.9.0", updated="2026-02-01T00:00:00Z"),
-            inst("switchboard@kit", "0.8.0", updated="2025-12-01T00:00:00Z", scope="local", project="/w/old"),
-        ]}, {"switchboard@kit": ("0.9.0", "2026-02-01T00:00:00Z")}, status={"sessions": [
-            {"role": "a/r", "machine": "box-local", "directory": "/w/old/sub", "online": True,
-             "registered_at": "2026-01-01T00:00:00Z"},
-        ]})
-        # local 설치 갱신이 실패해 옛 lastUpdated가 남으면 그 폴더 세션은 옛 판이 아니다(같은 판을 쓰고 있다).
-        fake.fail.add(("local", "switchboard@kit"))
-        _, out = run_main(fake, ["--marketplace", "kit", "--local-only"])
-        self.assertIn("옛 판으로 떠 있는 세션: 없음", out)
-
-    def test_mail_cli_missing_skips_session_table(self):
-        fake = FakeMachines({"local": [inst("issue-track@kit", "0.8.0")]}, LATEST)
-        code, out = run_main(fake, ["--marketplace", "kit", "--local-only"], which=only())
+            inst("issue-track@kit", "0.8.0"),
+            inst("old-panel@kit", "0.5.0"),
+            inst("old-panel@kit", "0.4.0", scope="local", project="/w/a"),
+            inst("old-panel@kit", "0.4.0", scope="local", project="/w/b"),
+        ]}, LATEST, markets={"local": "/m/kit"},
+            files={("local", "/m/kit/.claude-plugin/marketplace.json"):
+                   json.dumps({"plugins": [{"name": "issue-track", "version": "0.8.0"}]})})
+        code, out = run_main(fake, ["--marketplace", "kit", "--local-only"])
         self.assertEqual(code, 0)
-        self.assertIn("옛 판 세션: switchboard status를 못 읽어 건너뛴다(switchboard: not found)", out)
+        updates = [c[1] for c in fake.calls if c[1][:3] == ("claude", "plugin", "update")]
+        self.assertEqual(updates, [("claude", "plugin", "update", "issue-track@kit", "--scope", "user")])
+        self.assertNotIn("old-panel  user", out.split("마켓에 없어")[0])
+        self.assertIn("- local: old-panel 3곳(local×2, user)", out)
+        self.assertNotIn("옛 판으로 떠 있는 세션", out)
 
-    def test_mail_cli_prefers_switchboard_then_old_name(self):
-        self.assertEqual(up.mail_cli(only("switchboard", "agent-mail")), "switchboard")
-        self.assertEqual(up.mail_cli(only("agent-mail")), "agent-mail")
-        self.assertEqual(up.mail_cli(only()), "switchboard")
-        fake = FakeMachines({"local": [inst("issue-track@kit", "0.8.0")]}, LATEST, status={"sessions": []})
-        run_main(fake, ["--marketplace", "kit", "--local-only"], which=only("agent-mail"))
-        self.assertIn(("local", ("agent-mail", "status", "--json"), None), fake.calls)
+    def test_unreadable_market_clone_skips_nothing(self):
+        fake = FakeMachines({"local": [inst("switchboard@kit", "0.8.0")]}, LATEST)
+        code, out = run_main(fake, ["--marketplace", "kit", "--local-only", "--no-sessions"])
+        self.assertEqual(code, 0)
+        self.assertIn(("local", ("claude", "plugin", "update", "switchboard@kit", "--scope", "user"), None), fake.calls)
+        self.assertNotIn("마켓에 없어", out)
+
+    def test_old_session_options_in_config_are_ignored(self):
+        fake = FakeMachines({"local": [inst("issue-track@kit", "0.8.0")]}, LATEST)
+        cfg = {"update": {"marketplace": "kit", "mail_profile": "x", "machines": {"local": "y"}, "session_plugin": "z"}}
+        code, out = run_main(fake, ["--local-only"], cfg)
+        self.assertEqual(code, 0)
+        self.assertFalse(any("status" in c[1] for c in fake.calls))
 
     def test_remote_command_goes_through_ssh_with_cd(self):
         calls = []
