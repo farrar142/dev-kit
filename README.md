@@ -21,7 +21,7 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 
 | 플러그인 | 판 | 종류 | 하는 일 |
 |---|---|---|---|
-| [issue-track](#issue-track) | 0.17.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
+| [issue-track](#issue-track) | 0.18.0 | 스킬·에이전트·스크립트·훅 | GitHub 이슈를 작업자에게 맡기는 조율자 |
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
 | [token-diet](#token-diet) | 0.1.0 | 훅 2·스킬 | 큰 파일 읽기·큰 heredoc 막기, 작업자 토큰 규율 |
 | [context-cap](#context-cap) | 0.2.3 | 훅 | 세션 컨텍스트 상한 |
@@ -48,7 +48,7 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
 | `update-plugins.py` | 위 「설치와 갱신」 |
 | `worker-stats.py [agentId…]` | 작업자·심부름꾼의 턴·입력 토큰·최대 컨텍스트 |
 
-- 참고(`reference/`): `parallel-runs.md`(체인 병렬 함정), `remote-session.md`(원격 세션에 맡기기), `switchboard.md`(작업자 보고 경로).
+- 참고(`reference/`): `parallel-runs.md`(체인 병렬 함정), `remote-session.md`(원격 세션에 맡기기), `orca-worker.md`(Orca 워커 띄우기·보고, 기본 길), `switchboard.md`(옛 길).
 - `wait-ci.py`(0.11.0): 병합 대기열에 있는 PR은 검사가 초록이어도 병합될 때까지 기다리고, 병합 없이 대기열에서 빠져 OPEN으로 남으면 `DEQUEUED`(종료 코드 6)로 끝내 대기열 실행(`merge_group`)의 실패 줄을 덧붙인다. 대기열이 없는 저장소는 그대로.
 - 훅 `detach-guard`(PreToolUse·Bash, 0.10.0): 셸 `&`로 떼어 띄운 명령은 끝나도 세션에 알림이 오지 않아 작업자가 멈춘다. 이를 거절하고 「`&` 없이 `run_in_background: true`로 띄워라」고 안내한다.
   - 거절: 같은 명령 안에서 `wait`로 거두지 않은 `&`(`( … ) & sleep 1`). `wait-ci.py`·`wait-deploy.py`를 `&`·`nohup`·`setsid`·`disown`으로 띄우는 꼴은 `run_in_background: true` 호출 안에서도 거절.
@@ -57,6 +57,7 @@ Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/RE
 - `wait-ci.py`(0.12.1): push 직후 GitHub가 새 head를 반영하기 전에 옛 head의 검사 결과로 끝나지 않는다. `--sha <기대 head>`(없으면 작업 폴더가 그 PR의 브랜치일 때 로컬 HEAD)와 PR head가 다르면 결과를 읽지 않고 기다린다. 기대를 알 수 없으면 맞춰 보지 않아 옵션 없이 부르던 쓰임은 그대로다.
 - 스킬 복사본 맞추기(0.13.0): `~/.claude/skills/issue-track` 같은 손 복사본은 플러그인 갱신이 닿지 않아 낡아졌다. `update-plugins.py`가 로컬에 그 폴더가 있으면 설치된 판의 스킬 폴더를 통째로 맞추고(복사본에만 있는 파일은 지우지 않고 이름을 알림) `VERSION`을 적는다. `wait-ci.py`·`wait-deploy.py`는 불릴 때 자기 판이 설치된 플러그인 판보다 옛것이면 표준 오류에 한 줄 경고한다.
 - 에이전트 손 복사본 맞추기(0.15.0): 작업자를 띄울 때 플러그인이 아니라 `~/.claude/agents/<이름>.md` 손 복사본이 읽히는 기계가 있다. `update-plugins.py`가 그 폴더의 플러그인 에이전트와 같은 이름 파일을 설치된 판으로 맞추고, 다르면 덮기 전에 `<이름>.md.bak-<날짜>` 사본을 남기고 복사본에만 있던 줄을 찍는다. issue-track 이 깔리지 않은 기계에서는 스킬·에이전트 손 복사본 모두 로컬 마켓 클론을 원본으로 맞춘다(설정 키 `agent_copy`).
+- 작업자 보고 길 Orca 워커로(0.18.0): 기본 길이 `orca orchestration worker-start --spec-file`(지시서)·`send --type status`(PR 열림)·`worker_done --outcome succeeded|failed`(끝)이고 조율자 확인은 `worker-list`·`worker-read`. Orca 워커는 `--agent issue-worker`로 뜨지 않으므로 지시서에 「issue-track 순서대로」를 적고 워커는 그대로 따른다. switchboard 메일 길은 `reference/switchboard.md`·`remote-session.md` 「옛 길」로 내려갔다(switchboard 남은 조율자용).
 - 마켓에서 빠진 플러그인(0.17.0): `update-plugins.py`는 마켓 클론의 `marketplace.json`에 없는 플러그인의 설치(꺼진 옛 항목 등)에 갱신 명령을 보내지 않고 표에서 빼며, 기계마다 「마켓에 없어 건너뜀」 한 줄로 알린다. 설치 항목은 건드리지 않는다. 「옛 판으로 떠 있는 세션」 표는 뺐다: 세션 플러그인은 switchboard CLI 가 깔고 `switchboard plugin status`·`switchboard status`가 판을 말한다(`--no-sessions`는 받기만 한다).
 - issue-worker 사슬 모드(0.14.0): 지시서가 이슈 여럿(차례 포함)과 공용 브랜치를 주면 이슈 사이에 PR·CI 대기 없이 차례로 구현하고 이슈마다 커밋을 따로 둔다(꼬리말에 이슈 번호, 기본 `Refs: #<번호>`). 합치는 방법과 PR 을 여는 때는 저장소 문서·지시서를 따르고, 정한 것이 없으면 끝에 PR 하나. 다시 시작하면 공용 브랜치의 꼬리말로 끝난 이슈를 세어 잇고, 끝 PR 의 검사가 사슬 커밋 탓에 붉으면 그 PR 에서 고친다. 둘 중 하나라도 없으면 기본 절차 그대로다.
 - 훅 `kill-guard`(PreToolUse·Bash, 0.12.0): 패턴으로 프로세스를 죽이는 명령은 같은 기계의 다른 세션·작업의 프로세스에도 걸려 거절한다. 띄울 때 `$!`로 PID를 받아 두고 그 PID로 죽이거나, `pgrep -af <패턴>`으로 먼저 보고 PID를 골라 `kill <PID>` 하라고 안내한다.

@@ -1,6 +1,6 @@
 # 원격 세션에 한 건 맡기기
 
-「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 지시와 보고는 메일로 오간다 — 주소·프로필 규칙은 [switchboard.md](switchboard.md).
+「이 저장소에 이것 고쳐 줘」 한 건을 다른 기계(Orca 원격 환경)의 작업자 세션에 넘기고 보고만 받는 절차다. 작업자는 그 기계의 최상위 Claude 세션이라 `SendMessage`가 닿지 않는다. 기본 길은 Orca 워커다 — 지시서는 `worker-start`, 보고는 `orchestration send`·`worker_done`(규칙은 [orca-worker.md](orca-worker.md)). switchboard 조율자가 남은 곳은 아래 「옛 길」 절차를 쓴다(주소·프로필 규칙은 [switchboard.md](switchboard.md)).
 
 ## 설정
 
@@ -18,27 +18,37 @@
 ## 절차
 
 1. **이슈** — `gh issue create -R <owner/name> --title … --body-file …`. 본문에 바라는 것과 받아들임 기준. 이미 이슈가 있으면 그 번호를 쓴다. 지시서는 이슈 번호를 가리키고 본문을 되풀이하지 않는다.
-2. **작업자 세션** — Orca CLI로 원격 환경에 띄운다(Orca 실행 파일 고르기는 `orca-cli` 스킬; Linux에서 Orca 터미널 밖이면 `orca-ide`).
+2. **지시서** — [SKILL.md](../SKILL.md) 「2. 지시서」 틀로 파일에 쓴다. 첫머리에 「이 지시서는 issue-track 순서대로 진행한다」를 적고, 끝에 보고 길을 박는다: **「PR을 열면 `orca orchestration send --type status`로 한 통, 끝나면(병합·정리 뒤, 막혀 멈출 때도) `worker_done`(--outcome succeeded|failed, 본문은 PR 번호·병합 SHA·시험·남은 것 다섯 줄).」** 터미널 핸들·서버 주소·토큰은 적지 않는다.
+3. **작업자 띄우기** — 원격 환경이면 `--on <environment>`(설정 `environment`).
+   ```bash
+   orca orchestration worker-start --spec-file <지시서 파일> --worktree path:<folder> \
+     --agent claude --model <model> --task-title '<저장소>#<이슈> <제목>' --on <environment> --json
+   ```
+   응답의 task ID·dispatch ID를 적어 둔다 — 확인·닫기에만 쓴다. 지시서에는 넣지 않는다(워커 프리앰블이 알려 준다).
+4. **착수 확인** — 몇 분 뒤 `orca orchestration worker-list`로 그 워커가 active인지, `worker-read --dispatch <D>`로 화면 꼬리를 한 번 본다(권한 창·로그인이 흔하다). 그 뒤의 기다림은 화면 폴링이 아니라 메일(`worker_done`·`status`)이 조율자에게 들어오는 것을 기다린다.
+5. **보고가 오면** — 읽고 결과를 확인한다(PR 병합·이슈 닫힘을 `gh`로 직접). 끝난 보고면 워커는 `--keep-open`이 아닌 한 스스로 닫힌다; 남았으면 `orca terminal close`로 닫는다. 그 일이 플러그인 새 판이었으면 사용자에게 갱신 스크립트를 안내한다(아래).
+
+한 건이 완료 기준이다: 이슈 닫힘, PR 병합 확인, 작업자 세션 닫힘, `worker_done` 수신.
+
+### 옛 길(switchboard 남은 조율자용)
+
+작업자 세션을 최상위 터미널로 띄우고 지시서를 switchboard 메일로 보낸다. 설정 키 `my_mail_profile`·`report_to`·`repos.<owner/name>.worker_role`·`worker_profile`을 쓴다.
+
+1. 작업자 세션:
    ```bash
    orca terminal create --environment <environment> --worktree path:<folder> --title '<저장소>#<이슈>' \
      --command 'cd <folder> && SWITCHBOARD_PROFILE=<worker_profile> claude --model <model> --name "<저장소>#<이슈> <제목>"' --json
    orca terminal wait --environment <environment> --terminal <handle> --for tui-idle --timeout-ms 120000 --json
    ```
-   응답의 터미널 `handle`(`term_…`)을 적어 둔다 — 닫을 때만 쓴다. 지시서에는 넣지 않는다. switchboard 플러그인이 켜진 세션은 `SWITCHBOARD_PROFILE`의 역할로 메일을 구독하므로 tui-idle이면 받을 준비가 된 것이다.
-3. **지시서** — 파일로 써서 메일로 보낸다. 작업자 세션은 switchboard가 메일로 깨운다.
+   터미널 `handle`(`term_…`)은 닫을 때만 쓴다. 지시서에는 넣지 않는다.
+2. 지시서 메일:
    ```bash
    SWITCHBOARD_PROFILE=<my_mail_profile> switchboard send --to <worker_role> --task <저장소>-<이슈> \
      --subject '[<저장소>-<이슈>] <제목>' --body-file <지시서 파일>
    ```
-   지시서는 [SKILL.md](../SKILL.md) 「2. 지시서」 틀을 따르고, 끝에 보고 길을 박는다: **「PR을 열면 한 통, 끝나면(병합·정리 뒤, 막혀 멈출 때도) 이 메일에 `switchboard reply <ID>`로 보고하고 `complete <ID>`. 보고에는 PR 번호·병합 SHA·시험·남은 것.」**
-4. **착수 확인** — 몇 분 뒤 `SWITCHBOARD_PROFILE=<my_mail_profile> switchboard outbox`에서 그 메일이 pending → read로 바뀌었는지 본다. 10분 넘게 pending이면 `orca terminal read --environment <environment> --terminal <handle> --json`으로 화면 꼬리를 한 번 읽는다(권한 창·로그인·메일 구독 실패가 흔하다). 그 뒤의 기다림은 [switchboard.md](switchboard.md) 「조율자: 받기」 — 화면 폴링이 아니라 메일 대기.
-5. **보고가 오면** — 읽고 결과를 확인한다(PR 병합·이슈 닫힘을 `gh`로 직접). 끝난 보고면 세션을 닫는다.
-   ```bash
-   orca terminal close --environment <environment> --terminal <handle> --tab --json
-   ```
-   그 일이 플러그인 새 판이었으면 사용자에게 갱신 스크립트를 안내한다(아래).
-
-한 건이 완료 기준이다: 이슈 닫힘, PR 병합 확인, 작업자 세션 닫힘, 보고 메일 `complete`.
+   끝에 「PR을 열면 한 통, 끝나면 이 메일에 `switchboard reply <ID>`로 보고하고 `complete <ID>`」를 박는다.
+3. 착수 확인: `switchboard outbox`에서 pending → read. 10분 넘게 pending이면 `orca terminal read … --json`으로 화면 꼬리를 한 번 읽는다. 기다림은 [switchboard.md](switchboard.md) 「조율자: 받기」.
+4. 끝나면 `orca terminal close --environment <environment> --terminal <handle> --tab --json`. 완료 기준에는 보고 메일 `complete`가 들어간다.
 
 ## 플러그인 갱신 스크립트
 
