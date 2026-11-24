@@ -1,4 +1,6 @@
-# switchboard 메일함: 다른 터미널 작업자의 보고 경로
+# switchboard 메일함: 다른 터미널 작업자의 보고 경로 (옛 길)
+
+> **옛 길 — switchboard 조율자가 남은 곳에서만 쓴다.** 기본 길은 Orca 워커([orca-worker.md](orca-worker.md)). switchboard 는 단계적으로 걷어내는 중이라 조율자가 옮겨 가면 이 문서도 지운다.
 
 조율자가 **다른 터미널·다른 기계**의 작업자(최상위 세션)를 띄울 때 보고가 오가는 길이다. 같은 세션의 서브에이전트(`SendMessage`)에는 해당 없다. 예전에는 Orca orchestration 메일함(`orca orchestration send`, `run:<run_id>` 주소)을 썼는데, 터미널 핸들·Run 주소를 지시서에 박았다가 세션을 다시 열 때마다 보고가 끊겨 **switchboard 메일함**(CLI `switchboard`)으로 바꿨다. 옛 명령은 쓰지 않는다.
 
