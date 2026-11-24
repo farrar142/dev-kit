@@ -1,4 +1,4 @@
-"""update-plugins.py 단위 시험. ssh·claude·switchboard 실행을 가짜 Runner로 바꿔 끼운다.
+"""update-plugins.py 단위 시험. ssh·claude 실행을 가짜 Runner로 바꿔 끼운다.
 
     python3 -m unittest discover -s plugins/issue-track/skills/issue-track/tests
 """
@@ -94,7 +94,7 @@ def run_main(fake, args, config=None):
 
 
 LATEST = {"issue-track@kit": ("0.8.0", "2026-02-01T00:00:00Z"),
-          "switchboard@kit": ("0.9.0", "2026-02-01T00:00:00Z")}
+          "sample-plugin@kit": ("0.9.0", "2026-02-01T00:00:00Z")}
 
 
 def write(root, rel, text):
@@ -193,7 +193,7 @@ class AgentCopy(unittest.TestCase):
             copy, agents = os.path.join(t, "copy"), os.path.join(t, "agents")
             write(copy, "SKILL.md", "v1")
             write(agents, "issue-worker.md", "v1 agent")
-            fake = FakeMachines({"local": [inst("switchboard@kit", "0.9.0")]}, LATEST, markets={"local": clone})
+            fake = FakeMachines({"local": [inst("sample-plugin@kit", "0.9.0")]}, LATEST, markets={"local": clone})
             code, out = run_main(fake, ["--local-only", "--no-sessions"],
                                  {"update": {"marketplace": "kit", "skill_copy": copy, "agent_copy": agents}})
             self.assertEqual(open(os.path.join(copy, "SKILL.md")).read(), "v9")
@@ -207,23 +207,23 @@ class UpdatePlugins(unittest.TestCase):
     def test_updates_every_machine_and_prints_version_table(self):
         fake = FakeMachines({
             "local": [inst("issue-track@kit", "0.7.0"), inst("other@else", "1.0.0")],
-            "remote-1": [inst("issue-track@kit", "0.8.0"), inst("switchboard@kit", "0.8.0")],
+            "remote-1": [inst("issue-track@kit", "0.8.0"), inst("sample-plugin@kit", "0.8.0")],
         }, LATEST)
         code, out = run_main(fake, ["--hosts", "remote-1", "--no-sessions"], {"update": {"marketplace": "kit"}})
         self.assertEqual(code, 0)
         self.assertIn(("remote-1", ("claude", "plugin", "marketplace", "update", "kit"), None), fake.calls)
         self.assertEqual(row(out, "local", "issue-track"), ["local", "issue-track", "user", "-", "0.7.0→0.8.0", "0.8.0", "최신"])
         self.assertEqual(row(out, "remote-1", "issue-track"), ["remote-1", "issue-track", "user", "-", "0.8.0", "0.8.0", "최신"])
-        self.assertEqual(row(out, "remote-1", "switchboard"), ["remote-1", "switchboard", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
+        self.assertEqual(row(out, "remote-1", "sample-plugin"), ["remote-1", "sample-plugin", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
         self.assertNotIn("other", out)  # 다른 마켓 플러그인은 건드리지 않는다
 
     def test_local_scope_update_runs_in_project_folder_with_scope_flag(self):
-        fake = FakeMachines({"local": [inst("switchboard@kit", "0.8.0", scope="local", project="/w/app")]}, LATEST)
+        fake = FakeMachines({"local": [inst("sample-plugin@kit", "0.8.0", scope="local", project="/w/app")]}, LATEST)
         code, out = run_main(fake, ["--marketplace", "kit", "--local-only", "--no-sessions"])
         self.assertEqual(code, 0)
-        self.assertIn(("local", ("claude", "plugin", "update", "switchboard@kit", "--scope", "local"), "/w/app"),
+        self.assertIn(("local", ("claude", "plugin", "update", "sample-plugin@kit", "--scope", "local"), "/w/app"),
                       fake.calls)
-        self.assertEqual(row(out, "local", "switchboard"), ["local", "switchboard", "local", "app", "0.8.0→0.9.0", "0.9.0", "최신"])
+        self.assertEqual(row(out, "local", "sample-plugin"), ["local", "sample-plugin", "local", "app", "0.8.0→0.9.0", "0.9.0", "최신"])
 
     def test_one_machine_failing_does_not_stop_others(self):
         fake = FakeMachines({
@@ -263,10 +263,10 @@ class UpdatePlugins(unittest.TestCase):
         self.assertNotIn("옛 판으로 떠 있는 세션", out)
 
     def test_unreadable_market_clone_skips_nothing(self):
-        fake = FakeMachines({"local": [inst("switchboard@kit", "0.8.0")]}, LATEST)
+        fake = FakeMachines({"local": [inst("sample-plugin@kit", "0.8.0")]}, LATEST)
         code, out = run_main(fake, ["--marketplace", "kit", "--local-only", "--no-sessions"])
         self.assertEqual(code, 0)
-        self.assertIn(("local", ("claude", "plugin", "update", "switchboard@kit", "--scope", "user"), None), fake.calls)
+        self.assertIn(("local", ("claude", "plugin", "update", "sample-plugin@kit", "--scope", "user"), None), fake.calls)
         self.assertNotIn("마켓에 없어", out)
 
     def test_old_session_options_in_config_are_ignored(self):
@@ -347,7 +347,7 @@ class UpdatePlugins(unittest.TestCase):
         orig = up.subprocess.run
         up.subprocess.run = lambda argv, **kw: calls.append(argv) or P()
         try:
-            up.run_cmd("win", ["claude", "plugin", "update", "switchboard@kit", "--scope", "local"],
+            up.run_cmd("win", ["claude", "plugin", "update", "sample-plugin@kit", "--scope", "local"],
                        "C:\\work\\it's proj", shell=up.POWERSHELL)
             up.run_cmd("win", ["claude", "plugin", "list", "--json"], shell=up.POWERSHELL)
             up.run_cmd("win", ["C:\\Program Files\\claude.exe", "plugin", "list"], shell=up.POWERSHELL)
@@ -355,14 +355,14 @@ class UpdatePlugins(unittest.TestCase):
             up.subprocess.run = orig
         self.assertEqual(calls[0][:4], ["ssh", "-o", "BatchMode=yes", "win"])
         self.assertEqual(calls[0][-1], "Set-Location -LiteralPath 'C:\\work\\it''s proj' -ErrorAction Stop; "
-                                       "claude plugin update switchboard@kit --scope local; exit $LASTEXITCODE")
+                                       "claude plugin update sample-plugin@kit --scope local; exit $LASTEXITCODE")
         self.assertEqual(calls[1][-1], "claude plugin list --json; exit $LASTEXITCODE")
         self.assertEqual(calls[2][-1], "& 'C:\\Program Files\\claude.exe' plugin list; exit $LASTEXITCODE")
         self.assertNotIn("PATH=", "".join(c[-1] for c in calls))
 
     def test_shell_from_config_skips_probe_and_probe_detects_powershell(self):
-        machines = {"local": [], "win": [inst("switchboard@kit", "0.8.0")],
-                    "ps-auto": [inst("switchboard@kit", "0.8.0")], "linux": [inst("switchboard@kit", "0.8.0")]}
+        machines = {"local": [], "win": [inst("sample-plugin@kit", "0.8.0")],
+                    "ps-auto": [inst("sample-plugin@kit", "0.8.0")], "linux": [inst("sample-plugin@kit", "0.8.0")]}
         fake = FakeMachines(machines, LATEST, ps_hosts={"ps-auto"})
         code, _ = run_main(fake, ["--hosts", "win,ps-auto,linux", "--no-sessions"],
                            {"update": {"marketplace": "kit", "shells": {"win": "powershell"}}})
@@ -375,46 +375,46 @@ class UpdatePlugins(unittest.TestCase):
 
     def test_windows_local_scope_updates_in_its_folder_and_every_scope_is_listed(self):
         fake = FakeMachines({"local": [], "win": [
-            inst("switchboard@kit", "0.8.0"),
-            inst("switchboard@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
+            inst("sample-plugin@kit", "0.8.0"),
+            inst("sample-plugin@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
         ]}, LATEST, ps_hosts={"win"})
         code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
         self.assertEqual(code, 0)
-        self.assertIn(("win", ("claude", "plugin", "update", "switchboard@kit", "--scope", "local"), "C:\\work\\proj"),
+        self.assertIn(("win", ("claude", "plugin", "update", "sample-plugin@kit", "--scope", "local"), "C:\\work\\proj"),
                       fake.calls)
-        self.assertIn(("win", ("claude", "plugin", "update", "switchboard@kit", "--scope", "user"), None), fake.calls)
-        self.assertEqual(row(out, "win", "switchboard", "user"), ["win", "switchboard", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
-        self.assertEqual(row(out, "win", "switchboard", "local"), ["win", "switchboard", "local", "proj", "0.8.0→0.9.0", "0.9.0", "최신"])
+        self.assertIn(("win", ("claude", "plugin", "update", "sample-plugin@kit", "--scope", "user"), None), fake.calls)
+        self.assertEqual(row(out, "win", "sample-plugin", "user"), ["win", "sample-plugin", "user", "-", "0.8.0→0.9.0", "0.9.0", "최신"])
+        self.assertEqual(row(out, "win", "sample-plugin", "local"), ["win", "sample-plugin", "local", "proj", "0.8.0→0.9.0", "0.9.0", "최신"])
 
     def test_older_than_market_clone_fails_with_code_1(self):
         # 갱신 명령은 성공했지만 local 범위가 마켓 클론의 판(plugin.json)보다 옛 판으로 남는다.
         clone = "C:\\Users\\me\\.claude\\plugins\\marketplaces\\kit"
         fake = FakeMachines({"local": [], "win": [
-            inst("switchboard@kit", "0.9.0"),
-            inst("switchboard@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
-        ]}, {"switchboard@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, ps_hosts={"win"},
+            inst("sample-plugin@kit", "0.9.0"),
+            inst("sample-plugin@kit", "0.8.0", scope="local", project="C:\\work\\proj"),
+        ]}, {"sample-plugin@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, ps_hosts={"win"},
             markets={"win": clone},
             files={("win", clone + "/.claude-plugin/marketplace.json"):
-                   json.dumps({"plugins": [{"name": "switchboard", "source": "./plugins/switchboard"}]}),
-                   ("win", clone + "/plugins/switchboard/.claude-plugin/plugin.json"): json.dumps({"version": "0.9.0"})})
+                   json.dumps({"plugins": [{"name": "sample-plugin", "source": "./plugins/sample-plugin"}]}),
+                   ("win", clone + "/plugins/sample-plugin/.claude-plugin/plugin.json"): json.dumps({"version": "0.9.0"})})
         code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
         self.assertEqual(code, 1)
-        self.assertEqual(row(out, "win", "switchboard", "user")[-2:], ["0.9.0", "최신"])
-        self.assertEqual(row(out, "win", "switchboard", "local")[-3:], ["0.8.0", "0.9.0", "옛판"])
-        self.assertIn("- win switchboard (local:proj) 0.8.0", out)
+        self.assertEqual(row(out, "win", "sample-plugin", "user")[-2:], ["0.9.0", "최신"])
+        self.assertEqual(row(out, "win", "sample-plugin", "local")[-3:], ["0.8.0", "0.9.0", "옛판"])
+        self.assertIn("- win sample-plugin (local:proj) 0.8.0", out)
         self.assertIn(("win", "Get-Content", up.POWERSHELL), fake.shells)
 
     def test_market_clone_newer_than_every_install_fails(self):
-        fake = FakeMachines({"local": [inst("switchboard@kit", "0.8.0")]},
-                            {"switchboard@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, markets={"local": "/m/kit"},
+        fake = FakeMachines({"local": [inst("sample-plugin@kit", "0.8.0")]},
+                            {"sample-plugin@kit": ("0.8.0", "2026-02-01T00:00:00Z")}, markets={"local": "/m/kit"},
                             files={("local", "/m/kit/.claude-plugin/marketplace.json"):
-                                   json.dumps({"plugins": [{"name": "switchboard", "version": "1.0.0"}]})})
+                                   json.dumps({"plugins": [{"name": "sample-plugin", "version": "1.0.0"}]})})
         code, out = run_main(fake, ["--marketplace", "kit", "--local-only", "--no-sessions"])
         self.assertEqual(code, 1)
-        self.assertEqual(row(out, "local", "switchboard")[-3:], ["0.8.0", "1.0.0", "옛판"])
+        self.assertEqual(row(out, "local", "sample-plugin")[-3:], ["0.8.0", "1.0.0", "옛판"])
 
     def test_remote_list_failure_after_update_fails_with_code_1(self):
-        fake = FakeMachines({"local": [], "win": [inst("switchboard@kit", "0.8.0")]}, LATEST,
+        fake = FakeMachines({"local": [], "win": [inst("sample-plugin@kit", "0.8.0")]}, LATEST,
                             fail=[("win", "list")], ps_hosts={"win"})
         code, out = run_main(fake, ["--marketplace", "kit", "--hosts", "win", "--no-sessions"])
         self.assertEqual(code, 1)

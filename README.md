@@ -25,14 +25,13 @@ Claude Code 플러그인 마켓플레이스. 이슈 처리 조율, 시험 속도
 | [test-speed](#test-speed) | 0.3.0 | 스킬 3 | 시험 시간 한도, 빠르고 안 흔들리는 E2E, 목 스택 화면 확인 |
 | [token-diet](#token-diet) | 0.1.0 | 훅 2·스킬 | 큰 파일 읽기·큰 heredoc 막기, 작업자 토큰 규율 |
 | [context-cap](#context-cap) | 0.2.3 | 훅 | 세션 컨텍스트 상한 |
-| [idle-compact](#idle-compact) | 0.1.0 | mod | 입력 없이 30분이면 자동 compact |
 | [leak-guard](#leak-guard) | 0.2.0 | 훅 | 공개 저장소로 나가는 비밀·금지어 차단 |
 | [root-cause](#root-cause) | 0.2.2 | 훅 | 근본 원인 줄 없는 수정·장애 보고 차단 |
 | [harden](#harden) | 0.1.0 | 스킬 | 재발 방지 장치 고르기 |
 | [django-asgi](#django-asgi) | 0.1.1 | 스킬 | Django ASGI 성능·정합성 |
 | [security-recon](#security-recon) | 0.1.0 | 스킬 | 인가 받은 서버의 외부 보안 점검 |
 
-세션 플러그인 switchboard(질문 패널·메일함)는 이 마켓이 아니라 switchboard 저장소의 릴리스가 정본이다: `switchboard plugin install` 이 CLI 와 같은 판을 깔고, `switchboard plugin status` 가 깔린 판을 말한다. 예전 `switchboard@dev-kit`·`question-panel@dev-kit` 은 이 마켓에서 빠졌다.
+세션 플러그인 switchboard(질문 패널·메일함·유휴 compact)는 이 마켓이 아니라 switchboard 저장소의 릴리스가 정본이다: `switchboard plugin install` 이 CLI 와 같은 판을 깔고, `switchboard plugin status` 가 깔린 판을 말한다. 예전 `switchboard@dev-kit`·`question-panel@dev-kit`·`idle-compact@dev-kit` 은 이 마켓에서 빠졌다.
 
 Orca 플러그인 [`orca-plugins/question-panel`](orca-plugins/question-panel/README.md)은 마켓플레이스 밖이다.
 
@@ -88,10 +87,6 @@ PreToolUse·PostToolUse·UserPromptSubmit 훅. transcript의 마지막 본 세�
 - 그 밖의 세션은 `CONTEXT_CAP_SOFT`·`CONTEXT_CAP_HARD`를 주면 켜진다. `CONTEXT_CAP_SOFT=0`이면 끈다.
 - 보안 경계가 아니라 작업자를 멈추는 가드레일이다.
 - 시험: `node --test plugins/context-cap/tests`
-
-### idle-compact
-
-작업(턴)이 끝난 뒤 30분 동안 입력이 없으면 대화를 compact 한다. 입력창에 쓰거나 새 턴이 시작되면 타이머를 취소하고, 컨텍스트가 15% 미만이면 건너뛴다. 도구·명령 없음.
 
 ### leak-guard
 
